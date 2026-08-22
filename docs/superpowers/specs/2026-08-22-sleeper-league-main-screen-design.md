@@ -19,11 +19,20 @@ with `setTimeout`.
 
 This spec covers building a real main screen: the user types a Sleeper
 league ID and username, the app resolves that against Sleeper's API
-(league settings, the league's draft, the user, and their roster within
-that league), stores the result so later requests (including the
-existing board) don't need it re-entered, and lets the user proceed into
-the draft room with the format pre-selected from the league's real draft
-type.
+(league settings — including that league's scoring configuration, the
+league's draft, the user, and their roster within that league), stores
+the result so later requests (including the existing board) don't need
+it re-entered, and lets the user proceed into the draft room with the
+format pre-selected from the league's real draft type.
+
+Leagues differ in scoring (PPR vs. standard, TE premium, negative points
+for fumbles/INTs, custom bonuses, etc.), and `ffdo.engine.vor` computes
+Value Over Replacement from points that are themselves computed by
+`ffdo.engine.scoring.score_stats(stats, weights)` — the `weights` are a
+league's `scoring_settings`, not a constant. Loading a league on the main
+screen must load *that league's* scoring settings so VOR always reflects
+the league actually connected, not some other league's rules left over
+from a previous session.
 
 ## Non-goals
 
@@ -53,6 +62,27 @@ Browser (main screen)
          zero-config behavior when no session exists)
 ```
 
+### Scoring settings and VOR
+
+`get_board()` already re-fetches the full league object (`league.parse()`,
+which includes `scoring_settings`) fresh from Sleeper on every request,
+keyed off whatever `league_id` `_league_id()` currently resolves to. Once
+`_league_id()` is session-aware (see API endpoints below), connecting to
+a new league and then loading `/board` automatically scores and computes
+VOR against *that* league's live scoring settings — no change to
+`ffdo.engine.scoring` or `ffdo.engine.vor` is needed, and nothing caches
+scoring settings in a way that could go stale relative to the connected
+league. `players_cache`/`projections_cache` stay safe to share across
+different connected leagues because they hold raw stats/projections, not
+pre-scored points — `score_stats(stats, weights)` is applied fresh per
+request using the current league's `weights`.
+
+The one gap this spec closes: `scoring_settings` was fetched during
+`resolve()` but not captured anywhere durable — it's added to `Session`
+(below) purely so it's visible/available going forward (e.g. the main
+screen showing how many scoring keys synced), not because VOR correctness
+depended on it being stored.
+
 ## Session storage
 
 New `ffdo/api/session.py`:
@@ -60,7 +90,13 @@ New `ffdo/api/session.py`:
 - `Session` — frozen dataclass: `username`, `user_id`, `league_id`,
   `draft_id`, `roster_id: int | None`, `league_name`, `season`,
   `num_teams`, `budget`, `roster_positions: tuple[str, ...]`,
-  `draft_type`, `draft_status`, `connected_at` (ISO timestamp string).
+  `scoring_settings: Mapping[str, float]`, `draft_type`, `draft_status`,
+  `connected_at` (ISO timestamp string). `scoring_settings` comes
+  straight from the `LeagueProfile` parsed during `resolve()` (see
+  Ingest additions below) — captured on the `Session` so it's part of
+  the "readily available" data the main screen (and any future feature)
+  can read without re-hitting Sleeper, per the same reasoning as
+  `league_name`/`roster_positions`.
 - `SessionStore(path: Path)` — constructor takes an explicit path (no
   hardcoded default inside the class), mirroring `_TTLCache`'s injectable
   clock so tests never touch the real file:
@@ -179,7 +215,11 @@ framework):
     e.g. `pre_draft`/`drafting`/`complete`), stat grid (teams, budget,
     rounds, format — all from the session), roster slot chips built from
     `roster_positions` (starters highlighted, `BN` muted, same visual
-    treatment as the mock).
+    treatment as the mock). The footer note (which the mock used for the
+    fabricated auction-history line) becomes a real, generic line:
+    "`{len(scoring_settings)}` scoring keys synced" — confirms the
+    league's actual scoring configuration loaded, without claiming
+    anything not actually true for an arbitrary league.
   - Data readiness card: rows for League+draft settings (always
     "Synced" once a session exists), Players, Projections — each
     polling `GET /api/readiness` every ~1.5s while any row is
@@ -202,6 +242,16 @@ framework):
   mocked `SleeperClient` (httpx `MockTransport`, same pattern as
   `test_client.py`), covering the happy path and each `ConnectError`
   case (league not found, username not found, user not in league).
+  Happy-path assertion includes that the returned `Session.scoring_settings`
+  matches the mocked league's `scoring_settings` verbatim — this is the
+  regression guard for "scoring settings actually get captured on
+  connect."
+- `tests/api/test_app.py` — add a test that two `/api/board` calls against
+  sessions for two different leagues (different `scoring_settings`, e.g.
+  one with `rec: 1.0` full-PPR and one with `rec: 0.0` standard) produce
+  different `adjusted`/`vor` numbers for the same player's stat line —
+  end-to-end confirmation that switching the connected league actually
+  changes valuations, not just that the raw settings round-trip.
 - `tests/api/test_session.py` (new) — `SessionStore` round-trips through
   a tmp-path file; `load()` returns `None` for a missing/malformed file.
 - `tests/api/test_app.py` — extend the existing `_league_id`/`_draft_id`/
