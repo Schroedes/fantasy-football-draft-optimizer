@@ -45,13 +45,72 @@ function render() {
   const d = state.data;
   if (!d) return;
 
-  document.getElementById("inflation").textContent = `${d.inflation.toFixed(2)}x`;
-  document.getElementById("spent").textContent = `$${d.budget.spent}/${d.budget.total}`;
+  document.getElementById("inflation").textContent =
+    d.inflation !== undefined ? `${d.inflation.toFixed(2)}x` : "—";
+  document.getElementById("spent").textContent =
+    d.budget ? `$${d.budget.spent}/${d.budget.total}` : "—";
   document.getElementById("picks").textContent = d.picks_made;
+  document.getElementById("brand-tag").textContent = `/ ${d.format === "snake" ? "SNAKE" : "AUCTION"}`;
 
+  renderCow();
+  renderMoneyHeader();
   renderTable();
   renderNominated();
   renderSortHeaders();
+}
+
+function renderMoneyHeader() {
+  const th = document.getElementById("th-money");
+  const d = state.data;
+  if (d.format === "snake") {
+    th.textContent = "Survives";
+    th.dataset.sort = "survival";
+  } else {
+    th.textContent = "Adj $";
+    th.dataset.sort = "adjusted";
+  }
+}
+
+function renderCow() {
+  const cowEl = document.getElementById("cow");
+  const d = state.data;
+  if (d.format !== "snake" || !d.cost_of_waiting) {
+    cowEl.hidden = true;
+    return;
+  }
+  cowEl.hidden = false;
+
+  const entries = Object.entries(d.cost_of_waiting).sort((a, b) => b[1].cost - a[1].cost);
+  const maxCost = Math.max(1, ...entries.map(([, c]) => c.cost));
+
+  document.getElementById("cow-rows").innerHTML = entries.map(([pos, c]) => {
+    const hot = c.cost >= maxCost * 0.6;
+    const deep = c.cost <= maxCost * 0.15;
+    const color = hot ? "var(--red)" : deep ? "var(--green)" : "var(--amber)";
+    const tag = hot ? "CLIFF" : deep ? "DEEP" : "";
+    const posColor = `var(--${pos.toLowerCase()}, var(--muted))`;
+    return `<div class="cow-row">
+      <span class="cow-pos" style="color:${posColor}">${pos}</span>
+      <div class="cow-stat">
+        <span class="label">Best now</span>
+        <b>${c.best_now}</b>
+      </div>
+      <div class="cow-stat next">
+        <span class="label">Best next pick</span>
+        <b>${c.expected_next}</b>
+      </div>
+      <div class="cow-cost">
+        <div class="cow-cost-line">
+          <span class="cow-cost-num" style="color:${color}">${c.cost}</span>
+          <span class="cow-cost-label">pts cost of waiting</span>
+        </div>
+        <div class="cow-bar-track">
+          <div class="cow-bar-fill" style="width:${Math.min(100, (c.cost / maxCost) * 100)}%;background:${color}"></div>
+        </div>
+      </div>
+      <span class="cow-tag" style="color:${tag ? color : "transparent"}">${tag}</span>
+    </div>`;
+  }).join("");
 }
 
 function renderTable() {
@@ -73,6 +132,9 @@ function renderTable() {
       p.player_id === state.nominatedId ? "nominated-row" : "",
       brk,
     ].filter(Boolean).join(" ");
+    const money = p.baseline !== undefined
+      ? `<td>$${p.baseline}</td><td class="adj-cell">$${p.adjusted}</td>`
+      : `<td colspan="2">${survivalCell(p.survival)}</td>`;
     return `<tr class="${classes}" data-id="${p.player_id}">
       <td></td>
       <td class="name-cell">${escapeHtml(p.name)}</td>
@@ -81,8 +143,7 @@ function renderTable() {
       <td>${p.age ?? ""}</td>
       <td>${p.tier}</td>
       <td>${p.vor}</td>
-      <td>$${p.baseline}</td>
-      <td class="adj-cell">$${p.adjusted}</td>
+      ${money}
     </tr>`;
   }).join("");
 
@@ -97,7 +158,7 @@ function renderTable() {
 
 function nominate(p) {
   state.nominatedId = p.player_id;
-  state.bid = Math.max(1, Math.round(p.baseline * 0.9));
+  state.bid = p.baseline !== undefined ? Math.max(1, Math.round(p.baseline * 0.9)) : 0;
   render();
 }
 
@@ -117,22 +178,46 @@ function renderNominated() {
   document.getElementById("nom-tier").textContent = `TIER ${p.tier}`;
   document.getElementById("nom-name").textContent = p.name;
   document.getElementById("nom-meta").textContent = `${p.position} · ${p.team ?? "FA"} · age ${p.age ?? "?"}`;
-  document.getElementById("nom-baseline").textContent = `$${p.baseline}`;
-  document.getElementById("nom-adjusted").textContent = `$${p.adjusted}`;
   document.getElementById("nom-vor").textContent = p.vor;
-  document.getElementById("nom-bid").textContent = `$${state.bid}`;
 
-  const surplus = Math.round((p.adjusted - state.bid) * 10) / 10;
-  const surplusEl = document.getElementById("nom-surplus");
-  const positive = surplus >= 0;
-  surplusEl.textContent = (positive ? "+$" : "−$") + Math.abs(surplus) + (positive ? " bargain" : " over value");
-  surplusEl.className = "surplus " + (positive ? "bargain" : "over");
+  const bidBlock = document.getElementById("bid-block");
+  const hr = document.getElementById("nom-hr");
+  const isAuction = p.baseline !== undefined;
+
+  document.getElementById("nom-baseline-label").textContent = isAuction ? "Baseline" : "Survival";
+  document.getElementById("nom-adjusted-label").textContent = isAuction ? "Adjusted" : "Pos.";
+  bidBlock.hidden = !isAuction;
+  hr.hidden = !isAuction;
+
+  if (isAuction) {
+    document.getElementById("nom-baseline").textContent = `$${p.baseline}`;
+    document.getElementById("nom-adjusted").textContent = `$${p.adjusted}`;
+    document.getElementById("nom-bid").textContent = `$${state.bid}`;
+
+    const surplus = Math.round((p.adjusted - state.bid) * 10) / 10;
+    const surplusEl = document.getElementById("nom-surplus");
+    const positive = surplus >= 0;
+    surplusEl.textContent = (positive ? "+$" : "−$") + Math.abs(surplus) + (positive ? " bargain" : " over value");
+    surplusEl.className = "surplus " + (positive ? "bargain" : "over");
+  } else {
+    document.getElementById("nom-baseline").textContent = `${Math.round((p.survival ?? 0) * 100)}%`;
+    document.getElementById("nom-adjusted").textContent = p.position;
+  }
 }
 
 function renderSortHeaders() {
   document.querySelectorAll("#board th[data-sort]").forEach(th => {
     th.classList.toggle("sorted", th.dataset.sort === state.sortKey);
   });
+}
+
+function survivalCell(survival) {
+  const pct = Math.round((survival ?? 0) * 100);
+  const color = pct >= 60 ? "var(--green)" : pct <= 30 ? "var(--red)" : "var(--amber)";
+  return `<div class="survival-cell">
+    <div class="survival-bar-track"><div class="survival-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+    <span style="color:${color}">${pct}%</span>
+  </div>`;
 }
 
 function escapeHtml(s) {

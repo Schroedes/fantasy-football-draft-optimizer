@@ -13,7 +13,7 @@
 <header id="strip">
   <div class="brand">
     <span class="brand-name">FFDO</span>
-    <span class="brand-tag">/ AUCTION</span>
+    <span id="brand-tag" class="brand-tag">/ AUCTION</span>
   </div>
   <div class="strip-stats">
     <div><span class="label">Inflation</span><b id="inflation">&mdash;</b></div>
@@ -22,6 +22,14 @@
     <div><span class="label">Updated</span><b id="updated">&mdash;</b></div>
   </div>
 </header>
+
+<section id="cow" hidden>
+  <div class="cow-head">
+    <h2>Cost of waiting</h2>
+    <span class="cow-sub">what you give up per position if you pass now and take it at your next pick instead</span>
+  </div>
+  <div id="cow-rows"></div>
+</section>
 
 <div id="layout">
   <aside id="nominated" class="empty">
@@ -37,11 +45,11 @@
       </div>
       <div class="nom-stats">
         <div class="nom-stat">
-          <span class="label">Baseline</span>
+          <span id="nom-baseline-label" class="label">Baseline</span>
           <b id="nom-baseline">&mdash;</b>
         </div>
         <div class="nom-stat">
-          <span class="label">Adjusted</span>
+          <span id="nom-adjusted-label" class="label">Adjusted</span>
           <b id="nom-adjusted" class="accent">&mdash;</b>
         </div>
         <div class="nom-stat">
@@ -52,8 +60,8 @@
       <button id="lean-badge" class="lean-badge" disabled title="This board never names a pick — you decide.">
         MODEL LEAN &middot; DISABLED
       </button>
-      <div class="hr"></div>
-      <div class="bid-block">
+      <div id="nom-hr" class="hr"></div>
+      <div id="bid-block" class="bid-block">
         <div class="bid-head">
           <span class="label">Your bid</span>
           <span id="nom-surplus" class="surplus"></span>
@@ -84,7 +92,7 @@
         <thead><tr>
           <th></th><th>Player</th><th>Pos</th><th>Tm</th><th>Age</th>
           <th data-sort="tier">Tier</th><th data-sort="vor">VOR</th>
-          <th data-sort="baseline">Base $</th><th data-sort="adjusted">Adj $</th>
+          <th id="th-money" colspan="2" data-sort="adjusted">Adj $</th>
         </tr></thead>
         <tbody></tbody>
       </table>

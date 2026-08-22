@@ -66,6 +66,30 @@ body {
 #strip .label { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; color: var(--faint); }
 #strip b { font-family: var(--font-mono); font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
+/* ---- cost of waiting ---- */
+#cow {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px 20px; margin-bottom: 18px;
+}
+.cow-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+#cow h2 { font-size: 13px; font-weight: 600; margin: 0; }
+.cow-sub { font-size: 11.5px; color: var(--faint); }
+#cow-rows { display: flex; flex-direction: column; }
+.cow-row { display: flex; align-items: center; gap: 20px; padding: 10px 6px; border-radius: 7px; }
+.cow-row:hover { background: var(--surface-2); }
+.cow-pos { width: 44px; font-family: var(--font-mono); font-size: 15px; font-weight: 700; }
+.cow-stat { display: flex; flex-direction: column; gap: 2px; width: 110px; }
+.cow-stat .label { font-size: 9.5px; }
+.cow-stat b { font-family: var(--font-mono); font-size: 15px; font-weight: 600; }
+.cow-stat.next b { color: var(--muted); }
+.cow-cost { flex: 1; display: flex; flex-direction: column; gap: 5px; justify-content: center; min-width: 140px; }
+.cow-cost-line { display: flex; align-items: baseline; gap: 6px; }
+.cow-cost-num { font-family: var(--font-mono); font-size: 19px; font-weight: 700; }
+.cow-cost-label { font-size: 11px; color: var(--faint); }
+.cow-bar-track { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.cow-bar-fill { height: 100%; border-radius: 3px; }
+.cow-tag { width: 56px; text-align: right; font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; letter-spacing: .5px; }
+
 /* ---- layout ---- */
 #layout { display: flex; gap: 18px; align-items: flex-start; }
 
@@ -164,6 +188,9 @@ tr.pos-RB td.pos-cell { color: var(--rb); }
 tr.pos-WR td.pos-cell { color: var(--wr); }
 tr.pos-TE td.pos-cell { color: var(--te); }
 td.adj-cell { font-weight: 600; color: var(--text); }
+.survival-cell { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.survival-bar-track { width: 52px; height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.survival-bar-fill { height: 100%; border-radius: 3px; }
 tr { cursor: pointer; }
 tr:hover td { background: var(--surface-2); }
 tr.nominated-row td { background: color-mix(in oklch, var(--accent) 10%, transparent); box-shadow: inset 3px 0 0 var(--accent); }

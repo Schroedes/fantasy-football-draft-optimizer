@@ -79,7 +79,7 @@ def create_app() -> FastAPI:
             profiles = players_cache.get(
                 lambda: players_mod.parse(
                     sleeper.get_json(f"{client_mod.V1}/players/nfl")))
-            proj, _adp = projections_cache.get(
+            proj, adp_data = projections_cache.get(
                 lambda: proj_mod.parse(
                     sleeper.get_json(
                         f"{client_mod.PROJECTIONS}/{lg.season}"
@@ -104,8 +104,19 @@ def create_app() -> FastAPI:
                   for pid, p in proj.items()
                   if pid in profiles and profiles[pid].position in SKILL_POSITIONS}
         valued = vor.assign_tiers(vor.compute(points, profiles, lg))
-        baseline = auction.baseline_prices(valued, lg)
-        return board_mod.build_auction_board(lg, state, valued, baseline)
+
+        if state.draft_type == "auction":
+            baseline = auction.baseline_prices(valued, lg)
+            return board_mod.build_auction_board(lg, state, valued, baseline)
+
+        from ffdo.engine import market
+        available = {pid for pid in valued if pid not in state.drafted_player_ids()}
+        adp_means = {pid: a.adp["half_ppr"] for pid, a in adp_data.items()
+                     if a.adp.get("half_ppr", 999) < 999}
+        picks_until = lg.num_teams  # conservative: one full round
+        survival = market.simulate_survival(adp_means, available, picks_until)
+        cow = market.cost_of_waiting(valued, survival, available)
+        return board_mod.build_snake_board(lg, state, valued, survival, cow)
 
     # Static mount MUST be registered last: StaticFiles("/") matches any
     # path under it, so routes declared after this point would be shadowed.

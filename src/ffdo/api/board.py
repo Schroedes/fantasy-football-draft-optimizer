@@ -46,3 +46,34 @@ def build_auction_board(
         "picks_made": len(state.picks),
         "players": rows,
     }
+
+
+def build_snake_board(
+    league,
+    state: DraftState,
+    valued: Mapping[str, ValuedPlayer],
+    survival: Mapping[str, float],
+    cost_of_waiting: Mapping[str, Mapping[str, float]],
+) -> dict:
+    drafted = state.drafted_player_ids()
+    rows = [
+        {
+            "player_id": pid,
+            "name": vp.profile.full_name,
+            "position": vp.profile.position,
+            "team": vp.profile.team,
+            "age": vp.profile.age,
+            "vor": round(vp.vor, 1),
+            "tier": vp.tier,
+            "survival": round(survival.get(pid, 0.0), 3),
+            "drafted": pid in drafted,
+        }
+        for pid, vp in valued.items()
+    ]
+    rows.sort(key=lambda r: r["vor"], reverse=True)
+    return {
+        "format": "snake",
+        "cost_of_waiting": dict(cost_of_waiting),
+        "picks_made": len(state.picks),
+        "players": rows,
+    }
