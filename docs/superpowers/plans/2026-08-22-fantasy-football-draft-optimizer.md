@@ -16,7 +16,7 @@
 - **Package root:** `src/ffdo/`. Tests in `tests/`, mirroring package structure.
 - **All commands run from the worktree root**, `.claude/worktrees/fantasy-football-draft-tool-f2a9fd`.
 - **Never use Sleeper's precomputed `pts_ppr` / `pts_half_ppr` / `pts_std` as a value input.** Sleeper changed the `pts_half_ppr` definition between 2021 and 2023 (2021 included `fum: -1`, 2023+ does not). Always rescore from component stats. Using them as a *golden-test target for 2025 only* is the one permitted exception (Task 5).
-- **Never use historical projections (2022–2025) as a preseason input.** They are contaminated with in-season data — Nick Chubb's stored 2023 projection is `0.0` against a preseason ADP of 10.6. Historical **ADP** is clean and is the only permitted historical market baseline.
+- **Never use historical projections (2022–2025) as a preseason input.** They are contaminated with in-season data — Nick Chubb's 2023 row carries no `pts_*` key at all against a preseason ADP of 10.6; the projection was wiped after his week-2 injury. Historical **ADP** is clean and is the only permitted historical market baseline.
 - **`SEASON_LENGTH = {2021: 17, 2022: 17, 2023: 17, 2024: 18, 2025: 18, 2026: 18}`** — never divide by a constant.
 - **Age and durability adjustment weights default to `0.0`.** They may only become non-zero if Task 12's backtest shows out-of-sample improvement over the ADP baseline.
 - **Primary league:** `league_id = "1315881559957458944"`, **2026 draft:** `draft_id = "1315881559965835264"` (type `auction`, budget 200, 12 teams, 13 rounds).
@@ -740,8 +740,9 @@ Expected: FAIL — `ImportError: cannot import name 'projections'`
 
 Sleeper's projections endpoint returns the LATEST state of a projection, not
 its preseason state. For completed seasons the points have been overwritten
-with in-season information: Nick Chubb's stored 2023 projection is 0.0 despite
-a preseason ADP of 10.6, because he tore his knee in week 2.
+with in-season information: Nick Chubb's 2023 row carries no pts_* key at all
+despite a preseason ADP of 10.6, because he tore his knee in week 2. The
+projection was wiped, not revised.
 
 ADP is unaffected -- it is fixed at draft time -- and is therefore the only
 historical market signal this project trusts.
@@ -1633,6 +1634,13 @@ git commit -m "feat: auction dollars, live inflation, and max bid"
 
 This is the hard deadline deliverable. It must be usable on 2026-08-25.
 
+**Mockups already exist** for the setup screen, this auction board, and the
+Task 12 snake board — see `design/` (three `.dc.html` artboards + `canvas.json`,
+published as the "FFDO Draft Room" design canvas). They cover layout, the
+budget strip, the nominated-player card with bid/surplus interaction, and the
+disabled "model's lean" badge from §1.2's non-goals — use them as the visual
+reference when building `index.html` / `board.css` / `board.js` below.
+
 **Files:**
 - Create: `src/ffdo/api/__init__.py`, `src/ffdo/api/app.py`, `src/ffdo/api/board.py`
 - Create: `src/ffdo/web/index.html`, `src/ffdo/web/board.css`, `src/ffdo/web/board.js`
@@ -2188,6 +2196,9 @@ git commit -m "feat: draft survival simulation and cost of waiting"
 ---
 
 ### Task 12: Snake board
+
+See the Task 10 note above — the snake board mockup (Cost-of-Waiting table,
+ranked board, run-detection banner) is already built in `design/Snake.dc.html`.
 
 **Files:**
 - Modify: `src/ffdo/api/board.py` (add `build_snake_board`)

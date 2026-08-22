@@ -1,0 +1,297 @@
+let state = {
+  pos: "ALL",
+  hideDrafted: true,
+  search: "",
+  sortKey: "vor",
+  sortDir: "desc",
+  nominatedId: null,
+  bid: 0,
+  data: null,
+};
+
+async function refresh() {
+  try {
+    const res = await fetch("/api/board");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    state.data = await res.json();
+    document.getElementById("updated").textContent = new Date().toLocaleTimeString();
+    render();
+  } catch (err) {
+    document.getElementById("updated").textContent = "error";
+    console.error("board refresh failed", err);
+  }
+}
+
+// A human scanning a live draft board never needs to see all 3,000+ rows at
+// once -- sort/filter already narrows what matters. Capping the rendered
+// rows keeps the 3-second poll and every keystroke/filter/sort click cheap
+// regardless of pool size.
+const MAX_RENDERED_ROWS = 300;
+
+function visibleRows() {
+  const d = state.data;
+  if (!d) return [];
+  const q = state.search.trim().toLowerCase();
+  let rows = d.players.filter(p =>
+    (state.pos === "ALL" || p.position === state.pos) &&
+    !(state.hideDrafted && p.drafted) &&
+    (!q || p.name.toLowerCase().includes(q)));
+
+  const key = state.sortKey;
+  const dir = state.sortDir === "desc" ? -1 : 1;
+  rows = rows.slice().sort((a, b) => {
+    const av = a[key], bv = b[key];
+    if (av === bv) return 0;
+    return av < bv ? -1 * dir : 1 * dir;
+  });
+  return rows.slice(0, MAX_RENDERED_ROWS);
+}
+
+function render() {
+  const d = state.data;
+  if (!d) return;
+
+  document.getElementById("inflation").textContent =
+    d.inflation !== undefined ? `${d.inflation.toFixed(2)}x` : "—";
+  document.getElementById("spent").textContent =
+    d.budget ? `$${d.budget.spent}/${d.budget.total}` : "—";
+  document.getElementById("picks").textContent = d.picks_made;
+  document.getElementById("brand-tag").textContent = `/ ${d.format === "snake" ? "SNAKE" : "AUCTION"}`;
+
+  const hasYourBudget = d.format !== "snake" && d.budget &&
+    d.budget.your_slots_left !== undefined;
+  ["your-dollars-stat", "your-slots-stat", "your-per-slot-stat"].forEach(id => {
+    document.getElementById(id).hidden = !hasYourBudget;
+  });
+  if (hasYourBudget) {
+    document.getElementById("your-dollars").textContent = `$${d.budget.your_dollars_left}`;
+    document.getElementById("your-slots").textContent = d.budget.your_slots_left;
+    const yours = d.budget.your_dollars_per_slot;
+    const avg = d.budget.league_dollars_per_slot;
+    const diff = Math.round((yours - avg) * 10) / 10;
+    const sign = diff >= 0 ? "+" : "−";
+    document.getElementById("your-per-slot").textContent = `$${yours} (${sign}$${Math.abs(diff)})`;
+  }
+
+  renderCow();
+  renderMoneyHeader();
+  renderTable();
+  renderNominated();
+  renderSortHeaders();
+}
+
+function renderMoneyHeader() {
+  const th = document.getElementById("th-money");
+  const d = state.data;
+  if (d.format === "snake") {
+    th.textContent = "Survives";
+    th.dataset.sort = "survival";
+  } else {
+    th.textContent = "Adj $";
+    th.dataset.sort = "adjusted";
+  }
+}
+
+function renderCow() {
+  const cowEl = document.getElementById("cow");
+  const d = state.data;
+  if (d.format !== "snake" || !d.cost_of_waiting) {
+    cowEl.hidden = true;
+    return;
+  }
+  cowEl.hidden = false;
+
+  const entries = Object.entries(d.cost_of_waiting).sort((a, b) => b[1].cost - a[1].cost);
+  const maxCost = Math.max(1, ...entries.map(([, c]) => c.cost));
+
+  document.getElementById("cow-rows").innerHTML = entries.map(([pos, c]) => {
+    const hot = c.cost >= maxCost * 0.6;
+    const deep = c.cost <= maxCost * 0.15;
+    const color = hot ? "var(--red)" : deep ? "var(--green)" : "var(--amber)";
+    const tag = hot ? "CLIFF" : deep ? "DEEP" : "";
+    const posColor = `var(--${pos.toLowerCase()}, var(--muted))`;
+    return `<div class="cow-row">
+      <span class="cow-pos" style="color:${posColor}">${pos}</span>
+      <div class="cow-stat">
+        <span class="label">Best now</span>
+        <b>${c.best_now}</b>
+      </div>
+      <div class="cow-stat next">
+        <span class="label">Best next pick</span>
+        <b>${c.expected_next}</b>
+      </div>
+      <div class="cow-cost">
+        <div class="cow-cost-line">
+          <span class="cow-cost-num" style="color:${color}">${c.cost}</span>
+          <span class="cow-cost-label">pts cost of waiting</span>
+        </div>
+        <div class="cow-bar-track">
+          <div class="cow-bar-fill" style="width:${Math.min(100, (c.cost / maxCost) * 100)}%;background:${color}"></div>
+        </div>
+      </div>
+      <span class="cow-tag" style="color:${tag ? color : "transparent"}">${tag}</span>
+    </div>`;
+  }).join("");
+}
+
+function renderTable() {
+  const rows = visibleRows();
+  const tbody = document.querySelector("#board tbody");
+
+  if (rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="9" class="empty-msg">No players match the current filters.</td></tr>`;
+    return;
+  }
+
+  let lastTier = null;
+  tbody.innerHTML = rows.map(p => {
+    const brk = state.sortKey === "tier" && p.tier !== lastTier && lastTier !== null ? " tier-break" : "";
+    lastTier = p.tier;
+    const classes = [
+      `pos-${p.position}`,
+      p.drafted ? "drafted" : "",
+      p.player_id === state.nominatedId ? "nominated-row" : "",
+      brk,
+    ].filter(Boolean).join(" ");
+    const money = p.baseline !== undefined
+      ? `<td>$${p.baseline}</td><td class="adj-cell">$${p.adjusted}</td>`
+      : `<td colspan="2">${survivalCell(p.survival)}</td>`;
+    return `<tr class="${classes}" data-id="${p.player_id}">
+      <td></td>
+      <td class="name-cell">${escapeHtml(p.name)}</td>
+      <td class="pos-cell">${p.position}</td>
+      <td>${p.team ?? ""}</td>
+      <td>${p.age ?? ""}</td>
+      <td>${p.tier}</td>
+      <td>${p.vor}</td>
+      ${money}
+    </tr>`;
+  }).join("");
+}
+
+function nominate(p) {
+  state.nominatedId = p.player_id;
+  state.bid = p.baseline !== undefined ? Math.max(1, Math.round(p.baseline * 0.9)) : 0;
+  render();
+}
+
+function renderNominated() {
+  const el = document.getElementById("nominated");
+  const body = el.querySelector(".nom-body");
+  const p = state.data && state.data.players.find(x => x.player_id === state.nominatedId);
+
+  if (!p) {
+    el.classList.remove("pinned");
+    body.hidden = true;
+    return;
+  }
+
+  el.classList.add("pinned");
+  body.hidden = false;
+  document.getElementById("nom-tier").textContent = `TIER ${p.tier}`;
+  document.getElementById("nom-name").textContent = p.name;
+  document.getElementById("nom-meta").textContent = `${p.position} · ${p.team ?? "FA"} · age ${p.age ?? "?"}`;
+  document.getElementById("nom-vor").textContent = p.vor;
+
+  const bidBlock = document.getElementById("bid-block");
+  const hr = document.getElementById("nom-hr");
+  const maxBidStat = document.getElementById("nom-maxbid-stat");
+  const isAuction = p.baseline !== undefined;
+
+  document.getElementById("nom-baseline-label").textContent = isAuction ? "Baseline" : "Survival";
+  document.getElementById("nom-adjusted-label").textContent = isAuction ? "Adjusted" : "Pos.";
+  bidBlock.hidden = !isAuction;
+  hr.hidden = !isAuction;
+  maxBidStat.hidden = !isAuction || p.max_bid === undefined;
+
+  if (isAuction) {
+    document.getElementById("nom-baseline").textContent = `$${p.baseline}`;
+    document.getElementById("nom-adjusted").textContent = `$${p.adjusted}`;
+    document.getElementById("nom-bid").textContent = `$${state.bid}`;
+    if (p.max_bid !== undefined) {
+      document.getElementById("nom-maxbid").textContent = `$${p.max_bid}`;
+    }
+
+    const surplus = Math.round((p.adjusted - state.bid) * 10) / 10;
+    const surplusEl = document.getElementById("nom-surplus");
+    const positive = surplus >= 0;
+    surplusEl.textContent = (positive ? "+$" : "−$") + Math.abs(surplus) + (positive ? " bargain" : " over value");
+    surplusEl.className = "surplus " + (positive ? "bargain" : "over");
+  } else {
+    document.getElementById("nom-baseline").textContent = `${Math.round((p.survival ?? 0) * 100)}%`;
+    document.getElementById("nom-adjusted").textContent = p.position;
+  }
+}
+
+function renderSortHeaders() {
+  document.querySelectorAll("#board th[data-sort]").forEach(th => {
+    th.classList.toggle("sorted", th.dataset.sort === state.sortKey);
+  });
+}
+
+function survivalCell(survival) {
+  const pct = Math.round((survival ?? 0) * 100);
+  const color = pct >= 60 ? "var(--green)" : pct <= 30 ? "var(--red)" : "var(--amber)";
+  return `<div class="survival-cell">
+    <div class="survival-bar-track"><div class="survival-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+    <span style="color:${color}">${pct}%</span>
+  </div>`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+// Event delegation: ONE listener on the stable tbody ancestor, rather than
+// one per row re-attached on every render() call (every 3s poll, every
+// keystroke, every filter/sort click). The row's data-id is read off
+// whichever <tr> was actually clicked via e.target.closest.
+document.querySelector("#board tbody").addEventListener("click", e => {
+  const tr = e.target.closest("tr[data-id]");
+  if (!tr || !state.data) return;
+  const p = state.data.players.find(x => x.player_id === tr.dataset.id);
+  if (!p || p.drafted) return;
+  nominate(p);
+});
+
+document.querySelectorAll("#filters button[data-pos]").forEach(b =>
+  b.addEventListener("click", () => {
+    document.querySelectorAll("#filters button[data-pos]").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+    state.pos = b.dataset.pos;
+    render();
+  }));
+
+document.getElementById("hide-drafted").addEventListener("change", e => {
+  state.hideDrafted = e.target.checked;
+  render();
+});
+
+document.getElementById("search").addEventListener("input", e => {
+  state.search = e.target.value;
+  render();
+});
+
+document.querySelectorAll("#board th[data-sort]").forEach(th =>
+  th.addEventListener("click", () => {
+    const key = th.dataset.sort;
+    if (state.sortKey === key) {
+      state.sortDir = state.sortDir === "desc" ? "asc" : "desc";
+    } else {
+      state.sortKey = key;
+      state.sortDir = "desc";
+    }
+    render();
+  }));
+
+document.querySelectorAll(".bid-controls button[data-step]").forEach(b =>
+  b.addEventListener("click", () => {
+    const delta = Number(b.dataset.step);
+    state.bid = Math.max(1, state.bid + delta);
+    renderNominated();
+  }));
+
+refresh();
+setInterval(refresh, 3000);

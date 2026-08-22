@@ -97,12 +97,23 @@ Evidence, 2023:
 
 | Player | Stored "projection" | Preseason ADP | Actual | Games |
 |---|---|---|---|---|
-| Nick Chubb | **0.0** | 10.6 | 21.1 | 2 |
-| J.K. Dobbins | **0.0** | 51.3 | 10.7 | 1 |
+| Nick Chubb | **absent** | 10.6 | 21.1 | 2 |
+| J.K. Dobbins | **absent** | 51.3 | 10.7 | 1 |
 
-Chubb was drafted 10th overall. A preseason projection of `0.0` is impossible;
-both players were zeroed after season-ending injuries. Corroborating rank
-correlation against actual points:
+Both players' rows retain their `adp_*` keys and `gp`, and carry **no
+`pts_half_ppr`, `pts_ppr`, or `pts_std` key at all** — the projection was wiped
+after their season-ending injuries, not merely revised. Across the whole 2023
+file, 689 of 3,309 rows have a `pts_half_ppr` key and **zero** rows have it
+equal to `0.0`. Chubb was drafted 10th overall; a player taken that early having
+no stored projection, while his ADP survives intact, is only explicable
+post-hoc.
+
+(An earlier revision of this document reported these values as `0.0`. That was
+an artifact of the probe script defaulting absent keys to zero, not of Sleeper's
+data. The conclusion is unchanged and the mechanism is starker than first
+described.)
+
+Corroborating rank correlation against actual points:
 
 | Season | Stored projection ρ | ADP ρ |
 |---|---|---|
@@ -216,6 +227,23 @@ so TE-premium falls out with no special case.
 
 This matters because Sleeper's own board uses one of three fixed presets
 (`pts_ppr` / `pts_half_ppr` / `pts_std`). This league has 49 custom scoring keys.
+
+**Measured caveat, added 2026-08-22.** For *this* league the rescore turns out to
+buy almost nothing at draft time, and the spec previously overstated it. The
+league's only two divergences from Sleeper's half-PPR preset are `fum: -1` (all
+fumbles, not just lost) and `st_td: 6`. Both keys are **entirely absent from
+Sleeper's projections** — verified across the 2026 file: `fum` appears in 0 rows,
+`st_td` in 0 rows — because nobody projects total fumbles or return touchdowns.
+So the rescore reproduces the preset for this league, and the "fumble-prone QBs
+are overvalued by up to 11 points" finding, which was measured on *historical*
+stats, does not reach a draft decision.
+
+The layer stays, for two reasons: it is required for the user's other leagues
+(TE premium, bonus tiers, and 6-point passing TDs all have real projection
+inputs), and it is what makes §11's golden test possible. Deriving a projected
+fumble rate from historical data would recover the edge, but that is a model
+adjustment and belongs under §8's default-off, backtest-gated discipline rather
+than smuggled into ingest.
 
 **Golden test:** rescoring with standard PPR weights must reproduce Sleeper's own
 `pts_ppr` within tolerance. If our arithmetic reproduces theirs on the preset, it
@@ -373,6 +401,109 @@ default ships. No tuning marathon, and no unvalidated adjustment can reach the
 board by accident.
 
 Any adjustment that fails to beat baseline is reported as failed in this document.
+
+### 8.1 Backtest results (Task 14, run 2026-08-22; age rows corrected 2026-08-22; age rows re-measured 2026-08-22 after the rescore fix below)
+
+`ffdo.backtest.harness.evaluate_season` was run for 2023, 2024, 2025 across the
+weight combinations the harness's gate script specifies. `improvement` is
+`model_rho - baseline_rho` (Spearman ρ against actual season points).
+
+**Correction:** the age rows below were re-measured after fixing a train/apply
+mismatch in `adjustments.py`: `fit_age_curve` correctly keys its training data
+by the player's age *during each historical season* (computed from the single,
+fixed 2026 `players_nfl` snapshot — there is no per-season profile history),
+but `build()`'s lookup was using the player's raw 2026-anchored profile age
+regardless of what season the backtest was evaluating. Since `players_nfl` is
+always anchored to 2026, `build()` now shifts the lookup age by
+`(2026 - current_season)` before querying the curve — a no-op for live 2026
+use, and load-bearing for anything backtested against 2023-2025. Durability's
+row is unaffected: its code path never touches the age curve.
+
+| age_weight | dur_weight | 2023 | 2024 | 2025 | mean improvement |
+|---|---|---|---|---|---|
+| 0.0 | 0.0 | 0.0000 | 0.0000 | 0.0000 | +0.0000 |
+| 0.0 | 1.0 | +0.0036 | +0.0036 | +0.0017 | +0.0030 |
+| 1.0 | 0.0 | −0.0403 | −0.0413 | −0.0294 | −0.0370 |
+| 1.0 | 1.0 | −0.0497 | −0.0351 | −0.0272 | −0.0373 |
+
+(Pre-fix age numbers, for the record: 1.0/0.0 → −0.0182 / −0.0383 / −0.0263,
+mean −0.0276; 1.0/1.0 → −0.0191 / −0.0400 / −0.0266, mean −0.0286. The
+conclusion — age fails outright — was already correct before the fix; the fix
+makes the *measurement* correct too, and the failure is now more decisive.)
+
+**Second correction (final review fix wave, 2026-08-22):** `fit_age_curve` was
+reading Sleeper's precomputed `pts_half_ppr` field directly out of each
+historical season's stats and differencing it across consecutive seasons to
+build the training curve — exactly the input the project's core rescore rule
+(§6.1) forbids, and the specific case that rule is most sensitive to, since a
+definitional change in that field (verified elsewhere to differ between 2021
+and 2023) directly corrupts a *difference* computation. `fit_age_curve` now
+takes an explicit `weights` mapping and recomputes each season's points via
+`ffdo.engine.scoring.score_stats` from raw component stats, exactly like
+every other value in this project. `harness.py`'s call site now passes
+`ffdo.domain.constants.STANDARD_HALF_PPR` — a fixed, comparable scoring
+standard, not any one league's custom settings, since the curve must be
+comparable across historical seasons/leagues. Re-running the gate script
+after this fix:
+
+| age_weight | dur_weight | 2023 | 2024 | 2025 | mean improvement |
+|---|---|---|---|---|---|
+| 1.0 | 0.0 | −0.0403 | −0.0413 | −0.0294 | −0.0370 |
+| 1.0 | 1.0 | −0.0497 | −0.0351 | −0.0272 | −0.0373 |
+
+The corrected numbers are within noise of the train/apply-mismatch-fix numbers
+above (mean −0.0369 → −0.0370) — the prior measurement happened not to be
+meaningfully distorted by the tainted input in this particular fixture set,
+but it was still reading forbidden data, and the fix closes that gap on
+principle regardless of how much it moved the number this time. **The
+verdict is unchanged: age fails outright, negative in all three seasons, both
+before and after this fix. `AGE_WEIGHT` stays at 0.0** — this fix corrects the
+measurement's provenance, not the promotion decision, per the standing rule
+that only a manual, documented Step 6 decision may promote a weight.
+Durability's row is unaffected: its code path never calls `fit_age_curve`.
+
+Baseline ρ itself fell each year under the harness's actual filter (0.6776 /
+0.4535 / 0.2267) — a real, verified effect of Sleeper's ADP data covering an
+increasingly deep pool of marginal players over calendar time, not a defect;
+see the comment in `tests/backtest/test_harness.py` for the full root-cause
+trace. `improvement` (the promotion signal) is unaffected by this, since it
+compares model to baseline within the same season/filter.
+
+**Age.** Fails outright: negative improvement in all three seasons at
+age_weight=1.0 (mean −0.0370, post train/apply-mismatch fix and post
+rescore fix). **Stays at 0.0.**
+
+**Durability.** At durability_weight=1.0, improvement is positive in all
+three seasons (+0.0036, +0.0036, +0.0017), which literally satisfies "mean
+improvement positive across all three seasons." A robustness sweep was run
+before promoting on that basis:
+
+| dur_weight | 2023 | 2024 | 2025 | mean |
+|---|---|---|---|---|
+| 0.5 | +0.0046 | +0.0051 | +0.0044 | +0.0047 |
+| 1.0 | +0.0036 | +0.0036 | +0.0017 | +0.0030 |
+| 2.0 | −0.0464 | −0.0385 | −0.0309 | −0.0386 |
+| 5.0 | −0.3044 | −0.1752 | −0.0687 | −0.1828 |
+
+The effect is not monotonic (0.5 outperforms 1.0) and flips sign between 1.0
+and 2.0 — inconsistent with a genuine, generalizable dose-response signal,
+and more consistent with an artifact of the backtest harness's synthetic
+pseudo-points scale (ADP rank mapped onto a `linspace(300, 20)` proxy, not
+real projections) and hardcoded `replacement_ppg`. The magnitude at the
+literally-qualifying weight (+0.003 mean ρ) is also negligible relative to
+baseline ρ (~0.45).
+
+Per §8's design intent — "no unvalidated adjustment can reach the board by
+accident" — and per Task 14's own framing that the promotion clause states a
+necessary, not sufficient, condition ("a weight *may* only be promoted... if
+[positive in all three seasons]") with the final call left as "a manual,
+documented decision the controller reviews," **DURABILITY_WEIGHT stays at
+0.0**: the qualifying result is real but too small and too fragile to
+"earned its place," per §8's own standard. **Both `AGE_WEIGHT` and
+`DURABILITY_WEIGHT` ship at 0.0.** The model remains pure market-anchored
+VOR, exactly as it does when validation finds nothing to promote — a
+successful, complete outcome per this task's own instructions, not a
+shortfall.
 
 ## 9. Auction engine
 

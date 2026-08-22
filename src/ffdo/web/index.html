@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Draft Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/board.css">
+</head>
+<body>
+<header id="strip">
+  <div class="brand">
+    <span class="brand-name">FFDO</span>
+    <span id="brand-tag" class="brand-tag">/ AUCTION</span>
+  </div>
+  <div class="strip-stats">
+    <div><span class="label">Inflation</span><b id="inflation">&mdash;</b></div>
+    <div><span class="label">Spent</span><b id="spent">&mdash;</b></div>
+    <div id="your-dollars-stat"><span class="label">Your $ left</span><b id="your-dollars">&mdash;</b></div>
+    <div id="your-slots-stat"><span class="label">Your slots left</span><b id="your-slots">&mdash;</b></div>
+    <div id="your-per-slot-stat"><span class="label">$/slot vs avg</span><b id="your-per-slot">&mdash;</b></div>
+    <div><span class="label">Picks</span><b id="picks">&mdash;</b></div>
+    <div><span class="label">Updated</span><b id="updated">&mdash;</b></div>
+  </div>
+</header>
+
+<section id="cow" hidden>
+  <div class="cow-head">
+    <h2>Cost of waiting</h2>
+    <span class="cow-sub">what you give up per position if you pass now and take it at your next pick instead</span>
+  </div>
+  <div id="cow-rows"></div>
+</section>
+
+<div id="layout">
+  <aside id="nominated" class="empty">
+    <div class="nom-empty-msg">Click a player row to pin them here while they're on the block.</div>
+    <div class="nom-body" hidden>
+      <div class="nom-head">
+        <span class="nom-kicker">On the block</span>
+        <span id="nom-tier" class="tier-chip"></span>
+      </div>
+      <div class="nom-name-block">
+        <span id="nom-name" class="nom-name"></span>
+        <span id="nom-meta" class="nom-meta"></span>
+      </div>
+      <div class="nom-stats">
+        <div class="nom-stat">
+          <span id="nom-baseline-label" class="label">Baseline</span>
+          <b id="nom-baseline">&mdash;</b>
+        </div>
+        <div class="nom-stat">
+          <span id="nom-adjusted-label" class="label">Adjusted</span>
+          <b id="nom-adjusted" class="accent">&mdash;</b>
+        </div>
+        <div class="nom-stat">
+          <span class="label">VOR</span>
+          <b id="nom-vor">&mdash;</b>
+        </div>
+        <div class="nom-stat" id="nom-maxbid-stat" hidden>
+          <span class="label">Your max</span>
+          <b id="nom-maxbid" class="accent">&mdash;</b>
+        </div>
+      </div>
+      <button id="lean-badge" class="lean-badge" disabled title="This board never names a pick — you decide.">
+        MODEL LEAN &middot; DISABLED
+      </button>
+      <div id="nom-hr" class="hr"></div>
+      <div id="bid-block" class="bid-block">
+        <div class="bid-head">
+          <span class="label">Your bid</span>
+          <span id="nom-surplus" class="surplus"></span>
+        </div>
+        <div class="bid-controls">
+          <button data-step="-5">&minus;5</button>
+          <button data-step="-1">&minus;1</button>
+          <span id="nom-bid" class="bid-amount">$0</span>
+          <button data-step="1">+1</button>
+          <button data-step="5">+5</button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <main id="board-panel">
+    <nav id="filters">
+      <button data-pos="ALL" class="on">All</button>
+      <button data-pos="QB">QB</button>
+      <button data-pos="RB">RB</button>
+      <button data-pos="WR">WR</button>
+      <button data-pos="TE">TE</button>
+      <label class="hide-drafted"><input type="checkbox" id="hide-drafted" checked> Hide drafted</label>
+      <input id="search" type="search" placeholder="Search players&hellip;" autocomplete="off">
+    </nav>
+    <div id="board-scroll">
+      <table id="board">
+        <thead><tr>
+          <th></th><th>Player</th><th>Pos</th><th>Tm</th><th>Age</th>
+          <th data-sort="tier">Tier</th><th data-sort="vor">VOR</th>
+          <th id="th-money" colspan="2" data-sort="adjusted">Adj $</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </main>
+</div>
+
+<script src="/board.js"></script>
+</body>
+</html>

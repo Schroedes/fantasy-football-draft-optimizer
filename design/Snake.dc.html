@@ -1,0 +1,265 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --bg: oklch(0.15 0.014 258);
+      --surface: oklch(0.205 0.014 258);
+      --surface-2: oklch(0.24 0.014 258);
+      --border: oklch(0.32 0.014 258);
+      --border-strong: oklch(0.40 0.016 258);
+      --text: oklch(0.94 0.006 258);
+      --muted: oklch(0.66 0.014 258);
+      --faint: oklch(0.48 0.014 258);
+      --green: #34D399;
+      --red: #F87171;
+      --amber: #FBBF24;
+      --font-sans: 'IBM Plex Sans', -apple-system, Segoe UI, sans-serif;
+      --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    a { color: var(--accent, #22D3EE); }
+    a:hover { color: var(--text); }
+    ::selection { background: var(--accent, #22D3EE); color: #0a0f14; }
+    .ffdo-row:hover { background: var(--surface-2); }
+    .cow-row:hover { background: var(--surface-2); }
+  </style>
+</helmet>
+
+<div style="width:1600px;height:1000px;background:var(--bg);color:var(--text);font-family:var(--font-sans);display:flex;flex-direction:column;padding:28px 40px 34px;gap:16px;overflow:hidden;">
+
+  <!-- header -->
+  <div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 24px;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-family:var(--font-mono);font-weight:600;font-size:15px;letter-spacing:1.5px;">FFDO</span>
+      <span style="font-family:var(--font-mono);font-size:11px;color:{{accent}};">/ SNAKE</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:28px;">
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:1px;">
+        <span style="font-family:var(--font-mono);font-size:15px;font-weight:600;">Pick 14 <span style="color:var(--faint);font-weight:400;">of 144</span></span>
+        <span style="font-size:11px;color:var(--faint);">Round 2, Pick 2</span>
+      </div>
+      <div style="width:1px;height:28px;background:var(--border);"></div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:1px;">
+        <span style="font-family:var(--font-mono);font-size:15px;font-weight:600;color:{{accent}};">#21 <span style="color:var(--faint);font-weight:400;">your next pick</span></span>
+        <span style="font-size:11px;color:var(--faint);">7 picks away</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cost of Waiting -->
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;display:flex;flex-direction:column;gap:14px;">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;">
+      <span style="font-size:13px;font-weight:600;">Cost of Waiting</span>
+      <span style="font-size:11.5px;color:var(--faint);">what you give up if you pass now and take this position at #21 instead</span>
+    </div>
+    <div style="display:flex;flex-direction:column;">
+      <sc-for list="{{cow}}" as="row" hint-placeholder-count="4">
+        <div class="cow-row" onClick="{{row.onClick}}" style="{{row.rowStyle}}">
+          <span style="{{row.posStyle}}">{{row.pos}}</span>
+          <div style="display:flex;flex-direction:column;gap:2px;width:110px;">
+            <span style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.5px;">Best now</span>
+            <span style="font-family:var(--font-mono);font-size:16px;font-weight:600;">{{row.now}}</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:2px;width:150px;">
+            <span style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.5px;">Best @ pick 21</span>
+            <span style="font-family:var(--font-mono);font-size:16px;font-weight:600;color:var(--muted);">{{row.next}}</span>
+          </div>
+          <div style="flex:1;display:flex;flex-direction:column;gap:5px;justify-content:center;">
+            <div style="display:flex;align-items:baseline;gap:6px;">
+              <span style="font-family:var(--font-mono);font-size:20px;font-weight:700;color:{{row.costColor}};">{{row.cost}}</span>
+              <span style="font-size:11px;color:var(--faint);">pts cost of waiting</span>
+            </div>
+            <div style="height:6px;background:var(--surface-2);border-radius:3px;overflow:hidden;width:100%;">
+              <div style="{{row.barStyle}}"></div>
+            </div>
+          </div>
+          <span style="{{row.tagStyle}}">{{row.tag}}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <sc-if value="{{bannerVisible}}" hint-placeholder-val="{{true}}">
+    <div style="display:flex;align-items:center;gap:12px;background:color-mix(in oklch, var(--amber) 12%, var(--surface));border:1px solid color-mix(in oklch, var(--amber) 45%, transparent);border-radius:8px;padding:12px 18px;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg>
+      <span style="font-size:12.5px;color:var(--text);flex:1;"><strong>RB run detected</strong> &mdash; 4 of the last 5 picks were RBs (expected ~2 at this stretch). Observed, not predicted.</span>
+      <button onClick="{{onDismissBanner}}" style="background:none;border:none;color:var(--faint);cursor:pointer;padding:4px;display:flex;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+  </sc-if>
+
+  <!-- ranked board -->
+  <div style="flex:1;background:var(--surface);border:1px solid var(--border);border-radius:10px;display:flex;flex-direction:column;min-height:0;overflow:hidden;">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--border);">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <sc-for list="{{filterChips}}" as="chip" hint-placeholder-count="5">
+          <button onClick="{{chip.onClick}}" style="{{chip.style}}">{{chip.label}}</button>
+        </sc-for>
+      </div>
+      <span style="font-size:11.5px;color:var(--faint);">click a row to mark it taken as picks land</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1.7fr 70px 80px 80px 70px 90px 1fr;gap:0;padding:12px 20px;border-bottom:1px solid var(--border);">
+      <span style="font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);">Player</span>
+      <span style="font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);">Pos</span>
+      <span style="font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);">VOR</span>
+      <span style="font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);">Tier</span>
+      <span style="font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);">ADP</span>
+      <span style="font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);">Survives to #21</span>
+      <span></span>
+    </div>
+
+    <div style="overflow-y:auto;flex:1;">
+      <sc-for list="{{rows}}" as="p" hint-placeholder-count="11">
+        <div class="ffdo-row" onClick="{{p.onClick}}" style="{{p.rowStyle}}">
+          <div style="display:flex;flex-direction:column;gap:1px;min-width:0;">
+            <span style="{{p.nameStyle}}">{{p.name}}</span>
+            <span style="font-size:11px;color:var(--faint);">{{p.team}}</span>
+          </div>
+          <span style="{{p.posStyle}}">{{p.pos}}</span>
+          <span style="{{p.cellStyleStrong}}">{{p.vor}}</span>
+          <span style="{{p.cellStyle}}">T{{p.tier}}</span>
+          <span style="{{p.cellStyle}}">{{p.adp}}</span>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="width:56px;height:6px;background:var(--surface-2);border-radius:3px;overflow:hidden;">
+              <div style="{{p.survivalBarStyle}}"></div>
+            </div>
+            <span style="font-family:var(--font-mono);font-size:12px;color:{{p.survivalColor}};">{{p.survival}}%</span>
+          </div>
+          <span style="{{p.statusStyle}}">{{p.statusLabel}}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</div>
+
+</x-dc>
+<script data-dc-script data-props='{"accent":{"editor":"color","default":"#22D3EE","options":["#22D3EE","#818CF8","#34D399","#FBBF24"]}}'>
+const PLAYERS = [
+  { id:'london',   name:'Drake London',       pos:'WR', team:'ATL', vor:51.2, tier:1, adp:19 },
+  { id:'allen',    name:'Josh Allen',         pos:'QB', team:'BUF', vor:45.0, tier:2, adp:34 },
+  { id:'jeanty',   name:'Ashton Jeanty',      pos:'RB', team:'LV',  vor:42.0, tier:2, adp:18 },
+  { id:'jsn',      name:'Jaxon Smith-Njigba', pos:'WR', team:'SEA', vor:40.6, tier:2, adp:23 },
+  { id:'lamarj',   name:'Lamar Jackson',      pos:'QB', team:'BAL', vor:38.2, tier:3, adp:41 },
+  { id:'achane',   name:"De'Von Achane",      pos:'RB', team:'MIA', vor:36.8, tier:2, adp:20 },
+  { id:'odunze',   name:'Rome Odunze',        pos:'WR', team:'CHI', vor:33.0, tier:2, adp:29 },
+  { id:'cbrown',   name:'Chase Brown',        pos:'RB', team:'CIN', vor:30.5, tier:3, adp:24 },
+  { id:'mcbride',  name:'Trey McBride',       pos:'TE', team:'ARI', vor:28.5, tier:3, adp:30 },
+  { id:'laporta',  name:'Sam LaPorta',        pos:'TE', team:'DET', vor:24.0, tier:3, adp:38 },
+  { id:'kwilliams',name:'Kyren Williams',     pos:'RB', team:'LAR', vor:24.1, tier:3, adp:26 },
+];
+
+const POS_COLOR = { QB:'#818CF8', RB:'#34D399', WR:'#22D3EE', TE:'#FBBF24' };
+const SURVIVAL = { london:18, allen:61, jeanty:22, jsn:34, lamarj:78, achane:31, odunze:49, cbrown:47, mcbride:52, laporta:69, kwilliams:58 };
+
+const COW = [
+  { pos:'QB', now:45.0, next:41.3, cost:3.7,  maxCost:20 },
+  { pos:'RB', now:42.0, next:38.1, cost:3.9,  maxCost:20 },
+  { pos:'WR', now:51.2, next:33.4, cost:17.8, maxCost:20 },
+  { pos:'TE', now:28.5, next:27.9, cost:0.6,  maxCost:20 },
+];
+
+class Component extends DCLogic {
+  setFilter(pos) {
+    this.setState({ filter: this.state.filter === pos ? 'ALL' : pos });
+  }
+
+  toggleTaken(id) {
+    const taken = { ...(this.state.taken || {}) };
+    taken[id] = !taken[id];
+    this.setState({ taken });
+  }
+
+  dismissBanner() {
+    this.setState({ bannerVisible: false });
+  }
+
+  renderVals() {
+    const accent = this.props.accent || '#22D3EE';
+    const filter = this.state.filter || 'ALL';
+    const taken = this.state.taken || {};
+    const bannerVisible = this.state.bannerVisible !== false;
+
+    const cow = COW.map((r) => {
+      const selected = filter === r.pos;
+      const hot = r.cost >= 12;
+      return {
+        ...r,
+        onClick: () => this.setFilter(r.pos),
+        posStyle: `width:64px;font-family:var(--font-mono);font-size:15px;font-weight:700;color:${POS_COLOR[r.pos] || 'var(--muted)'};`,
+        costColor: hot ? 'var(--red)' : (r.cost <= 2 ? 'var(--green)' : 'var(--amber)'),
+        barStyle: `height:100%;border-radius:3px;width:${Math.min(100, (r.cost / r.maxCost) * 100)}%;background:${hot ? 'var(--red)' : (r.cost <= 2 ? 'var(--green)' : 'var(--amber)')};`,
+        tag: hot ? 'CLIFF' : (r.cost <= 2 ? 'DEEP' : ''),
+        tagStyle: 'width:60px;text-align:right;font-family:var(--font-mono);font-size:10.5px;font-weight:600;letter-spacing:0.5px;color:' + (hot ? 'var(--red)' : (r.cost <= 2 ? 'var(--green)' : 'var(--faint)')) + ';',
+        rowStyle: 'display:flex;align-items:center;gap:20px;padding:12px 10px;border-radius:7px;cursor:pointer;' +
+          (selected ? `background:color-mix(in oklch, ${accent} 12%, transparent);box-shadow:inset 3px 0 0 ${accent};` : ''),
+      };
+    });
+
+    const positions = ['QB', 'RB', 'WR', 'TE'];
+    const filterChips = ['ALL'].concat(positions).map((pos) => {
+      const selected = filter === pos;
+      return {
+        label: pos,
+        onClick: () => this.setFilter(pos),
+        style: 'font-family:var(--font-mono);font-size:11.5px;font-weight:600;padding:6px 13px;border-radius:6px;cursor:pointer;border:1px solid ' +
+          (selected ? accent : 'var(--border)') + ';background:' +
+          (selected ? `color-mix(in oklch, ${accent} 18%, transparent)` : 'var(--surface-2)') + ';color:' +
+          (selected ? accent : 'var(--muted)') + ';',
+      };
+    });
+
+    const filtered = PLAYERS.filter((p) => filter === 'ALL' || p.pos === filter);
+    const sorted = [...filtered].sort((a, b) => {
+      const at = taken[a.id] ? 1 : 0;
+      const bt = taken[b.id] ? 1 : 0;
+      if (at !== bt) return at - bt;
+      return b.vor - a.vor;
+    });
+
+    const rows = sorted.map((p) => {
+      const isTaken = !!taken[p.id];
+      const survival = SURVIVAL[p.id] ?? 50;
+      const survivalColor = survival >= 60 ? 'var(--green)' : (survival <= 30 ? 'var(--red)' : 'var(--amber)');
+      return {
+        ...p,
+        survival,
+        onClick: () => this.toggleTaken(p.id),
+        rowStyle: 'display:grid;grid-template-columns:1.7fr 70px 80px 80px 70px 90px 1fr;gap:0;padding:11px 20px;align-items:center;cursor:pointer;border-bottom:1px solid var(--border);' +
+          (isTaken ? 'opacity:0.38;' : ''),
+        nameStyle: 'font-size:13.5px;font-weight:500;' + (isTaken ? 'text-decoration:line-through;' : ''),
+        posStyle: `font-family:var(--font-mono);font-size:11px;font-weight:600;color:${POS_COLOR[p.pos] || 'var(--muted)'};`,
+        cellStyle: 'font-family:var(--font-mono);font-size:13px;color:var(--muted);',
+        cellStyleStrong: 'font-family:var(--font-mono);font-size:13px;font-weight:600;',
+        survivalColor,
+        survivalBarStyle: `height:100%;border-radius:3px;width:${survival}%;background:${survivalColor};`,
+        statusStyle: 'font-size:11px;text-align:right;color:var(--faint);font-family:var(--font-mono);',
+        statusLabel: isTaken ? 'TAKEN' : '',
+      };
+    });
+
+    return {
+      accent,
+      cow,
+      bannerVisible,
+      onDismissBanner: () => this.dismissBanner(),
+      filterChips,
+      rows,
+    };
+  }
+}
+</script>
+</body>
+</html>
