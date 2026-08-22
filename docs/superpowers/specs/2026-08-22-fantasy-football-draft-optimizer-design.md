@@ -402,18 +402,34 @@ board by accident.
 
 Any adjustment that fails to beat baseline is reported as failed in this document.
 
-### 8.1 Backtest results (Task 14, run 2026-08-22)
+### 8.1 Backtest results (Task 14, run 2026-08-22; age rows corrected 2026-08-22)
 
 `ffdo.backtest.harness.evaluate_season` was run for 2023, 2024, 2025 across the
 weight combinations the harness's gate script specifies. `improvement` is
 `model_rho - baseline_rho` (Spearman ρ against actual season points).
 
+**Correction:** the age rows below were re-measured after fixing a train/apply
+mismatch in `adjustments.py`: `fit_age_curve` correctly keys its training data
+by the player's age *during each historical season* (computed from the single,
+fixed 2026 `players_nfl` snapshot — there is no per-season profile history),
+but `build()`'s lookup was using the player's raw 2026-anchored profile age
+regardless of what season the backtest was evaluating. Since `players_nfl` is
+always anchored to 2026, `build()` now shifts the lookup age by
+`(2026 - current_season)` before querying the curve — a no-op for live 2026
+use, and load-bearing for anything backtested against 2023-2025. Durability's
+row is unaffected: its code path never touches the age curve.
+
 | age_weight | dur_weight | 2023 | 2024 | 2025 | mean improvement |
 |---|---|---|---|---|---|
 | 0.0 | 0.0 | 0.0000 | 0.0000 | 0.0000 | +0.0000 |
 | 0.0 | 1.0 | +0.0036 | +0.0036 | +0.0017 | +0.0030 |
-| 1.0 | 0.0 | −0.0182 | −0.0383 | −0.0263 | −0.0276 |
-| 1.0 | 1.0 | −0.0191 | −0.0400 | −0.0266 | −0.0286 |
+| 1.0 | 0.0 | −0.0402 | −0.0415 | −0.0289 | −0.0369 |
+| 1.0 | 1.0 | −0.0506 | −0.0359 | −0.0271 | −0.0379 |
+
+(Pre-fix age numbers, for the record: 1.0/0.0 → −0.0182 / −0.0383 / −0.0263,
+mean −0.0276; 1.0/1.0 → −0.0191 / −0.0400 / −0.0266, mean −0.0286. The
+conclusion — age fails outright — was already correct before the fix; the fix
+makes the *measurement* correct too, and the failure is now more decisive.)
 
 Baseline ρ itself fell each year under the harness's actual filter (0.6776 /
 0.4535 / 0.2267) — a real, verified effect of Sleeper's ADP data covering an
@@ -423,7 +439,7 @@ trace. `improvement` (the promotion signal) is unaffected by this, since it
 compares model to baseline within the same season/filter.
 
 **Age.** Fails outright: negative improvement in all three seasons at
-age_weight=1.0. **Stays at 0.0.**
+age_weight=1.0 (mean −0.0369, post train/apply-mismatch fix). **Stays at 0.0.**
 
 **Durability.** At durability_weight=1.0, improvement is positive in all
 three seasons (+0.0036, +0.0036, +0.0017), which literally satisfies "mean

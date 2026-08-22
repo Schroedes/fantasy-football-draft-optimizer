@@ -24,6 +24,18 @@ _DEFAULT_MISS_RATE: dict[str, float] = {
     "QB": 0.10, "RB": 0.18, "WR": 0.14, "TE": 0.15,
 }
 
+# `profiles` is always the single `players_nfl` snapshot, which carries
+# `age` as of THIS season and has no per-season history -- there is no
+# 2023-vintage or 2024-vintage players file. Converting a profile's age to
+# the age a player had during any other season Y is therefore always
+# `age - (_PROFILE_SNAPSHOT_SEASON - Y)`, regardless of what season is
+# under evaluation (e.g. during a Task 14 backtest). This anchor must stay
+# fixed at 2026 everywhere it's used -- it is NOT the same quantity as a
+# function's `current_season` parameter (the season being evaluated/
+# projected for), which varies per call. Conflating the two was the root
+# cause of the age train/apply mismatch fixed by `build()`'s lookup below.
+_PROFILE_SNAPSHOT_SEASON = 2026
+
 
 def expected_games_missed(
     history: Sequence[SeasonStatLine],
@@ -76,7 +88,7 @@ def fit_age_curve(
                 continue
             prev_ppg = prev.stats.get(points_key, 0.0) / prev.games_played
             curr_ppg = curr.stats.get(points_key, 0.0) / curr.games_played
-            age_then = prof.age - (2026 - prev.season)
+            age_then = prof.age - (_PROFILE_SNAPSHOT_SEASON - prev.season)
             deltas.setdefault(prof.position, {}).setdefault(age_then, []).append(
                 curr_ppg - prev_ppg)
 
@@ -115,7 +127,13 @@ def build(
             entry["durability"] = -durability_weight * max(0.0, gap) * missed
 
         if age_weight and age_curve and prof.age is not None:
-            delta_ppg = (age_curve.get(prof.position) or {}).get(prof.age)
+            # prof.age is anchored to _PROFILE_SNAPSHOT_SEASON, not to
+            # current_season -- shift it to the player's age AT the season
+            # being evaluated before looking up the curve. This is a no-op
+            # for live use (current_season == _PROFILE_SNAPSHOT_SEASON) but
+            # is required for a backtest over a past current_season.
+            age_at_eval = prof.age - (_PROFILE_SNAPSHOT_SEASON - current_season)
+            delta_ppg = (age_curve.get(prof.position) or {}).get(age_at_eval)
             if delta_ppg:
                 entry["age"] = age_weight * delta_ppg * length
 

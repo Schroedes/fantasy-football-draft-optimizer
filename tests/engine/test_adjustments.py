@@ -1,3 +1,6 @@
+import pytest
+
+from ffdo.domain.constants import SEASON_LENGTH
 from ffdo.domain.models import PlayerProfile, SeasonStatLine
 from ffdo.engine import adjustments
 
@@ -59,3 +62,58 @@ def test_build_returns_empty_adjustments_when_weights_are_zero():
     built = adjustments.build(profiles, history, points={"p": 180.0},
                               replacement_ppg={"RB": 8.0})
     assert built["p"] == {}
+
+
+def test_fit_age_curve_computes_training_age_from_the_fixed_profile_snapshot_anchor():
+    """`profiles` is always the single 2026-anchored `players_nfl` snapshot --
+    there is no per-season age history. A player who is 30 in that snapshot
+    was 25 during the 2021 season (30 - (2026 - 2021)), so a training pair
+    spanning 2021->2022 must be keyed at age 25, not some other value.
+    """
+    history = {"p": [
+        _line(2021, 16, pts_half_ppr=160.0),   # 10 ppg, age 25 in 2021
+        _line(2022, 16, pts_half_ppr=192.0),   # 12 ppg, age 26 in 2022
+    ]}
+    profiles = {"p": _profile(age=30)}
+    curve = adjustments.fit_age_curve(history, profiles)
+    assert curve["RB"] == {25: pytest.approx(2.0)}
+
+
+def test_build_looks_up_the_age_curve_at_the_season_being_evaluated():
+    """Regression for the train/apply mismatch: during a backtest for a past
+    season, the age curve must be looked up using the player's age AT that
+    past season -- not their raw (2026-anchored) profile age. A player who
+    is 30 in the profile snapshot was 27 during the 2023 season
+    (30 - (2026 - 2023)).
+    """
+    profiles = {"p": _profile(age=30)}
+    history = {"p": []}
+
+    # Curve only has an entry at the correct age-at-2023 (27).
+    curve_at_correct_age = {"RB": {27: 5.0}}
+    built = adjustments.build(
+        profiles, history, points={"p": 180.0}, replacement_ppg={"RB": 8.0},
+        age_weight=1.0, age_curve=curve_at_correct_age, current_season=2023)
+    assert built["p"]["age"] == pytest.approx(1.0 * 5.0 * SEASON_LENGTH[2023])
+
+    # A curve keyed by the raw, un-shifted profile age (30) must NOT hit --
+    # proves the lookup shifts by season rather than always using prof.age.
+    curve_at_raw_age = {"RB": {30: 5.0}}
+    built_raw = adjustments.build(
+        profiles, history, points={"p": 180.0}, replacement_ppg={"RB": 8.0},
+        age_weight=1.0, age_curve=curve_at_raw_age, current_season=2023)
+    assert "age" not in built_raw["p"]
+
+
+def test_build_age_lookup_still_uses_raw_profile_age_for_live_2026_use():
+    """Regression: current_season defaults to 2026, matching the profile
+    snapshot's own anchor, so live (non-backtest) behavior is unchanged --
+    the age-at-season shift is a no-op when current_season == 2026.
+    """
+    profiles = {"p": _profile(age=30)}
+    history = {"p": []}
+    curve = {"RB": {30: 5.0}}
+    built = adjustments.build(
+        profiles, history, points={"p": 180.0}, replacement_ppg={"RB": 8.0},
+        age_weight=1.0, age_curve=curve)
+    assert built["p"]["age"] == pytest.approx(1.0 * 5.0 * SEASON_LENGTH[2026])
