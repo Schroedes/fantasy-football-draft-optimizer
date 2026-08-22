@@ -1,15 +1,14 @@
 """Projections + ADP, with a hard guard against post-season contamination.
 
 Sleeper's projections endpoint returns the LATEST state of a projection, not
-its preseason state. For completed seasons the points have been overwritten
-with in-season information: Nick Chubb's stored 2023 projection carries no
-`pts_half_ppr` figure at all -- the key is simply absent from the row --
-despite a preseason ADP of 10.6, because he tore his knee in week 2 and
-never accumulated the season of production Sleeper would otherwise report.
-A missing points figure for a player with a top-11 ADP is exactly the signal
-that the season played out and wiped the projection; we normalize that
-absence to 0.0 in the domain model (see `_PTS_KEYS` below) so downstream
-code sees an honest zero instead of a `KeyError`.
+its preseason state. For completed seasons the points have been WIPED, not
+merely overwritten with a stale number: Nick Chubb's 2023 row carries no
+`pts_half_ppr` key at all -- not even a stored 0.0 -- despite a preseason ADP
+of 10.6 (a top-11 pick), because he tore his knee in week 2 and the season
+that followed left nothing for Sleeper to report back. Ingest translates
+wire format; it does not invent values, so that absence is preserved as an
+absence all the way into `SeasonProjection.stats` rather than being defaulted
+to a number nobody stored.
 
 ADP is unaffected -- it is fixed at draft time -- and is therefore the only
 historical market signal this project trusts.
@@ -33,12 +32,6 @@ SEASON_START: dict[int, datetime] = {
 }
 
 _ADP_PREFIX = "adp_"
-
-# The three fantasy-point totals central to valuation. Sleeper omits these
-# keys entirely for a player who recorded no scoring stats (rather than
-# writing an explicit 0.0), so we default them in rather than let a busted
-# preseason favorite silently vanish from every points-keyed lookup.
-_PTS_KEYS = ("pts_std", "pts_ppr", "pts_half_ppr")
 
 
 class ContaminatedProjectionError(RuntimeError):
@@ -86,8 +79,6 @@ def parse(
         # 1.0/0.0 (mirrors ffdo.ingest.stats).
         numeric = {k: float(v) for k, v in stats.items()
                    if isinstance(v, (int, float)) and not isinstance(v, bool)}
-        for key in _PTS_KEYS:
-            numeric.setdefault(key, 0.0)
         proj[player_id] = SeasonProjection(
             player_id=player_id, season=season,
             stats={k: v for k, v in numeric.items()
