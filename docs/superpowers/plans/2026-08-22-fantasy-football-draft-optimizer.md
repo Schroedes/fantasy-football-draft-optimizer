@@ -1633,6 +1633,13 @@ git commit -m "feat: auction dollars, live inflation, and max bid"
 
 This is the hard deadline deliverable. It must be usable on 2026-08-25.
 
+**Mockups already exist** for the setup screen, this auction board, and the
+Task 12 snake board — see `design/` (three `.dc.html` artboards + `canvas.json`,
+published as the "FFDO Draft Room" design canvas). They cover layout, the
+budget strip, the nominated-player card with bid/surplus interaction, and the
+disabled "model's lean" badge from §1.2's non-goals — use them as the visual
+reference when building `index.html` / `board.css` / `board.js` below.
+
 **Files:**
 - Create: `src/ffdo/api/__init__.py`, `src/ffdo/api/app.py`, `src/ffdo/api/board.py`
 - Create: `src/ffdo/web/index.html`, `src/ffdo/web/board.css`, `src/ffdo/web/board.js`
@@ -2188,6 +2195,9 @@ git commit -m "feat: draft survival simulation and cost of waiting"
 ---
 
 ### Task 12: Snake board
+
+See the Task 10 note above — the snake board mockup (Cost-of-Waiting table,
+ranked board, run-detection banner) is already built in `design/Snake.dc.html`.
 
 **Files:**
 - Modify: `src/ffdo/api/board.py` (add `build_snake_board`)
