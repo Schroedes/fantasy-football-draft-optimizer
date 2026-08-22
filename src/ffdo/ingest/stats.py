@@ -14,8 +14,11 @@ def parse(raw: dict[str, Any], season: int) -> dict[str, SeasonStatLine]:
     for player_id, rec in raw.items():
         if not isinstance(rec, dict):
             continue
+        # bool is a subclass of int in Python; excluded explicitly so a JSON
+        # boolean stat value (this is an undocumented Sleeper endpoint) is
+        # dropped rather than silently coerced to 1.0/0.0.
         numeric = {k: float(v) for k, v in rec.items()
-                   if isinstance(v, (int, float))}
+                   if isinstance(v, (int, float)) and not isinstance(v, bool)}
         out[player_id] = SeasonStatLine(
             player_id=player_id,
             season=season,

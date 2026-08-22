@@ -33,6 +33,19 @@ def test_stats_parse_keeps_component_stats_and_games_played():
     assert "rush_yd" in gibbs.stats
 
 
+def test_stats_parse_excludes_boolean_values_instead_of_coercing_them():
+    """bool is a subclass of int in Python; a JSON boolean stat value must be
+    dropped, not silently coerced to 1.0/0.0. This endpoint is undocumented,
+    so a boolean showing up is plausible even though none of the five
+    committed snapshot seasons currently contain one."""
+    raw = {"1": {"gp": 10, "rush_yd": 120.0, "some_flag": True, "other_flag": False}}
+    parsed = stats.parse(raw, 2025)
+    assert "some_flag" not in parsed["1"].stats
+    assert "other_flag" not in parsed["1"].stats
+    assert parsed["1"].stats["rush_yd"] == 120.0
+    assert parsed["1"].stats["gp"] == 10.0
+
+
 def test_league_parse_reads_roster_and_scoring():
     raw = snapshot.load("league_history")["leagues"]["2026"]
     lg = league.parse(raw)
