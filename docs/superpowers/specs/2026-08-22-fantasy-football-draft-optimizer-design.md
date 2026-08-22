@@ -228,6 +228,23 @@ so TE-premium falls out with no special case.
 This matters because Sleeper's own board uses one of three fixed presets
 (`pts_ppr` / `pts_half_ppr` / `pts_std`). This league has 49 custom scoring keys.
 
+**Measured caveat, added 2026-08-22.** For *this* league the rescore turns out to
+buy almost nothing at draft time, and the spec previously overstated it. The
+league's only two divergences from Sleeper's half-PPR preset are `fum: -1` (all
+fumbles, not just lost) and `st_td: 6`. Both keys are **entirely absent from
+Sleeper's projections** — verified across the 2026 file: `fum` appears in 0 rows,
+`st_td` in 0 rows — because nobody projects total fumbles or return touchdowns.
+So the rescore reproduces the preset for this league, and the "fumble-prone QBs
+are overvalued by up to 11 points" finding, which was measured on *historical*
+stats, does not reach a draft decision.
+
+The layer stays, for two reasons: it is required for the user's other leagues
+(TE premium, bonus tiers, and 6-point passing TDs all have real projection
+inputs), and it is what makes §11's golden test possible. Deriving a projected
+fumble rate from historical data would recover the edge, but that is a model
+adjustment and belongs under §8's default-off, backtest-gated discipline rather
+than smuggled into ingest.
+
 **Golden test:** rescoring with standard PPR weights must reproduce Sleeper's own
 `pts_ppr` within tolerance. If our arithmetic reproduces theirs on the preset, it
 can be trusted on custom settings. This is the first test written.
