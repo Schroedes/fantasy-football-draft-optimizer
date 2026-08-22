@@ -15,6 +15,17 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 LEAGUE_ID = "1315881559957458944"
 DRAFT_ID = "1315881559965835264"
 
+# Sleeper's projections endpoint does not actually honor the position[]
+# query filter server-side (confirmed against the live API), so it returns
+# every position it has projections for -- including FB/CB. Those have no
+# roster slot in this league, so replacement_levels() has no baseline for
+# them and vor.compute() falls back to raw projected points as VOR instead
+# of points-over-replacement. That let a fullback (Kyle Juszczyk) rank #69
+# of 3112 in the live board, ahead of legitimate startable players. Filter
+# to skill positions here, before scoring, rather than trusting the query
+# param.
+SKILL_POSITIONS = frozenset({"QB", "RB", "WR", "TE"})
+
 
 class _TTLCache:
     """Caches the result of `loader` in-process for `ttl_seconds`.
@@ -30,9 +41,11 @@ class _TTLCache:
         self._ttl = ttl_seconds
         self._value: Any = None
         self._fetched_at: float = float("-inf")
+        # Injectable so tests can fake elapsed time without real sleeps.
+        self._now: Callable[[], float] = time.monotonic
 
     def get(self, loader: Callable[[], Any]) -> Any:
-        now = time.monotonic()
+        now = self._now()
         if self._value is None or (now - self._fetched_at) > self._ttl:
             self._value = loader()
             self._fetched_at = now
@@ -88,7 +101,8 @@ def create_app() -> FastAPI:
             lg = replace(lg, budget=state.budget)
 
         points = {pid: scoring.score_stats(p.stats, lg.scoring_settings)
-                  for pid, p in proj.items() if pid in profiles}
+                  for pid, p in proj.items()
+                  if pid in profiles and profiles[pid].position in SKILL_POSITIONS}
         valued = vor.assign_tiers(vor.compute(points, profiles, lg))
         baseline = auction.baseline_prices(valued, lg)
         return board_mod.build_auction_board(lg, state, valued, baseline)
