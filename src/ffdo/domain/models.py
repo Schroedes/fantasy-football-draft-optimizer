@@ -111,3 +111,9 @@ class ValuedPlayer:
     vor: float
     tier: int
     adjustments: Mapping[str, float]
+
+
+@dataclass(frozen=True, slots=True)
+class TeamProfile:
+    roster_id: int
+    display_name: str

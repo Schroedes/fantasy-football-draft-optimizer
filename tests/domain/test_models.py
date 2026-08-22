@@ -5,7 +5,7 @@ import pytest
 from ffdo.domain.constants import SEASON_LENGTH, is_offense_scoring_key
 from ffdo.domain.models import (
     DraftPick, DraftState, LeagueProfile, MarketADP,
-    PlayerProfile, SeasonProjection, SeasonStatLine,
+    PlayerProfile, SeasonProjection, SeasonStatLine, TeamProfile,
 )
 
 
@@ -75,3 +75,11 @@ def test_stat_line_and_projection_and_adp_construct():
     SeasonProjection(player_id="9221", season=2026,
                      stats={"rush_yd": 1100.0}, last_modified=None)
     MarketADP(player_id="9221", season=2026, adp={"half_ppr": 1.8})
+
+
+def test_team_profile_is_frozen_and_holds_roster_id_and_name():
+    tp = TeamProfile(roster_id=3, display_name="The Foobars")
+    assert tp.roster_id == 3
+    assert tp.display_name == "The Foobars"
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        tp.display_name = "renamed"
