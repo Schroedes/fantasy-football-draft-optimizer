@@ -60,12 +60,36 @@ def parse(
 ) -> tuple[dict[str, SeasonProjection], dict[str, MarketADP]]:
     modified = _last_modified(raw)
     kickoff = SEASON_START.get(season)
-    if (not allow_contaminated and modified and kickoff and modified > kickoff):
-        raise ContaminatedProjectionError(
-            f"{season} projections last modified {modified.date()}, after "
-            f"kickoff {kickoff.date()}; points are post-hoc. Use ADP instead, "
-            f"or pass allow_contaminated=True to inspect deliberately."
-        )
+
+    # The guard's job is to refuse when it cannot prove the data is clean --
+    # not to pass it through whenever an input is unexpected. `kickoff and
+    # modified > kickoff` used to short-circuit to False (silently skipping
+    # the check) whenever `season` was unknown or no row carried a
+    # `last_modified` timestamp, which is the exact opposite of "refuse
+    # rather than trust." Both cases now raise unless the caller explicitly
+    # opts in with `allow_contaminated=True`.
+    if not allow_contaminated:
+        if season not in SEASON_START:
+            raise ContaminatedProjectionError(
+                f"season {season} has no known kickoff date in SEASON_START; "
+                f"cannot verify these projections predate the season. Add "
+                f"{season} to SEASON_START, or pass allow_contaminated=True "
+                f"to inspect deliberately."
+            )
+        if raw and modified is None:
+            raise ContaminatedProjectionError(
+                f"{season} projections carry no last_modified timestamp on "
+                f"any row; cannot verify these projections predate kickoff "
+                f"({kickoff.date()}). Pass allow_contaminated=True to "
+                f"inspect deliberately."
+            )
+        if modified and kickoff and modified > kickoff:
+            raise ContaminatedProjectionError(
+                f"{season} projections last modified {modified.date()}, "
+                f"after kickoff {kickoff.date()}; points are post-hoc. Use "
+                f"ADP instead, or pass allow_contaminated=True to inspect "
+                f"deliberately."
+            )
 
     proj: dict[str, SeasonProjection] = {}
     adp: dict[str, MarketADP] = {}

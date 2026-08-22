@@ -28,11 +28,20 @@ def compute(
     out: dict[str, ValuedPlayer] = {}
     for pid, adj_pts in adjusted.items():
         pos = positions[pid]
+        if pos not in levels:
+            # No roster slot (dedicated or FLEX-reachable) exists for this
+            # position in `league.roster_positions`, so there is no
+            # replacement level to measure against. Silently defaulting to
+            # 0.0 here would turn a player's raw point total into his VOR --
+            # exactly backwards, since it makes an unrostered position look
+            # like an extreme bargain. Exclude instead: a player at a
+            # position the league doesn't start has no meaningful VOR.
+            continue
         out[pid] = ValuedPlayer(
             profile=profiles[pid],
             projected_points=points[pid],
             adjusted_points=adj_pts,
-            vor=adj_pts - levels.get(pos, 0.0),
+            vor=adj_pts - levels[pos],
             tier=0,
             adjustments=dict(adjustments.get(pid, {})),
         )

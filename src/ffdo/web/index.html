@@ -18,6 +18,9 @@
   <div class="strip-stats">
     <div><span class="label">Inflation</span><b id="inflation">&mdash;</b></div>
     <div><span class="label">Spent</span><b id="spent">&mdash;</b></div>
+    <div id="your-dollars-stat"><span class="label">Your $ left</span><b id="your-dollars">&mdash;</b></div>
+    <div id="your-slots-stat"><span class="label">Your slots left</span><b id="your-slots">&mdash;</b></div>
+    <div id="your-per-slot-stat"><span class="label">$/slot vs avg</span><b id="your-per-slot">&mdash;</b></div>
     <div><span class="label">Picks</span><b id="picks">&mdash;</b></div>
     <div><span class="label">Updated</span><b id="updated">&mdash;</b></div>
   </div>
@@ -55,6 +58,10 @@
         <div class="nom-stat">
           <span class="label">VOR</span>
           <b id="nom-vor">&mdash;</b>
+        </div>
+        <div class="nom-stat" id="nom-maxbid-stat" hidden>
+          <span class="label">Your max</span>
+          <b id="nom-maxbid" class="accent">&mdash;</b>
         </div>
       </div>
       <button id="lean-badge" class="lean-badge" disabled title="This board never names a pick — you decide.">

@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 
 from ffdo.domain.constants import SEASON_LENGTH
 from ffdo.domain.models import PlayerProfile, SeasonStatLine
+from ffdo.engine.scoring import score_stats
 
 # Promoted above zero only on out-of-sample improvement (Task 14).
 AGE_WEIGHT: float = 0.0
@@ -69,13 +70,22 @@ def expected_games_missed(
 def fit_age_curve(
     history_by_player: Mapping[str, Sequence[SeasonStatLine]],
     profiles: Mapping[str, PlayerProfile],
-    *,
-    points_key: str = "pts_half_ppr",
+    weights: Mapping[str, float],
 ) -> dict[str, dict[int, float]]:
     """Delta-method aging curves: mean change in points-per-game from age a to a+1.
 
     Cross-sectional averages are badly survivorship-biased -- declining players
     leave the league -- so consecutive-season deltas are used instead.
+
+    Points are recomputed from raw component stats via `score_stats`, never
+    read from Sleeper's precomputed `pts_*` fields: that field's definition
+    changed between 2021 and 2023 (see ffdo.engine.scoring), and differencing
+    it across consecutive seasons -- exactly what this function does -- is
+    the case that definitional drift corrupts most directly. `weights`
+    should be a fixed, comparable scoring standard (e.g.
+    `ffdo.domain.constants.STANDARD_HALF_PPR`), not any one league's custom
+    settings, since this curve must be comparable across historical seasons
+    and leagues.
     """
     deltas: dict[str, dict[int, list[float]]] = {}
     for player_id, lines in history_by_player.items():
@@ -86,8 +96,8 @@ def fit_age_curve(
         for prev, curr in zip(ordered, ordered[1:], strict=False):
             if prev.games_played < 4 or curr.games_played < 4:
                 continue
-            prev_ppg = prev.stats.get(points_key, 0.0) / prev.games_played
-            curr_ppg = curr.stats.get(points_key, 0.0) / curr.games_played
+            prev_ppg = score_stats(prev.stats, weights) / prev.games_played
+            curr_ppg = score_stats(curr.stats, weights) / curr.games_played
             age_then = prof.age - (_PROFILE_SNAPSHOT_SEASON - prev.season)
             deltas.setdefault(prof.position, {}).setdefault(age_then, []).append(
                 curr_ppg - prev_ppg)

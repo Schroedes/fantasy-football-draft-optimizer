@@ -22,6 +22,12 @@ async function refresh() {
   }
 }
 
+// A human scanning a live draft board never needs to see all 3,000+ rows at
+// once -- sort/filter already narrows what matters. Capping the rendered
+// rows keeps the 3-second poll and every keystroke/filter/sort click cheap
+// regardless of pool size.
+const MAX_RENDERED_ROWS = 300;
+
 function visibleRows() {
   const d = state.data;
   if (!d) return [];
@@ -38,7 +44,7 @@ function visibleRows() {
     if (av === bv) return 0;
     return av < bv ? -1 * dir : 1 * dir;
   });
-  return rows;
+  return rows.slice(0, MAX_RENDERED_ROWS);
 }
 
 function render() {
@@ -51,6 +57,21 @@ function render() {
     d.budget ? `$${d.budget.spent}/${d.budget.total}` : "—";
   document.getElementById("picks").textContent = d.picks_made;
   document.getElementById("brand-tag").textContent = `/ ${d.format === "snake" ? "SNAKE" : "AUCTION"}`;
+
+  const hasYourBudget = d.format !== "snake" && d.budget &&
+    d.budget.your_slots_left !== undefined;
+  ["your-dollars-stat", "your-slots-stat", "your-per-slot-stat"].forEach(id => {
+    document.getElementById(id).hidden = !hasYourBudget;
+  });
+  if (hasYourBudget) {
+    document.getElementById("your-dollars").textContent = `$${d.budget.your_dollars_left}`;
+    document.getElementById("your-slots").textContent = d.budget.your_slots_left;
+    const yours = d.budget.your_dollars_per_slot;
+    const avg = d.budget.league_dollars_per_slot;
+    const diff = Math.round((yours - avg) * 10) / 10;
+    const sign = diff >= 0 ? "+" : "−";
+    document.getElementById("your-per-slot").textContent = `$${yours} (${sign}$${Math.abs(diff)})`;
+  }
 
   renderCow();
   renderMoneyHeader();
@@ -146,14 +167,6 @@ function renderTable() {
       ${money}
     </tr>`;
   }).join("");
-
-  tbody.querySelectorAll("tr[data-id]").forEach(tr => {
-    tr.addEventListener("click", () => {
-      const p = state.data.players.find(x => x.player_id === tr.dataset.id);
-      if (!p || p.drafted) return;
-      nominate(p);
-    });
-  });
 }
 
 function nominate(p) {
@@ -182,17 +195,22 @@ function renderNominated() {
 
   const bidBlock = document.getElementById("bid-block");
   const hr = document.getElementById("nom-hr");
+  const maxBidStat = document.getElementById("nom-maxbid-stat");
   const isAuction = p.baseline !== undefined;
 
   document.getElementById("nom-baseline-label").textContent = isAuction ? "Baseline" : "Survival";
   document.getElementById("nom-adjusted-label").textContent = isAuction ? "Adjusted" : "Pos.";
   bidBlock.hidden = !isAuction;
   hr.hidden = !isAuction;
+  maxBidStat.hidden = !isAuction || p.max_bid === undefined;
 
   if (isAuction) {
     document.getElementById("nom-baseline").textContent = `$${p.baseline}`;
     document.getElementById("nom-adjusted").textContent = `$${p.adjusted}`;
     document.getElementById("nom-bid").textContent = `$${state.bid}`;
+    if (p.max_bid !== undefined) {
+      document.getElementById("nom-maxbid").textContent = `$${p.max_bid}`;
+    }
 
     const surplus = Math.round((p.adjusted - state.bid) * 10) / 10;
     const surplusEl = document.getElementById("nom-surplus");
@@ -225,6 +243,18 @@ function escapeHtml(s) {
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
 }
+
+// Event delegation: ONE listener on the stable tbody ancestor, rather than
+// one per row re-attached on every render() call (every 3s poll, every
+// keystroke, every filter/sort click). The row's data-id is read off
+// whichever <tr> was actually clicked via e.target.closest.
+document.querySelector("#board tbody").addEventListener("click", e => {
+  const tr = e.target.closest("tr[data-id]");
+  if (!tr || !state.data) return;
+  const p = state.data.players.find(x => x.player_id === tr.dataset.id);
+  if (!p || p.drafted) return;
+  nominate(p);
+});
 
 document.querySelectorAll("#filters button[data-pos]").forEach(b =>
   b.addEventListener("click", () => {

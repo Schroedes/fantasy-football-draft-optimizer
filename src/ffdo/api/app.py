@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -12,19 +13,43 @@ from fastapi.staticfiles import StaticFiles
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
-LEAGUE_ID = "1315881559957458944"
-DRAFT_ID = "1315881559965835264"
+# Defaults pin this user's real 2026 auction league/draft, so the app works
+# out of the box with zero config. `FFDO_LEAGUE_ID` / `FFDO_DRAFT_ID` let it
+# point at a different league (e.g. a snake league) without a settings UI --
+# read fresh on every request rather than frozen as module constants at
+# import time, so an env var set after the process starts (or changed by a
+# test via monkeypatch) actually takes effect.
+_DEFAULT_LEAGUE_ID = "1315881559957458944"
+_DEFAULT_DRAFT_ID = "1315881559965835264"
 
-# Sleeper's projections endpoint does not actually honor the position[]
-# query filter server-side (confirmed against the live API), so it returns
-# every position it has projections for -- including FB/CB. Those have no
-# roster slot in this league, so replacement_levels() has no baseline for
-# them and vor.compute() falls back to raw projected points as VOR instead
-# of points-over-replacement. That let a fullback (Kyle Juszczyk) rank #69
-# of 3112 in the live board, ahead of legitimate startable players. Filter
-# to skill positions here, before scoring, rather than trusting the query
-# param.
-SKILL_POSITIONS = frozenset({"QB", "RB", "WR", "TE"})
+
+def _league_id() -> str:
+    return os.environ.get("FFDO_LEAGUE_ID", _DEFAULT_LEAGUE_ID)
+
+
+def _draft_id() -> str:
+    return os.environ.get("FFDO_DRAFT_ID", _DEFAULT_DRAFT_ID)
+
+
+def _roster_id() -> int | None:
+    raw = os.environ.get("FFDO_ROSTER_ID")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _active_only(points: dict[str, float], profiles: dict) -> dict[str, float]:
+    """Drop retired/inactive players from the valuation pool.
+
+    `PlayerProfile.active` is parsed but was never used as a filter, so a
+    retired player with a stale projection (e.g. Cam Newton) could still
+    slip onto the board with a deeply negative VOR instead of not
+    appearing at all.
+    """
+    return {pid: pts for pid, pts in points.items() if profiles[pid].active}
 
 
 class _TTLCache:
@@ -72,10 +97,12 @@ def create_app() -> FastAPI:
 
     @app.get("/api/board")
     def get_board() -> dict:
+        league_id = _league_id()
+        draft_id = _draft_id()
         sleeper = client_mod.SleeperClient()
         try:
             lg = league_mod.parse(
-                sleeper.get_json(f"{client_mod.V1}/league/{LEAGUE_ID}"))
+                sleeper.get_json(f"{client_mod.V1}/league/{league_id}"))
             profiles = players_cache.get(
                 lambda: players_mod.parse(
                     sleeper.get_json(f"{client_mod.V1}/players/nfl")))
@@ -87,8 +114,8 @@ def create_app() -> FastAPI:
                         "&position[]=WR&position[]=TE"),
                     lg.season))
             state = draft_mod.parse(
-                sleeper.get_json(f"{client_mod.V1}/draft/{DRAFT_ID}"),
-                sleeper.get_json(f"{client_mod.V1}/draft/{DRAFT_ID}/picks"))
+                sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}"),
+                sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}/picks"))
         finally:
             sleeper.close()
 
@@ -100,14 +127,23 @@ def create_app() -> FastAPI:
         if lg.budget is None:
             lg = replace(lg, budget=state.budget)
 
+        # Sleeper's projections endpoint does not actually honor the
+        # position[] query filter server-side (confirmed against the live
+        # API) -- it returns every position it has projections for,
+        # including FB/CB/K/DEF, none of which this league rosters.
+        # `vor.compute` now structurally excludes any position without a
+        # replacement level derived from `league.roster_positions` (see
+        # ffdo.engine.vor), so no position allowlist is needed here; scoring
+        # a few extra positions that get excluded downstream is cheap.
         points = {pid: scoring.score_stats(p.stats, lg.scoring_settings)
-                  for pid, p in proj.items()
-                  if pid in profiles and profiles[pid].position in SKILL_POSITIONS}
+                  for pid, p in proj.items() if pid in profiles}
+        points = _active_only(points, profiles)
         valued = vor.assign_tiers(vor.compute(points, profiles, lg))
 
         if state.draft_type == "auction":
             baseline = auction.baseline_prices(valued, lg)
-            return board_mod.build_auction_board(lg, state, valued, baseline)
+            return board_mod.build_auction_board(
+                lg, state, valued, baseline, roster_id=_roster_id())
 
         from ffdo.engine import market
         available = {pid for pid in valued if pid not in state.drafted_player_ids()}

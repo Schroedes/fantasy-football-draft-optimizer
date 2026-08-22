@@ -402,7 +402,7 @@ board by accident.
 
 Any adjustment that fails to beat baseline is reported as failed in this document.
 
-### 8.1 Backtest results (Task 14, run 2026-08-22; age rows corrected 2026-08-22)
+### 8.1 Backtest results (Task 14, run 2026-08-22; age rows corrected 2026-08-22; age rows re-measured 2026-08-22 after the rescore fix below)
 
 `ffdo.backtest.harness.evaluate_season` was run for 2023, 2024, 2025 across the
 weight combinations the harness's gate script specifies. `improvement` is
@@ -423,13 +423,44 @@ row is unaffected: its code path never touches the age curve.
 |---|---|---|---|---|---|
 | 0.0 | 0.0 | 0.0000 | 0.0000 | 0.0000 | +0.0000 |
 | 0.0 | 1.0 | +0.0036 | +0.0036 | +0.0017 | +0.0030 |
-| 1.0 | 0.0 | −0.0402 | −0.0415 | −0.0289 | −0.0369 |
-| 1.0 | 1.0 | −0.0506 | −0.0359 | −0.0271 | −0.0379 |
+| 1.0 | 0.0 | −0.0403 | −0.0413 | −0.0294 | −0.0370 |
+| 1.0 | 1.0 | −0.0497 | −0.0351 | −0.0272 | −0.0373 |
 
 (Pre-fix age numbers, for the record: 1.0/0.0 → −0.0182 / −0.0383 / −0.0263,
 mean −0.0276; 1.0/1.0 → −0.0191 / −0.0400 / −0.0266, mean −0.0286. The
 conclusion — age fails outright — was already correct before the fix; the fix
 makes the *measurement* correct too, and the failure is now more decisive.)
+
+**Second correction (final review fix wave, 2026-08-22):** `fit_age_curve` was
+reading Sleeper's precomputed `pts_half_ppr` field directly out of each
+historical season's stats and differencing it across consecutive seasons to
+build the training curve — exactly the input the project's core rescore rule
+(§6.1) forbids, and the specific case that rule is most sensitive to, since a
+definitional change in that field (verified elsewhere to differ between 2021
+and 2023) directly corrupts a *difference* computation. `fit_age_curve` now
+takes an explicit `weights` mapping and recomputes each season's points via
+`ffdo.engine.scoring.score_stats` from raw component stats, exactly like
+every other value in this project. `harness.py`'s call site now passes
+`ffdo.domain.constants.STANDARD_HALF_PPR` — a fixed, comparable scoring
+standard, not any one league's custom settings, since the curve must be
+comparable across historical seasons/leagues. Re-running the gate script
+after this fix:
+
+| age_weight | dur_weight | 2023 | 2024 | 2025 | mean improvement |
+|---|---|---|---|---|---|
+| 1.0 | 0.0 | −0.0403 | −0.0413 | −0.0294 | −0.0370 |
+| 1.0 | 1.0 | −0.0497 | −0.0351 | −0.0272 | −0.0373 |
+
+The corrected numbers are within noise of the train/apply-mismatch-fix numbers
+above (mean −0.0369 → −0.0370) — the prior measurement happened not to be
+meaningfully distorted by the tainted input in this particular fixture set,
+but it was still reading forbidden data, and the fix closes that gap on
+principle regardless of how much it moved the number this time. **The
+verdict is unchanged: age fails outright, negative in all three seasons, both
+before and after this fix. `AGE_WEIGHT` stays at 0.0** — this fix corrects the
+measurement's provenance, not the promotion decision, per the standing rule
+that only a manual, documented Step 6 decision may promote a weight.
+Durability's row is unaffected: its code path never calls `fit_age_curve`.
 
 Baseline ρ itself fell each year under the harness's actual filter (0.6776 /
 0.4535 / 0.2267) — a real, verified effect of Sleeper's ADP data covering an
@@ -439,7 +470,8 @@ trace. `improvement` (the promotion signal) is unaffected by this, since it
 compares model to baseline within the same season/filter.
 
 **Age.** Fails outright: negative improvement in all three seasons at
-age_weight=1.0 (mean −0.0369, post train/apply-mismatch fix). **Stays at 0.0.**
+age_weight=1.0 (mean −0.0370, post train/apply-mismatch fix and post
+rescore fix). **Stays at 0.0.**
 
 **Durability.** At durability_weight=1.0, improvement is positive in all
 three seasons (+0.0036, +0.0036, +0.0017), which literally satisfies "mean

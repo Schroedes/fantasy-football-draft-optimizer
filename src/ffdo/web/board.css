@@ -121,7 +121,7 @@ body {
 .nom-name-block { display: flex; flex-direction: column; gap: 4px; }
 .nom-name { font-size: 22px; font-weight: 700; line-height: 1.15; }
 .nom-meta { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
-.nom-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.nom-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); gap: 8px; }
 .nom-stat {
   display: flex; flex-direction: column; gap: 3px;
   background: var(--surface-2); border-radius: 7px; padding: 9px 10px;

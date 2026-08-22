@@ -48,6 +48,22 @@ def test_tiers_break_on_large_gaps():
     assert valued["d"].tier > valued["a"].tier
 
 
+def test_players_at_positions_absent_from_the_roster_are_excluded():
+    """A position with no dedicated slot and no FLEX-eligibility (e.g. a
+    kicker in a league that starts no K) has no replacement level to compare
+    against. Previously `vor.compute` defaulted the missing level to 0.0,
+    which turned the player's raw point total into his VOR -- making an
+    unrostered position look like a windfall bargain instead of excluding
+    it. This is the root cause `app.py`'s SKILL_POSITIONS filter patched at
+    one call site; the fix belongs here so it holds regardless of caller.
+    """
+    points = {"rb0": 200.0, "rb1": 190.0, "rb2": 180.0, "k0": 150.0}
+    profiles = _profiles({"rb0": "RB", "rb1": "RB", "rb2": "RB", "k0": "K"})
+    valued = vor.compute(points, profiles, _league(n=1))
+    assert "k0" not in valued
+    assert "rb0" in valued
+
+
 def test_tiers_are_assigned_within_position_not_across():
     points = {"rb0": 300.0, "rb1": 299.0, "wr0": 100.0, "wr1": 99.0}
     profiles = _profiles({"rb0": "RB", "rb1": "RB", "wr0": "WR", "wr1": "WR"})

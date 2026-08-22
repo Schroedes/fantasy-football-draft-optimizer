@@ -1,6 +1,6 @@
 import pytest
 
-from ffdo.domain.constants import SEASON_LENGTH
+from ffdo.domain.constants import SEASON_LENGTH, STANDARD_HALF_PPR
 from ffdo.domain.models import PlayerProfile, SeasonStatLine
 from ffdo.engine import adjustments
 
@@ -70,13 +70,37 @@ def test_fit_age_curve_computes_training_age_from_the_fixed_profile_snapshot_anc
     was 25 during the 2021 season (30 - (2026 - 2021)), so a training pair
     spanning 2021->2022 must be keyed at age 25, not some other value.
     """
+    # rush_yd=1600/1920 under STANDARD_HALF_PPR's rush_yd=0.1 weight is
+    # 160.0/192.0 points -- the same totals the old pts_half_ppr-keyed
+    # fixture used, chosen so this test's numbers are unaffected by the
+    # rescore fix, only its inputs (component stats, not a precomputed
+    # Sleeper field that is not stable across seasons -- see Fix 6).
     history = {"p": [
-        _line(2021, 16, pts_half_ppr=160.0),   # 10 ppg, age 25 in 2021
-        _line(2022, 16, pts_half_ppr=192.0),   # 12 ppg, age 26 in 2022
+        _line(2021, 16, rush_yd=1600.0),   # 160 pts / 10 ppg, age 25 in 2021
+        _line(2022, 16, rush_yd=1920.0),   # 192 pts / 12 ppg, age 26 in 2022
     ]}
     profiles = {"p": _profile(age=30)}
-    curve = adjustments.fit_age_curve(history, profiles)
+    curve = adjustments.fit_age_curve(history, profiles, STANDARD_HALF_PPR)
     assert curve["RB"] == {25: pytest.approx(2.0)}
+
+
+def test_fit_age_curve_does_not_read_sleepers_precomputed_points_field():
+    """Regression for Fix 6: Sleeper's `pts_half_ppr` field is not stable
+    across seasons (its definition changed between 2021 and 2023), so
+    differencing it across consecutive seasons -- exactly what this
+    function does -- silently corrupts the age curve. A `pts_half_ppr` key
+    present in the stats must be ignored; only component stats scored via
+    `weights` may drive the computed delta.
+    """
+    history = {"p": [
+        _line(2021, 16, pts_half_ppr=99999.0, rush_yd=1000.0),
+        _line(2022, 16, pts_half_ppr=1.0, rush_yd=1000.0),
+    ]}
+    profiles = {"p": _profile(age=30)}
+    curve = adjustments.fit_age_curve(history, profiles, STANDARD_HALF_PPR)
+    # Same rush_yd both seasons under a fixed weight table -> zero delta,
+    # despite the wildly different (and ignored) pts_half_ppr values.
+    assert curve["RB"] == {25: pytest.approx(0.0)}
 
 
 def test_build_looks_up_the_age_curve_at_the_season_being_evaluated():

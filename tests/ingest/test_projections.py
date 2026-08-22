@@ -42,6 +42,49 @@ def test_contaminated_projections_readable_when_explicitly_allowed():
     assert "pts_half_ppr" not in proj[wiped_pid].stats
 
 
+def test_rejects_an_unknown_season_rather_than_silently_skipping_the_guard():
+    """`SEASON_START.get(season)` used to return None for an unmapped season,
+    which short-circuited the guard condition (`kickoff and ...`) to False --
+    silently passing untrusted data through instead of refusing. The guard's
+    job is to refuse when it cannot prove the data is clean, not to trust by
+    default on an unexpected input."""
+    raw = [{"player_id": "1", "stats": {"pts_half_ppr": 10.0},
+            "last_modified": 1_700_000_000_000}]
+    with pytest.raises(projections.ContaminatedProjectionError):
+        projections.parse(raw, 2099)
+
+
+def test_unknown_season_is_readable_when_explicitly_allowed():
+    raw = [{"player_id": "1", "stats": {"pts_half_ppr": 10.0},
+            "last_modified": 1_700_000_000_000}]
+    proj, _ = projections.parse(raw, 2099, allow_contaminated=True)
+    assert "1" in proj
+
+
+def test_rejects_data_with_no_last_modified_timestamp_on_any_row():
+    """If no row carries a last_modified timestamp, `_last_modified` returns
+    None, which also short-circuited the old guard condition to False. There
+    is no way to verify the data predates kickoff, so the safe default is to
+    refuse, not to assume it's clean."""
+    raw = [{"player_id": "1", "stats": {"pts_half_ppr": 10.0}}]
+    with pytest.raises(projections.ContaminatedProjectionError):
+        projections.parse(raw, 2026)
+
+
+def test_missing_last_modified_is_readable_when_explicitly_allowed():
+    raw = [{"player_id": "1", "stats": {"pts_half_ppr": 10.0}}]
+    proj, _ = projections.parse(raw, 2026, allow_contaminated=True)
+    assert "1" in proj
+
+
+def test_empty_input_does_not_raise_for_a_known_season():
+    """No rows at all is not the same failure mode as 'rows exist but none
+    carry a timestamp' -- there is nothing to contaminate."""
+    proj, adp = projections.parse([], 2026)
+    assert proj == {}
+    assert adp == {}
+
+
 def test_adp_is_preserved_even_for_contaminated_seasons():
     """ADP is fixed at draft time and is the ONLY clean historical signal."""
     _, adp = projections.parse(

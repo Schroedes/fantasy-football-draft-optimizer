@@ -43,3 +43,20 @@ def test_snake_board_has_no_dollar_fields():
     out = board.build_snake_board(_league(), _state(), _valued(),
                                   {pid: 0.5 for pid in _valued()}, {})
     assert "baseline" not in out["players"][0]
+
+
+def test_players_absent_from_survival_default_to_certain_survival():
+    """`simulate_survival` only returns entries for players who carry ADP.
+    A player missing from that mapping has no ADP -- not a 0% chance of
+    surviving to the next pick. Defaulting to 0.0 rendered "definitely
+    gone" for players who are actually certain to still be there, which is
+    backwards; the honest default for "no signal" is 1.0.
+    """
+    valued = _valued()
+    pid = next(iter(valued))
+    survival_missing_one = {p: 0.5 for p in valued if p != pid}
+
+    out = board.build_snake_board(_league(), _state(), valued,
+                                  survival_missing_one, {})
+    row = next(r for r in out["players"] if r["player_id"] == pid)
+    assert row["survival"] == 1.0

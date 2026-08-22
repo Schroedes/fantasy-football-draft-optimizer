@@ -11,7 +11,7 @@ from collections.abc import Sequence
 
 import numpy as np
 
-from ffdo.domain.constants import SEASON_LENGTH
+from ffdo.domain.constants import SEASON_LENGTH, STANDARD_HALF_PPR
 from ffdo.engine import adjustments as adj
 from ffdo.ingest import players as players_mod
 from ffdo.ingest import projections as proj_mod
@@ -79,7 +79,8 @@ def evaluate_season(
 
     subset = {pid: profiles[pid] for pid in ids}
     curve = adj.fit_age_curve(
-        {pid: history.get(pid, []) for pid in ids}, subset) if age_weight else None
+        {pid: history.get(pid, []) for pid in ids}, subset,
+        STANDARD_HALF_PPR) if age_weight else None
 
     built = adj.build(
         subset, {pid: history.get(pid, []) for pid in ids}, points,
