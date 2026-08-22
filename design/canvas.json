@@ -1,0 +1,11 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 50, "w": 1440, "h": 900 },
+    { "file": "Auction.dc.html", "x": 1500, "y": 0, "w": 1600, "h": 1000 },
+    { "file": "Snake.dc.html", "x": 3160, "y": 0, "w": 1600, "h": 1000 }
+  ],
+  "annotations": [
+    { "id": "flow-note", "x": 0, "y": -70, "w": 340, "text": "Setup  ->  Auction board (primary)  ->  Snake board (secondary path)" }
+  ],
+  "launch": { "view": "canvas" }
+}
