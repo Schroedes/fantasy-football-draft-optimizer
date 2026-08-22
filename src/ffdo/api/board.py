@@ -32,6 +32,9 @@ def build_auction_board(
     your_slots_left = max(0, league.roster_size - your_slots_filled)
     your_dollars_left = league.budget - your_spent
 
+    by_position = auction.positional_budget(
+        valued, baseline, factor, state, league, roster_id, your_dollars_left)
+
     total_slots = league.num_teams * league.roster_size
     slots_remaining_room = max(1, total_slots - len(drafted))
     league_dollars_per_slot = (
@@ -75,6 +78,7 @@ def build_auction_board(
             "your_dollars_left": your_dollars_left,
             "your_dollars_per_slot": round(your_dollars_per_slot, 1),
             "league_dollars_per_slot": round(league_dollars_per_slot, 1),
+            "by_position": by_position,
         },
         "picks_made": len(state.picks),
         "players": rows,

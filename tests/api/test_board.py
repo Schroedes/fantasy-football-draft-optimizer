@@ -1,3 +1,5 @@
+import pytest
+
 from ffdo.api import board
 from ffdo.domain.models import (
     DraftPick, DraftState, LeagueProfile, PlayerProfile, ValuedPlayer,
@@ -124,3 +126,25 @@ def test_healthz_returns_ok():
     from ffdo.api.app import create_app
     client = TestClient(create_app())
     assert client.get("/healthz").json() == {"status": "ok"}
+
+
+def test_board_includes_positional_budget_recommendation():
+    league = LeagueProfile(league_id="x", season=2025, num_teams=12,
+                           roster_positions=("QB", "RB", "RB", "WR", "WR", "TE",
+                                            "FLEX", "BN", "BN"),
+                           scoring_settings={}, budget=200)
+    state = draft.parse({"draft_id": "d", "type": "auction", "status": "drafting",
+                         "settings": {"teams": 12, "rounds": 9, "budget": 200}}, [])
+    ids = ["p0", "p1", "p2"]
+    valued = _valued(ids)
+    baseline = {pid: 10.0 for pid in ids}
+
+    out = board.build_auction_board(league, state, valued, baseline, roster_id=None)
+
+    by_pos = out["budget"]["by_position"]
+    assert set(by_pos) == {"QB", "RB", "WR", "TE", "flex_bench_reserve", "flex_bench_slots_open"}
+    assert by_pos["RB"]["slots_open"] == 2
+    total = (by_pos["QB"]["recommended"] + by_pos["RB"]["recommended"]
+             + by_pos["WR"]["recommended"] + by_pos["TE"]["recommended"]
+             + by_pos["flex_bench_reserve"])
+    assert total == pytest.approx(out["budget"]["your_dollars_left"], abs=0.5)
