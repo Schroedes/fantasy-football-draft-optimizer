@@ -1,6 +1,6 @@
 import pytest
 
-from ffdo.domain.models import LeagueProfile, PlayerProfile, ValuedPlayer
+from ffdo.domain.models import DraftPick, DraftState, LeagueProfile, PlayerProfile, ValuedPlayer
 from ffdo.engine import auction
 from ffdo.ingest import draft, snapshot
 
@@ -16,6 +16,25 @@ def _valued(vors):
     for pid, v in vors.items():
         prof = PlayerProfile(player_id=pid, first_name="P", last_name=pid,
                              position="RB", team="X", age=25, years_exp=3,
+                             injury_status=None, active=True)
+        out[pid] = ValuedPlayer(profile=prof, projected_points=0.0,
+                                adjusted_points=0.0, vor=v, tier=1,
+                                adjustments={})
+    return out
+
+
+def _league_multi(roster_positions, budget=200, n=12):
+    return LeagueProfile(league_id="x", season=2026, num_teams=n,
+                         roster_positions=roster_positions,
+                         scoring_settings={}, budget=budget)
+
+
+def _valued_positions(position_vors):
+    """position_vors: dict[pid] -> (position, vor)."""
+    out = {}
+    for pid, (pos, v) in position_vors.items():
+        prof = PlayerProfile(player_id=pid, first_name="P", last_name=pid,
+                             position=pos, team="X", age=25, years_exp=3,
                              injury_status=None, active=True)
         out[pid] = ValuedPlayer(profile=prof, projected_points=0.0,
                                 adjusted_points=0.0, vor=v, tier=1,
@@ -82,3 +101,103 @@ def test_replaying_a_real_auction_keeps_inflation_sane():
         partial = draft.parse(hist["meta"], hist["picks"][:cut])
         factor = auction.inflation_factor(baseline, partial, league)
         assert 0.0 < factor < 20.0, f"implausible inflation {factor} at pick {cut}"
+
+
+def test_positional_budget_need_and_slot_invariant():
+    league = _league_multi(("QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "BN", "BN"))
+    valued = _valued_positions({
+        "qb1": ("QB", 50.0), "qb2": ("QB", 40.0),
+        "rb1": ("RB", 80.0), "rb2": ("RB", 70.0), "rb3": ("RB", 60.0),
+        "wr1": ("WR", 90.0), "wr2": ("WR", 85.0), "wr3": ("WR", 75.0),
+        "te1": ("TE", 30.0), "te2": ("TE", 20.0),
+    })
+    baseline = {pid: max(1.0, vp.vor) for pid, vp in valued.items()}
+    state = draft.parse({"draft_id": "d", "type": "auction", "status": "drafting",
+                         "settings": {"teams": 12, "rounds": 9, "budget": 200}}, [])
+
+    result = auction.positional_budget(
+        valued, baseline, 1.0, state, league, roster_id=None,
+        your_dollars_left=200.0)
+
+    assert result["QB"]["slots_open"] == 1
+    assert result["RB"]["slots_open"] == 2
+    assert result["WR"]["slots_open"] == 2
+    assert result["TE"]["slots_open"] == 1
+    assert result["flex_bench_slots_open"] == 3
+    total_slots_accounted = (
+        result["QB"]["slots_open"] + result["RB"]["slots_open"]
+        + result["WR"]["slots_open"] + result["TE"]["slots_open"]
+        + result["flex_bench_slots_open"])
+    assert total_slots_accounted == league.roster_size
+
+
+def test_positional_budget_scales_to_your_dollars_left():
+    league = _league_multi(("QB", "RB", "WR", "TE", "BN"))
+    valued = _valued_positions({
+        "qb1": ("QB", 50.0), "rb1": ("RB", 80.0),
+        "wr1": ("WR", 90.0), "te1": ("TE", 30.0),
+    })
+    baseline = {pid: max(1.0, vp.vor) for pid, vp in valued.items()}
+    state = draft.parse({"draft_id": "d", "type": "auction", "status": "drafting",
+                         "settings": {"teams": 12, "rounds": 5, "budget": 200}}, [])
+
+    result = auction.positional_budget(
+        valued, baseline, 1.0, state, league, roster_id=None,
+        your_dollars_left=90.0)
+
+    total = (result["QB"]["recommended"] + result["RB"]["recommended"]
+             + result["WR"]["recommended"] + result["TE"]["recommended"]
+             + result["flex_bench_reserve"])
+    # Five independently-rounded (1-decimal) values can compound to ~0.1-0.25
+    # off the true total even though the underlying scale is exact -- widen
+    # accordingly rather than chase a razor-tight bound.
+    assert total == pytest.approx(90.0, abs=0.5)
+
+
+def test_extra_drafted_players_reduce_flex_bench_not_dedicated_need():
+    """A 2nd RB drafted beyond the single dedicated RB slot must have used a
+    FLEX/bench slot, not created negative dedicated need."""
+    league = _league_multi(("RB", "FLEX", "BN"))
+    picks = (
+        DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1, picked_by="u1",
+                 player_id="rb_drafted_1", amount=10),
+        DraftPick(pick_no=2, round=1, draft_slot=2, roster_id=1, picked_by="u1",
+                 player_id="rb_drafted_2", amount=10),
+    )
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=3, budget=200, picks=picks)
+    valued = _valued_positions({
+        "rb_drafted_1": ("RB", 50.0), "rb_drafted_2": ("RB", 40.0),
+        "rb_avail": ("RB", 30.0),
+    })
+    baseline = {pid: max(1.0, vp.vor) for pid, vp in valued.items()}
+
+    result = auction.positional_budget(
+        valued, baseline, 1.0, state, league, roster_id=1,
+        your_dollars_left=180.0)
+
+    assert result["RB"]["slots_open"] == 0
+    assert result["flex_bench_slots_open"] == 1
+
+
+def test_none_roster_id_falls_back_to_fresh_roster():
+    """FFDO_ROSTER_ID unset must show 'as if starting fresh' need, ignoring
+    what anyone (including roster 1) has actually drafted -- same fallback
+    board.py already applies to max_bid/spent/slots_filled."""
+    league = _league_multi(("RB", "BN"))
+    picks = (
+        DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1, picked_by="u1",
+                 player_id="rb_drafted", amount=10),
+    )
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=2, budget=200, picks=picks)
+    valued = _valued_positions({
+        "rb_drafted": ("RB", 50.0), "rb_avail": ("RB", 30.0),
+    })
+    baseline = {pid: max(1.0, vp.vor) for pid, vp in valued.items()}
+
+    result = auction.positional_budget(
+        valued, baseline, 1.0, state, league, roster_id=None,
+        your_dollars_left=200.0)
+
+    assert result["RB"]["slots_open"] == 1
