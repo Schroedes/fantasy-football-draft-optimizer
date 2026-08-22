@@ -97,12 +97,23 @@ Evidence, 2023:
 
 | Player | Stored "projection" | Preseason ADP | Actual | Games |
 |---|---|---|---|---|
-| Nick Chubb | **0.0** | 10.6 | 21.1 | 2 |
-| J.K. Dobbins | **0.0** | 51.3 | 10.7 | 1 |
+| Nick Chubb | **absent** | 10.6 | 21.1 | 2 |
+| J.K. Dobbins | **absent** | 51.3 | 10.7 | 1 |
 
-Chubb was drafted 10th overall. A preseason projection of `0.0` is impossible;
-both players were zeroed after season-ending injuries. Corroborating rank
-correlation against actual points:
+Both players' rows retain their `adp_*` keys and `gp`, and carry **no
+`pts_half_ppr`, `pts_ppr`, or `pts_std` key at all** — the projection was wiped
+after their season-ending injuries, not merely revised. Across the whole 2023
+file, 689 of 3,309 rows have a `pts_half_ppr` key and **zero** rows have it
+equal to `0.0`. Chubb was drafted 10th overall; a player taken that early having
+no stored projection, while his ADP survives intact, is only explicable
+post-hoc.
+
+(An earlier revision of this document reported these values as `0.0`. That was
+an artifact of the probe script defaulting absent keys to zero, not of Sleeper's
+data. The conclusion is unchanged and the mechanism is starker than first
+described.)
+
+Corroborating rank correlation against actual points:
 
 | Season | Stored projection ρ | ADP ρ |
 |---|---|---|
