@@ -402,6 +402,61 @@ board by accident.
 
 Any adjustment that fails to beat baseline is reported as failed in this document.
 
+### 8.1 Backtest results (Task 14, run 2026-08-22)
+
+`ffdo.backtest.harness.evaluate_season` was run for 2023, 2024, 2025 across the
+weight combinations the harness's gate script specifies. `improvement` is
+`model_rho - baseline_rho` (Spearman ρ against actual season points).
+
+| age_weight | dur_weight | 2023 | 2024 | 2025 | mean improvement |
+|---|---|---|---|---|---|
+| 0.0 | 0.0 | 0.0000 | 0.0000 | 0.0000 | +0.0000 |
+| 0.0 | 1.0 | +0.0036 | +0.0036 | +0.0017 | +0.0030 |
+| 1.0 | 0.0 | −0.0182 | −0.0383 | −0.0263 | −0.0276 |
+| 1.0 | 1.0 | −0.0191 | −0.0400 | −0.0266 | −0.0286 |
+
+Baseline ρ itself fell each year under the harness's actual filter (0.6776 /
+0.4535 / 0.2267) — a real, verified effect of Sleeper's ADP data covering an
+increasingly deep pool of marginal players over calendar time, not a defect;
+see the comment in `tests/backtest/test_harness.py` for the full root-cause
+trace. `improvement` (the promotion signal) is unaffected by this, since it
+compares model to baseline within the same season/filter.
+
+**Age.** Fails outright: negative improvement in all three seasons at
+age_weight=1.0. **Stays at 0.0.**
+
+**Durability.** At durability_weight=1.0, improvement is positive in all
+three seasons (+0.0036, +0.0036, +0.0017), which literally satisfies "mean
+improvement positive across all three seasons." A robustness sweep was run
+before promoting on that basis:
+
+| dur_weight | 2023 | 2024 | 2025 | mean |
+|---|---|---|---|---|
+| 0.5 | +0.0046 | +0.0051 | +0.0044 | +0.0047 |
+| 1.0 | +0.0036 | +0.0036 | +0.0017 | +0.0030 |
+| 2.0 | −0.0464 | −0.0385 | −0.0309 | −0.0386 |
+| 5.0 | −0.3044 | −0.1752 | −0.0687 | −0.1828 |
+
+The effect is not monotonic (0.5 outperforms 1.0) and flips sign between 1.0
+and 2.0 — inconsistent with a genuine, generalizable dose-response signal,
+and more consistent with an artifact of the backtest harness's synthetic
+pseudo-points scale (ADP rank mapped onto a `linspace(300, 20)` proxy, not
+real projections) and hardcoded `replacement_ppg`. The magnitude at the
+literally-qualifying weight (+0.003 mean ρ) is also negligible relative to
+baseline ρ (~0.45).
+
+Per §8's design intent — "no unvalidated adjustment can reach the board by
+accident" — and per Task 14's own framing that the promotion clause states a
+necessary, not sufficient, condition ("a weight *may* only be promoted... if
+[positive in all three seasons]") with the final call left as "a manual,
+documented decision the controller reviews," **DURABILITY_WEIGHT stays at
+0.0**: the qualifying result is real but too small and too fragile to
+"earned its place," per §8's own standard. **Both `AGE_WEIGHT` and
+`DURABILITY_WEIGHT` ship at 0.0.** The model remains pure market-anchored
+VOR, exactly as it does when validation finds nothing to promote — a
+successful, complete outcome per this task's own instructions, not a
+shortfall.
+
 ## 9. Auction engine
 
 Same value model, different question. Only the layer above VOR changes.
