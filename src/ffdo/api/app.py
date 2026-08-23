@@ -91,9 +91,11 @@ def create_app() -> FastAPI:
     from ffdo.ingest import league as league_mod
     from ffdo.ingest import players as players_mod
     from ffdo.ingest import projections as proj_mod
+    from ffdo.ingest import teams as teams_mod
 
     players_cache = _TTLCache(ttl_seconds=24 * 3600)
     projections_cache = _TTLCache(ttl_seconds=3600)
+    teams_cache = _TTLCache(ttl_seconds=24 * 3600)
 
     @app.get("/api/board")
     def get_board() -> dict:
@@ -116,6 +118,10 @@ def create_app() -> FastAPI:
             state = draft_mod.parse(
                 sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}"),
                 sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}/picks"))
+            teams = teams_cache.get(
+                lambda: teams_mod.parse(
+                    sleeper.get_json(f"{client_mod.V1}/league/{league_id}/rosters"),
+                    sleeper.get_json(f"{client_mod.V1}/league/{league_id}/users")))
         finally:
             sleeper.close()
 
@@ -143,7 +149,7 @@ def create_app() -> FastAPI:
         if state.draft_type == "auction":
             baseline = auction.baseline_prices(valued, lg)
             return board_mod.build_auction_board(
-                lg, state, valued, baseline, roster_id=_roster_id())
+                lg, state, valued, baseline, roster_id=_roster_id(), teams=teams)
 
         from ffdo.engine import market
         available = {pid for pid in valued if pid not in state.drafted_player_ids()}
@@ -152,7 +158,8 @@ def create_app() -> FastAPI:
         picks_until = lg.num_teams  # conservative: one full round
         survival = market.simulate_survival(adp_means, available, picks_until)
         cow = market.cost_of_waiting(valued, survival, available)
-        return board_mod.build_snake_board(lg, state, valued, survival, cow)
+        return board_mod.build_snake_board(
+            lg, state, valued, survival, cow, roster_id=_roster_id(), teams=teams)
 
     # Static mount MUST be registered last: StaticFiles("/") matches any
     # path under it, so routes declared after this point would be shadowed.
