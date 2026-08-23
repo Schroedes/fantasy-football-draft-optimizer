@@ -74,6 +74,7 @@ function render() {
   }
 
   renderCow();
+  renderPositionBudget();
   renderMoneyHeader();
   renderTable();
   renderNominated();
@@ -132,6 +133,40 @@ function renderCow() {
       <span class="cow-tag" style="color:${tag ? color : "transparent"}">${tag}</span>
     </div>`;
   }).join("");
+}
+
+function renderPositionBudget() {
+  const el = document.getElementById("position-budget");
+  const d = state.data;
+  const byPos = d.budget && d.budget.by_position;
+  if (d.format === "snake" || !byPos) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+
+  const positions = ["QB", "RB", "WR", "TE"];
+  const maxAmount = Math.max(1, byPos.flex_bench_reserve,
+    ...positions.map(pos => byPos[pos].recommended));
+
+  const posRows = positions.map(pos => {
+    const entry = byPos[pos];
+    const posColor = `var(--${pos.toLowerCase()}, var(--muted))`;
+    return `<div class="posbudget-row">
+      <span class="posbudget-pos" style="color:${posColor}">${pos}</span>
+      <span class="posbudget-amount">$${entry.recommended}</span>
+      <span class="posbudget-slots">${entry.slots_open} slot${entry.slots_open === 1 ? "" : "s"} open</span>
+      <div class="posbudget-bar-track">
+        <div class="posbudget-bar-fill" style="width:${Math.min(100, (entry.recommended / maxAmount) * 100)}%"></div>
+      </div>
+    </div>`;
+  }).join("");
+
+  document.getElementById("posbudget-rows").innerHTML = posRows + `
+    <div class="posbudget-reserve">
+      <span>Flex/bench reserve</span>
+      <span>$${byPos.flex_bench_reserve} · ${byPos.flex_bench_slots_open} slot${byPos.flex_bench_slots_open === 1 ? "" : "s"} open</span>
+    </div>`;
 }
 
 function renderTable() {
