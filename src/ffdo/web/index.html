@@ -20,11 +20,24 @@
   </header>
 
   <section id="connect-form" class="card">
-    <h1>Connect your league</h1>
-    <label class="field">
-      <span>Sleeper League ID</span>
-      <input id="league-id-input" type="text" placeholder="e.g. 1315881559957458944" autocomplete="off">
-    </label>
+    <div class="format-toggle" id="connect-mode-toggle">
+      <button data-mode="league" class="on">League</button>
+      <button data-mode="mock">Mock Draft</button>
+    </div>
+    <div id="league-fields">
+      <h1>Connect your league</h1>
+      <label class="field">
+        <span>Sleeper League ID</span>
+        <input id="league-id-input" type="text" placeholder="e.g. 1315881559957458944" autocomplete="off">
+      </label>
+    </div>
+    <div id="mock-fields" hidden>
+      <h1>Connect a mock draft</h1>
+      <label class="field">
+        <span>Draft link or ID</span>
+        <input id="draft-id-input" type="text" placeholder="e.g. https://sleeper.app/draft/nfl/1397145756879605760" autocomplete="off">
+      </label>
+    </div>
     <label class="field">
       <span>Sleeper Username</span>
       <input id="username-input" type="text" placeholder="e.g. yourusername" autocomplete="off">
@@ -42,7 +55,10 @@
             <h2 id="league-name">&mdash;</h2>
             <span class="league-id-tag" id="league-id-tag"></span>
           </div>
-          <span id="status-badge" class="status-badge"></span>
+          <div class="badge-row">
+            <span id="mock-badge" class="mock-badge" hidden>MOCK DRAFT</span>
+            <span id="status-badge" class="status-badge"></span>
+          </div>
         </div>
         <div class="stat-grid">
           <div class="stat"><span class="eyebrow">Teams</span><b id="stat-teams">&mdash;</b></div>

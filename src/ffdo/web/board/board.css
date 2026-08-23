@@ -51,6 +51,17 @@ body {
 }
 .brand-name { font-family: var(--font-mono); font-weight: 600; font-size: 15px; letter-spacing: 1.5px; }
 .brand-tag { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+.mock-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: var(--red);
+  background: color-mix(in oklch, var(--red) 16%, transparent);
+  border: 1px solid color-mix(in oklch, var(--red) 40%, transparent);
+  padding: 3px 8px;
+  border-radius: 5px;
+}
 .strip-stats { display: flex; flex: 1; flex-wrap: wrap; }
 .strip-stats > div {
   flex: 1;
