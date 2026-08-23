@@ -94,6 +94,31 @@ roster-rankings feature did for `replacement.py`'s greedy-fill loop —
 behavior-preserving for `SleeperClient`, verified by its existing test suite
 passing unchanged before and after.
 
+### 3.2 API base and required headers — verified live, 2026-08-23
+
+Confirmed against the real league (`leagueId=1882997948`, `seasonId=2026`):
+
+```
+base:    https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}/segments/0/leagues/{league_id}
+views:   ?view=mSettings   (scoring + roster + draft settings)
+         ?view=mTeam       (teams + members)
+         ?view=mDraftDetail (draft picks)
+headers: Cookie: espn_s2=<espn_s2>; SWID=<swid>
+         User-Agent: <a real browser UA string>
+```
+
+Two corrections to what a first pass at this design would naturally assume,
+both confirmed by hitting the real endpoint rather than guessing:
+
+- **`fantasy.espn.com` (the host used throughout most public writeups)
+  302-redirects reads to `https://www.espn.com/fantasy/`** — it no longer
+  serves this API directly. `lm-api-reads.fantasy.espn.com` is the host
+  that actually returns data. `EspnClient` must use this host.
+- **A default/bare HTTP client User-Agent gets the same redirect treatment**
+  even on the correct host — CloudFront in front of ESPN's API appears to
+  filter on it. `EspnClient` must send a realistic browser `User-Agent`
+  string on every request, not just the auth cookies.
+
 ## 4. Player-ID crosswalk
 
 ### 4.1 Primary: `espn_id` already in Sleeper's player feed
@@ -162,6 +187,33 @@ the resulting `DraftState`/`TeamProfile` player list — the same "no
 meaningful VOR, so exclude" precedent `engine.vor.compute` already sets for
 positions the league doesn't roster.
 
+### 4.4 Team defenses need a separate, second crosswalk
+
+Discovered by checking the real player data rather than assuming individual-player
+matching covers everything: your league rosters D/ST (§6), and Sleeper
+represents a team defense as `position: "DEF"` with **the team's own
+abbreviation as its player_id** (e.g. `"HOU"` for the Houston defense), not
+a numbered player. ESPN represents a team defense as its own pro-team ID
+(a small, stable, well-known 1-32 numbering distinct from individual player
+IDs). Neither the `espn_id` lookup (§4.1) nor the name/position fallback
+(§4.2) applies — there's no "espn_id" on a Sleeper defense entry, and
+"Houston" isn't a person's name to normalize-match against.
+
+`ingest/espn/crosswalk.py` needs a second, much smaller static table:
+
+```python
+ESPN_PRO_TEAM_ID_TO_SLEEPER_DEF_ID: dict[int, str] = {
+    # e.g. { ...: "HOU", ...: "SF", ... }  -- 32 entries, one per NFL team
+}
+```
+
+This table only needs to exist if the connected league actually rosters
+D/ST (`ESPN_SLOT_ID_TO_POSITION` includes slot `16` with count > 0, per §6)
+— it's dead weight for a league like the original Sleeper build's, which
+rosters neither K nor DEF. Verify this table's 32 entries against the real
+captured `mTeam`/player data during fixture capture (§9), same discipline
+as every other crosswalk in this design.
+
 ## 5. Scoring-settings crosswalk
 
 ESPN expresses scoring rules as `{statId: points}` pairs; Sleeper stat
@@ -175,22 +227,39 @@ nothing for every rule it doesn't recognize.
 
 ```python
 ESPN_STAT_ID_TO_SLEEPER_KEY: dict[int, str] = {
-    # e.g. { ...: "pass_yd", ...: "pass_td", ...: "rec", ...: "rec_yd", ... }
+    3: "pass_yd", 4: "pass_td", 20: "pass_int",
+    24: "rush_yd", 25: "rush_td",
+    42: "rec_yd", 43: "rec_td", 53: "rec",
+    72: "fum_lost",
+    # ...remaining offensive categories (2pt conversions, etc.) and every
+    # defense/kicking category confirmed during fixture capture (§9)
 }
 ```
 
-**This table's concrete `statId` values are not yet pinned down with
-confidence** — ESPN's stat IDs are stable and reasonably well
-cross-referenced in the fantasy-dev community (the `espn-api` Python
-package's source is a checkable public reference), but asserting specific
-numbers here without a real response to check them against risks shipping
-silently-wrong scoring. **Building and verifying this table against your
-real league's actual `mSettings` response is the first implementation
-task** (§9), before any parser is written against it. The golden test this
-project already runs for Sleeper (§6.1 of the original design: rescoring
-must reproduce a known-good point total) applies here too, once we have a
-real ESPN scoring settings response and a player whose actual fantasy score
-in that league is independently knowable.
+**Verified live, 2026-08-23, against the real league's actual `mSettings`
+response** — `scoringItems` returns 46 `{statId, points, ...}` entries for
+this league. The nine mapped above were confirmed by matching each
+`statId`'s real point value against the league's own known scoring rules
+(e.g. `statId: 53` carries `points: 1.0` and this league's `playerRankType`
+is `"PPR"` — a 1-point-per-reception rule, confirming `53` = receptions).
+This directly de-risks the concern the first draft of this section raised
+(that ESPN's stat IDs might not be reliably known without a real response
+to check against) — they check out exactly as the community references
+suggested.
+
+The remaining ~35 entries are defense and kicking-specific point brackets
+(recognizable by a `pointsOverrides` dict keyed to `"16"`, the D/ST slot —
+ESPN's mechanism for a stat that scores differently for a team defense than
+for an individual, e.g. "0-6 points allowed"). Fully decoding those is
+follow-up work during implementation, not a blocker to starting: this
+league does roster D/ST and K (§6), so full defense/kicking scoring support
+is in scope for this feature, but the table can be built out incrementally
+and the golden test (§9) only needs one or two independently-verifiable
+players to prove the mechanism, not full coverage on day one. The golden
+test this project already runs for Sleeper (§6.1 of the original design:
+rescoring must reproduce a known-good point total) applies here the same
+way, using this league's captured settings and a player whose actual
+fantasy score is independently readable from the ESPN UI.
 
 ## 6. Roster-slot crosswalk
 
@@ -201,9 +270,19 @@ scoring stat IDs, which vary more in how thoroughly they're covered):
 ```python
 ESPN_SLOT_ID_TO_POSITION: dict[int, str] = {
     0: "QB", 2: "RB", 4: "WR", 6: "TE", 23: "FLEX",
-    16: "D/ST", 17: "K", 20: "BN", 21: "IR",
+    16: "DEF", 17: "K", 20: "BN", 21: "IR",
 }
 ```
+
+**Verified live, 2026-08-23** against the real league's `rosterSettings.lineupSlotCounts`
+(`{"0":1, "2":2, "4":2, "6":1, "16":1, "17":1, "20":6, "21":1, "23":1}`,
+every other slot ID at `0`) — this table needed zero corrections. Note
+`16` maps to `"DEF"`, not the more conventional-sounding `"D/ST"`: the
+position string here must match Sleeper's own vocabulary
+(`PlayerProfile.position`), since Sleeper's player pool is still the
+valuation source regardless of provider (§1.1) — Sleeper calls a team
+defense `"DEF"` (verified against `players_nfl.json.gz`), so that's the
+string this table must produce, ESPN's own naming convention notwithstanding.
 
 `ingest/espn/league.py` uses this to build `LeagueProfile.roster_positions`
 as the same string-tuple vocabulary (`("QB","RB","RB","WR","WR","WR","TE",
@@ -211,11 +290,9 @@ as the same string-tuple vocabulary (`("QB","RB","RB","WR","WR","WR","TE",
 understands — standard RB/WR/TE flex maps directly onto the existing
 `"FLEX"` key with zero engine changes. **Known limitation:** an ESPN
 league using an exotic flex type (e.g. a superflex-like "OP" slot) has no
-corresponding `FLEX_ELIGIBILITY` entry and would need one added — out of
-scope unless your league actually uses one. This table, unlike §5's, is
-low-risk enough to ship as-is; still confirm it against your league's real
-`mSettings` response during Task 0 as a matter of the same verify-before-trust
-discipline, not because it's expected to be wrong.
+corresponding `FLEX_ELIGIBILITY` entry and would need one added — not
+applicable to this league (confirmed: none of its non-zero slots are an
+exotic flex type), so out of scope for this pass.
 
 ## 7. Connect flow and auth
 
@@ -252,6 +329,19 @@ same role Sleeper's `find_roster_id(rosters_raw, user_id)` already plays.
 `ingest/espn/connect.py` implements the equivalent lookup; no separate
 "username" input is needed on the connect form for ESPN.
 
+**Verified live, 2026-08-23**: this league's real `mTeam` response resolved
+the provided SWID to member `{BA669A9D-...}`, who owns `teams[].id == 7`
+("Noah's Nifty Team") — matching the `teamId=7` given independently
+alongside the cookies. Two more details worth the lookup being defensive
+about, both observed in this real response: `teams[].name` is populated
+directly in the current API version (the `location`+`nickname` split some
+older writeups describe was `null` for every team here — treat `name` as
+primary, fall back to `f"{location} {nickname}"` only if `name` is absent),
+and `teams[].owners` can be an **empty list** for an unclaimed team slot
+(one team in this real league had no owner) — `find_roster_id`'s ESPN
+equivalent must treat "no match" the same honest way Sleeper's version
+does, not assume every team has an owner.
+
 ### 7.3 Connect form
 
 The existing connect form (`web/index.html` + `web/main.js`) gains a
@@ -272,6 +362,8 @@ isn't built yet")` — the same user-facing error pattern
 `ingest/connect.py` already uses for "league not found" / "username not
 found" / "user not a member." This keeps the MVP boundary honest and visible
 rather than letting an auction league silently hit snake-only code paths.
+This league's real `settings.draftSettings.type` is `"SNAKE"` — confirmed
+in scope for this design without needing the boundary check itself.
 
 ## 8. Live draft polling
 
@@ -307,18 +399,48 @@ An ESPN session has no env-var zero-config fallback the way Sleeper's
 env vars a user would hand-type) — `get_board()` requires a connected
 `Session` when `provider == "espn"`.
 
+### 8.1 `mDraftDetail` pre-populates the entire draft, not just what's happened
+
+**Discovered live, 2026-08-23** — a real, load-bearing difference from
+Sleeper's `/picks` endpoint (which only ever returns picks that actually
+happened): ESPN's `mDraftDetail` returns the *complete* picks array for the
+whole draft — all 150 slots for this 10-team, 15-round league — from the
+moment the league exists, long before the draft starts. An unplayed pick
+looks like:
+
+```json
+{"playerId": -1, "teamId": 4, "roundId": 1, "roundPickNumber": 1,
+ "overallPickNumber": 1, "bidAmount": 0, ...}
+```
+
+`ingest/espn/draft.py` must filter `playerId != -1` to get the picks that
+have actually happened — passing the raw array straight into `DraftState`
+would render this ESPN league as "fully drafted" from pick one, silently
+wrong in the most visible way possible on the board. This is exactly the
+kind of undocumented-behavior quirk fixture-based testing (§9) exists to
+catch before it reaches the live board.
+
 ## 9. Testing
 
 Same convention as the rest of this project: real fixture JSON, captured
 from your actual ESPN league, committed for fixture-based tests; no live
 network in CI. Concretely, in build order:
 
-1. **Fixture capture** (first task, blocks everything else touching real
-   shapes): once your league ID and cookies are available, capture real
-   `mSettings`/`mTeam`/`mDraftDetail` responses, save them the same way
-   `data/snapshots/2026-08-22-draft-day/` holds Sleeper's. This is what
-   pins down §5's scoring crosswalk and confirms §6's slot table against
-   your league's actual settings.
+1. **Fixture capture — done during design, 2026-08-23**, ahead of schedule:
+   `mSettings`, `mTeam`, and `mDraftDetail` were fetched live against the
+   real league (§3.2, §4.4, §5, §6, §7.2, §8.1 above all cite findings from
+   this capture) and saved outside the repo for inspection. **Not yet
+   committed** — `mTeam`'s real response contains your league's other
+   members' real names and ESPN account GUIDs (`members[].id`,
+   `displayName`, `firstName`, `lastName` for all 10 teams, not just
+   yours), which is real personal data about people who never consented to
+   being in a public repo. Before these become committed test fixtures
+   (the first implementation task), they need the same sanitization
+   `snapshot.py`'s Sleeper fixtures never had to think about: replace every
+   other member's name/GUID with a synthetic placeholder, keep your own
+   entry and every player/scoring/slot value as-is (that's the data the
+   tests actually need to exercise). `mDraftDetail`'s picks carry `teamId`
+   references but no names directly, so it needs no equivalent scrubbing.
 2. **Crosswalk unit tests** — `espn_id` hit, fallback match hit (name
    variants: apostrophe, suffix), fallback ambiguous (two candidates, must
    exclude and log), fallback miss (must exclude and log).
@@ -346,3 +468,5 @@ network in CI. Concretely, in build order:
 | `SleeperClient` regression from the `ingest/http.py` extraction | Existing Sleeper test suite is the safety net, run before and after, same discipline as the recent `replacement.py` refactor |
 | ESPN league turns out to be auction | Rejected explicitly at connect time (§7.4), not silently mishandled |
 | Cookie credentials stored in plaintext `data/session.json` | Consistent with this app's existing single-local-user threat model (already gitignored, already true of the Sleeper session's identifying data); not a new class of risk for a local draft-day tool |
+| Captured ESPN fixtures expose real leaguemates' names/GUIDs (§9) | Sanitize (synthetic names/GUIDs for every member except the connecting user) before any ESPN fixture is committed — a real check, not a formality, since these are other people's data, not yours |
+| Team-defense crosswalk (§4.4) unverified beyond this one league | Its 32 entries (ESPN pro-team ID ↔ Sleeper team abbreviation) are league-independent — verify once against any league that rosters D/ST, reuse everywhere |
