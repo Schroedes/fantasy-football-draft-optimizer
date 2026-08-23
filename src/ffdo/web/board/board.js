@@ -4,6 +4,11 @@ let state = {
   search: "",
   sortKey: "vor",
   sortDir: "desc",
+  // True until the user manually clicks a sort header. While true, the
+  // snake board's default sort follows lineup_value instead of raw vor --
+  // the nudge toward whatever position you're actually thin at -- without
+  // permanently overriding a sort the user picked for themselves.
+  sortKeyIsDefault: true,
   nominatedId: null,
   bid: 0,
   expandedRoster: null,
@@ -52,6 +57,10 @@ function render() {
   const d = state.data;
   if (!d) return;
 
+  if (state.sortKeyIsDefault) {
+    state.sortKey = d.format === "snake" ? "lineup_value" : "vor";
+  }
+
   document.getElementById("inflation").textContent =
     d.inflation !== undefined ? `${d.inflation.toFixed(2)}x` : "—";
   document.getElementById("spent").textContent =
@@ -94,6 +103,7 @@ function renderMoneyHeader() {
     th.textContent = "Adj $";
     th.dataset.sort = "adjusted";
   }
+  document.getElementById("th-lineup-value").hidden = d.format !== "snake";
 }
 
 function renderCow() {
@@ -175,9 +185,10 @@ function renderPositionBudget() {
 function renderTable() {
   const rows = visibleRows();
   const tbody = document.querySelector("#board tbody");
+  const isSnake = state.data.format === "snake";
 
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="9" class="empty-msg">No players match the current filters.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${isSnake ? 10 : 9}" class="empty-msg">No players match the current filters.</td></tr>`;
     return;
   }
 
@@ -194,6 +205,7 @@ function renderTable() {
     const money = p.baseline !== undefined
       ? `<td>$${p.baseline}</td><td class="adj-cell">$${p.adjusted}</td>`
       : `<td colspan="2">${survivalCell(p.survival)}</td>`;
+    const lineupValue = isSnake ? `<td class="lineup-value-cell">${p.lineup_value}</td>` : "";
     return `<tr class="${classes}" data-id="${p.player_id}">
       <td></td>
       <td class="name-cell">${escapeHtml(p.name)}</td>
@@ -202,6 +214,7 @@ function renderTable() {
       <td>${p.age ?? ""}</td>
       <td>${p.tier}</td>
       <td>${p.vor}</td>
+      ${lineupValue}
       ${money}
     </tr>`;
   }).join("");
@@ -388,6 +401,7 @@ document.getElementById("search").addEventListener("input", e => {
 
 document.querySelectorAll("#board th[data-sort]").forEach(th =>
   th.addEventListener("click", () => {
+    state.sortKeyIsDefault = false;
     const key = th.dataset.sort;
     if (state.sortKey === key) {
       state.sortDir = state.sortDir === "desc" ? "asc" : "desc";

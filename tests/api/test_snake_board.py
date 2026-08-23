@@ -1,5 +1,7 @@
+import pytest
+
 from ffdo.api import board
-from ffdo.domain.models import LeagueProfile, PlayerProfile, ValuedPlayer
+from ffdo.domain.models import DraftPick, DraftState, LeagueProfile, PlayerProfile, ValuedPlayer
 from ffdo.ingest import draft
 
 
@@ -77,3 +79,44 @@ def test_snake_board_has_no_budget_field():
     out = board.build_snake_board(_league(), _state(), _valued(),
                                   {pid: 0.5 for pid in _valued()}, {})
     assert "budget" not in out
+
+
+def test_snake_board_exposes_lineup_value_favoring_unfilled_positions():
+    """Reproduces the reported bug: a roster already stacked at RB should
+    show near-zero lineup value for another RB, while an unfilled WR slot
+    shows full value for a WR candidate -- even though the RB candidate has
+    higher raw VOR."""
+    league = LeagueProfile(league_id="x", season=2026, num_teams=12,
+                           roster_positions=("RB", "RB", "WR", "BN"),
+                           scoring_settings={}, budget=None)
+    valued = _valued()
+    picks = (
+        DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1, picked_by="u1",
+                 player_id="RB0", amount=None),
+        DraftPick(pick_no=2, round=1, draft_slot=1, roster_id=1, picked_by="u1",
+                 player_id="RB1", amount=None),
+    )
+    state = DraftState(draft_id="d", draft_type="snake", status="drafting",
+                       num_teams=12, rounds=4, budget=None, picks=picks)
+
+    out = board.build_snake_board(league, state, valued,
+                                  {pid: 0.5 for pid in valued}, {},
+                                  roster_id=1)
+
+    rows = {r["player_id"]: r for r in out["players"]}
+    assert rows["WR0"]["lineup_value"] == pytest.approx(rows["WR0"]["vor"])
+    assert rows["RB2"]["lineup_value"] == pytest.approx(0.0)
+
+
+def test_snake_board_lineup_value_falls_back_to_fresh_roster_when_unset():
+    """FFDO_ROSTER_ID unset must show 'as if starting fresh' lineup value,
+    not silently attach to whichever roster_id happens to be None on a
+    commissioner/keeper pick -- same fallback the rest of the board applies
+    elsewhere (auction's positional_budget, max_bid, etc.)."""
+    league = _league()
+    valued = _valued()
+    out = board.build_snake_board(league, _state(), valued,
+                                  {pid: 0.5 for pid in valued}, {},
+                                  roster_id=None)
+    rows = {r["player_id"]: r for r in out["players"]}
+    assert rows["RB0"]["lineup_value"] == pytest.approx(rows["RB0"]["vor"])

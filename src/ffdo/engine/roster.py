@@ -47,3 +47,30 @@ def team_lineup(roster: Mapping[str, ValuedPlayer], league) -> TeamLineup:
     bench_vor = sum(v for pid, v in vor.items() if pid not in taken)
     return TeamLineup(starting_vor=starting_vor, bench_vor=bench_vor,
                       by_position=by_position, starters=frozenset(taken))
+
+
+def marginal_lineup_values(
+    roster: Mapping[str, ValuedPlayer],
+    candidates: Mapping[str, ValuedPlayer],
+    league,
+) -> dict[str, float]:
+    """How much each candidate would add to `roster`'s starting-lineup VOR
+    if drafted next -- the answer to "does this pick actually help my
+    lineup," not just "is this player good."
+
+    Raw VOR alone can't distinguish a player who fills an empty starting
+    slot from one who'd only ride the bench behind three better players at
+    the same position; re-running the same greedy fill with the candidate
+    added does, with no hand-tuned weight, because it's the same mechanism
+    that decides who starts at all.
+    """
+    baseline = team_lineup(roster, league).starting_vor
+    out: dict[str, float] = {}
+    for pid, vp in candidates.items():
+        if pid in roster:
+            out[pid] = 0.0
+            continue
+        trial = dict(roster)
+        trial[pid] = vp
+        out[pid] = team_lineup(trial, league).starting_vor - baseline
+    return out
