@@ -60,3 +60,9 @@ def test_players_absent_from_survival_default_to_certain_survival():
                                   survival_missing_one, {})
     row = next(r for r in out["players"] if r["player_id"] == pid)
     assert row["survival"] == 1.0
+
+
+def test_snake_board_has_no_budget_field():
+    out = board.build_snake_board(_league(), _state(), _valued(),
+                                  {pid: 0.5 for pid in _valued()}, {})
+    assert "budget" not in out
