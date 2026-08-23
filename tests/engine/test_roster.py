@@ -42,15 +42,26 @@ def test_by_position_always_sums_to_starting_vor():
 
 
 def test_flex_slot_is_filled_by_vor_not_raw_points():
-    """A player with the fewest points can still have the highest VOR if
-    their position's replacement level is much lower -- FLEX must compare
-    VOR, not points, or it seats the wrong player."""
+    """A player with more raw points can still have lower VOR if their
+    position's replacement level is much higher -- FLEX must compare VOR,
+    not points, or it seats the wrong player. Points and VOR are made to
+    diverge here specifically so a points-based implementation and a
+    VOR-based one produce different, observable outcomes."""
     league = _league(["RB", "WR", "FLEX", "BN"])
+
+    def _player(pid, pos, points, vor):
+        prof = PlayerProfile(player_id=pid, first_name=pos, last_name=pid,
+                             position=pos, team="X", age=25, years_exp=3,
+                             injury_status=None, active=True)
+        return ValuedPlayer(profile=prof, projected_points=points,
+                            adjusted_points=points, vor=vor, tier=1,
+                            adjustments={})
+
     team = {
-        "rb1": _vp("rb1", "RB", 30.0),   # dedicated RB slot
-        "wr1": _vp("wr1", "WR", 25.0),   # dedicated WR slot
-        "rb2": _vp("rb2", "RB", 22.0),   # higher VOR, should win FLEX
-        "wr2": _vp("wr2", "WR", 18.0),   # lower VOR, should be benched
+        "rb1": _player("rb1", "RB", points=100.0, vor=30.0),  # dedicated RB slot
+        "wr1": _player("wr1", "WR", points=90.0, vor=25.0),   # dedicated WR slot
+        "rb2": _player("rb2", "RB", points=10.0, vor=9.0),    # low points, higher VOR -- should win FLEX
+        "wr2": _player("wr2", "WR", points=50.0, vor=5.0),    # high points, lower VOR -- should be benched
     }
     result = roster.team_lineup(team, league)
     assert "rb2" in result.starters
