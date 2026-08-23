@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from ffdo.api import app as app_mod
 from ffdo.api.app import (
     _DEFAULT_DRAFT_ID, _DEFAULT_LEAGUE_ID, _TTLCache, _active_only,
@@ -5,6 +7,7 @@ from ffdo.api.app import (
 )
 from ffdo.api.session import SessionStore
 from ffdo.domain.models import PlayerProfile, Session
+from ffdo.ingest.client import PROJECTIONS, V1
 from fastapi.testclient import TestClient
 
 
@@ -35,6 +38,42 @@ class _FakeSleeperClient:
 
     def close(self) -> None:
         pass
+
+
+def _recording_client(responses: dict[str, object]):
+    """Builds a fake SleeperClient class (plus the list it records calls
+    into) for tests that need to assert on get_board()'s actual HTTP call
+    pattern -- e.g. proving /draft/<id> is fetched exactly once in mock
+    mode, or that a specific pick payload flows all the way through to the
+    response. Production code always constructs `SleeperClient()` with no
+    arguments, so `responses` and the shared `calls` list are captured by
+    closure rather than passed to `__init__`.
+
+    `responses` maps a URL (or a unique substring/prefix of one, e.g. the
+    projections URL before its query string) to the canned get_json()
+    return value. The first matching key, checked via `in` and tested in
+    insertion order, wins -- so when one key is a substring of another
+    (e.g. ".../draft/D1" vs ".../draft/D1/picks"), register the longer,
+    more specific one first. Unmatched URLs fall back to the same default
+    `_FakeSleeperClient` above uses: [] for a projections URL, {} otherwise.
+    """
+    calls: list[str] = []
+
+    class _RecordingClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def get_json(self, url: str):
+            calls.append(url)
+            for key, value in responses.items():
+                if key in url:
+                    return value
+            return [] if "/projections/" in url else {}
+
+        def close(self) -> None:
+            pass
+
+    return _RecordingClient, calls
 
 
 def test_has_value_is_false_before_the_first_load():
@@ -212,6 +251,187 @@ def test_league_id_is_empty_string_for_a_connected_mock_session(monkeypatch, tmp
     monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
 
     assert _league_id() == ""
+
+
+# ---------------------------------------------------------------------------
+# GET /api/board -- real-league and mock-draft branches, through TestClient.
+#
+# Everything above this point that touches `get_board()`'s internals
+# (_league_id/_draft_id/_roster_id) or the mock-draft translation layer
+# (ffdo.ingest.mock_draft, tested in tests/ingest/test_mock_draft.py) is a
+# unit test of a piece the endpoint is BUILT from. None of it actually calls
+# `GET /api/board`, so the endpoint's own wiring -- single-fetch reuse of
+# /draft/<id> in mock mode, running backfill_roster_ids() before
+# draft.parse() sees the picks, and re-resolving roster_id live rather than
+# trusting the persisted session -- was previously proven only by reading
+# app.py, not by a test. The fixtures below are adapted from the real
+# captured Sleeper payloads in tests/ingest/test_mock_draft.py /
+# tests/ingest/test_connect.py (MOCK_DRAFT_PRE_DRAFT / MOCK_DRAFT_MID_DRAFT),
+# switched to an auction-type mock so the response carries a `budget`
+# section with a `your_roster_id` to assert on.
+
+_BOARD_REAL_LEAGUE_RAW = {
+    "league_id": "L123",
+    "season": "2025",
+    "settings": {"num_teams": 2, "budget": 200},
+    "roster_positions": ["QB", "RB", "BN"],
+    "scoring_settings": {"rush_yd": 0.1, "rush_td": 6.0},
+    "name": "Board Test League",
+    "status": "drafting",
+}
+
+_BOARD_REAL_LEAGUE_DRAFT_RAW = {
+    "draft_id": "D123",
+    "type": "auction",
+    "status": "drafting",
+    "settings": {"teams": 2, "rounds": 3, "budget": 200},
+}
+
+_BOARD_PLAYERS_RAW = {
+    "P1": {"first_name": "Test", "last_name": "Runner", "position": "RB",
+           "team": "AAA", "age": 25, "years_exp": 3, "active": True},
+}
+
+_BOARD_PROJECTIONS_RAW = [
+    {"player_id": "P1",
+     "last_modified": int(datetime(2025, 8, 1, tzinfo=timezone.utc).timestamp() * 1000),
+     "stats": {"rush_yd": 1000.0, "rush_td": 10.0}},
+]
+
+# Real captured /v1/draft/<id> shape (see MOCK_DRAFT_PRE_DRAFT /
+# MOCK_DRAFT_MID_DRAFT in tests/ingest/test_mock_draft.py), adapted to an
+# auction-type mock with a budget so build_auction_board's `budget` section
+# (with `your_roster_id` / `your_spent`) is exercised end to end.
+_BOARD_MOCK_DRAFT_RAW = {
+    "created": 1787468015451,
+    "creators": ["U1"],
+    "draft_id": "D999",
+    "draft_order": None,
+    "last_message_id": "D999",
+    "last_message_time": 1787468015451,
+    "last_picked": None,
+    "league_id": None,
+    "metadata": {"description": "", "name": "", "scoring_type": "half_ppr"},
+    "season": "2026",
+    "season_type": "regular",
+    "settings": {
+        "autostart": 0, "cpu_autopick": 1, "pick_timer": 120, "rounds": 3,
+        "slots_qb": 1, "slots_rb": 1, "slots_bn": 1, "teams": 2, "budget": 200,
+    },
+    "slot_to_roster_id": {"1": 1, "2": 2},
+    "sport": "nfl", "start_time": None, "status": "drafting", "type": "auction",
+}
+
+
+def test_get_board_real_league_mode_reports_is_mock_false_and_scores_a_player(
+        monkeypatch, tmp_path):
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session(league_id="L123", draft_id="D123", is_mock=False))
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D123/picks": [],
+        f"{V1}/draft/D123": _BOARD_REAL_LEAGUE_DRAFT_RAW,
+        f"{V1}/league/L123": _BOARD_REAL_LEAGUE_RAW,
+        f"{V1}/players/nfl": _BOARD_PLAYERS_RAW,
+        f"{PROJECTIONS}/2025": _BOARD_PROJECTIONS_RAW,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    client = TestClient(create_app())
+    res = client.get("/api/board")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["is_mock"] is False
+    assert f"{V1}/league/L123" in calls
+    player_ids = {p["player_id"] for p in body["players"]}
+    assert "P1" in player_ids, (
+        "the one scoreable player in the fixture must reach the response "
+        "-- proves players/projections still flow through the real-league "
+        "branch unchanged")
+
+
+def test_get_board_mock_mode_reports_is_mock_true_and_fetches_the_draft_once(
+        monkeypatch, tmp_path):
+    """Direct proof of single-fetch reuse: get_board()'s mock branch must
+    fetch /draft/<id> exactly once and reuse that same payload for both
+    build_league_profile() and draft_meta, rather than fetching it twice."""
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session(league_id="", draft_id="D999", is_mock=True, user_id="U1"))
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D999/picks": [],
+        f"{V1}/draft/D999": _BOARD_MOCK_DRAFT_RAW,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    client = TestClient(create_app())
+    res = client.get("/api/board")
+
+    assert res.status_code == 200
+    assert res.json()["is_mock"] is True
+
+    draft_meta_calls = [c for c in calls if c == f"{V1}/draft/D999"]
+    assert len(draft_meta_calls) == 1, (
+        f"expected exactly one fetch of /draft/D999 (single-fetch reuse "
+        f"for both LeagueProfile and draft_meta), got {len(draft_meta_calls)}: "
+        f"{calls}")
+    assert f"{V1}/draft/D999/picks" in calls
+
+
+def test_get_board_mock_mode_backfills_picks_and_resolves_roster_id_live(
+        monkeypatch, tmp_path):
+    """The core regression guard this task exists for. Two things are
+    proven together here:
+
+    1. Live roster_id resolution: the persisted session's roster_id is
+       None (as it would be if the user connected before joining a draft
+       slot), but THIS poll's draft object has draft_order[user_id] = 2.
+       get_board() must re-resolve roster_id from that live draft_meta via
+       mock_draft.resolve_roster_id() -- never trust the stale persisted
+       None (which is what calling `_roster_id()` in mock mode would do).
+
+    2. backfill_roster_ids() running BEFORE draft.parse() sees the picks:
+       Sleeper never populates roster_id on a mock-draft pick (it arrives
+       null even for the connecting human's own pick). The one pick below
+       has roster_id: null and draft_slot: 2, which maps to roster_id 2 via
+       slot_to_roster_id. If backfill did not run, or ran after parsing,
+       DraftState.spent_by_roster() would skip this pick entirely (it
+       explicitly skips a null roster_id) and `your_spent` would be 0
+       instead of the pick's $50 amount.
+    """
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session(league_id="", draft_id="D999", is_mock=True,
+                        user_id="U1", roster_id=None))
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    draft_meta = {**_BOARD_MOCK_DRAFT_RAW, "draft_order": {"U1": 2}}
+    picks_raw = [{
+        "draft_id": "D999", "draft_slot": 2, "pick_no": 1,
+        "picked_by": "U1", "player_id": "P1", "roster_id": None,
+        "round": 1, "metadata": {"amount": "50"},
+    }]
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D999/picks": picks_raw,
+        f"{V1}/draft/D999": draft_meta,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    client = TestClient(create_app())
+    res = client.get("/api/board")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["is_mock"] is True
+    assert body["budget"]["your_roster_id"] == 2, (
+        "must reflect the LIVE roster_id resolved from this poll's "
+        "draft_order, not the stale persisted session.roster_id (None)")
+    assert body["budget"]["your_spent"] == 50, (
+        "the pick's null roster_id must have been backfilled to 2 (via "
+        "draft_slot 2 -> slot_to_roster_id) before draft.parse() ran, so "
+        "spent_by_roster() counts its $50 amount toward roster 2")
 
 
 def test_connect_endpoint_saves_the_session_and_returns_it(monkeypatch, tmp_path):
