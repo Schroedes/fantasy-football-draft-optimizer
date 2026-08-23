@@ -1517,14 +1517,28 @@ YOUR_SWID = "{00000004-0000-0000-0000-000000000000}"
 def _combined_league_response():
     """The real API returns one merged object when multiple `view=` params
     are requested together; these fixtures were captured as three separate
-    single-view requests during design validation (their shared top-level
-    fields -- id/seasonId/status/etc. -- are identical across all three
-    since they're views of the same league object), so recombine them here
-    to match connect.py's actual combined-view request shape."""
+    single-view requests during design validation, so recombine them here
+    to match connect.py's actual combined-view request shape.
+
+    Each view populates a DIFFERENT slice of the same top-level object --
+    mSettings' `settings` is the full object (includes `size`,
+    `rosterSettings`, `scoringSettings`, ...), while mDraftDetail's
+    `settings` is a slimmer one (only `draftSettings`). A naive
+    `{**a, **b, **c}` spread would let whichever dict is merged last win on
+    every shared key, silently replacing the full `settings` with the slim
+    one and losing `size` (confirmed live while implementing this task's
+    real counterpart, Task 7 -- the exact same bug, caught there first).
+    Take `settings_raw` as the base and layer in only the fields the other
+    two views uniquely contribute."""
     settings_raw = snapshot.load("mSettings", snapshot_dir=ESPN_SNAPSHOT_DIR)
     team_raw = snapshot.load("mTeam", snapshot_dir=ESPN_SNAPSHOT_DIR)
     draft_raw = snapshot.load("mDraftDetail", snapshot_dir=ESPN_SNAPSHOT_DIR)
-    return {**settings_raw, **team_raw, **draft_raw}
+    return {
+        **settings_raw,
+        "teams": team_raw["teams"],
+        "members": team_raw["members"],
+        "draftDetail": draft_raw["draftDetail"],
+    }
 
 
 def _dst_pool():
