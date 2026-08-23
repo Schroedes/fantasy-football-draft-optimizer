@@ -314,13 +314,20 @@ function renderRosters() {
           </div>`).join("")
     }</div>`;
 
+    const bench = Math.round(r.bench_vor);
+    const benchLabel = (bench >= 0 ? "+" : "") + bench;
+
     return `<div>
       <div class="roster-row${r.is_you ? " you" : ""}" data-roster-id="${r.roster_id}">
-        <span class="roster-rank">${i + 1}</span>
-        <span class="roster-name">${escapeHtml(r.team_name)}</span>
-        <div class="roster-positions">${posCells}</div>
-        <span class="roster-bench">+${Math.round(r.bench_vor)}</span>
-        <span class="roster-total">${Math.round(r.starting_vor)}</span>
+        <div class="roster-line1">
+          <span class="roster-rank">${i + 1}</span>
+          <span class="roster-name">${escapeHtml(r.team_name)}</span>
+          <span class="roster-total">${Math.round(r.starting_vor)}</span>
+        </div>
+        <div class="roster-line2">
+          <div class="roster-positions">${posCells}</div>
+          <span class="roster-bench">${benchLabel}</span>
+        </div>
       </div>
       ${detail}
     </div>`;
