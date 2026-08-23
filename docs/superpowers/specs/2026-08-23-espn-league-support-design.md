@@ -199,20 +199,29 @@ IDs). Neither the `espn_id` lookup (§4.1) nor the name/position fallback
 (§4.2) applies — there's no "espn_id" on a Sleeper defense entry, and
 "Houston" isn't a person's name to normalize-match against.
 
-`ingest/espn/crosswalk.py` needs a second, much smaller static table:
+`ingest/espn/crosswalk.py` needs a second, much smaller static table.
+**Verified live, 2026-08-23**, by fetching ESPN's real D/ST player list
+(`/seasons/{season}/players?view=kona_player_info`, filtered to slot 16)
+and cross-referencing each `proTeamId`/team name against Sleeper's own DEF
+entries in `players_nfl.json.gz` (which use the team abbreviation itself
+as `player_id`) — full 32-entry table, no gaps, no guessing:
 
 ```python
 ESPN_PRO_TEAM_ID_TO_SLEEPER_DEF_ID: dict[int, str] = {
-    # e.g. { ...: "HOU", ...: "SF", ... }  -- 32 entries, one per NFL team
+    1: "ATL", 2: "BUF", 3: "CHI", 4: "CIN", 5: "CLE", 6: "DAL", 7: "DEN",
+    8: "DET", 9: "GB", 10: "TEN", 11: "IND", 12: "KC", 13: "LV", 14: "LAR",
+    15: "MIA", 16: "MIN", 17: "NE", 18: "NO", 19: "NYG", 20: "NYJ",
+    21: "PHI", 22: "ARI", 23: "PIT", 24: "LAC", 25: "SF", 26: "SEA",
+    27: "TB", 28: "WAS", 29: "CAR", 30: "JAX", 33: "BAL", 34: "HOU",
 }
 ```
 
-This table only needs to exist if the connected league actually rosters
-D/ST (`ESPN_SLOT_ID_TO_POSITION` includes slot `16` with count > 0, per §6)
-— it's dead weight for a league like the original Sleeper build's, which
-rosters neither K nor DEF. Verify this table's 32 entries against the real
-captured `mTeam`/player data during fixture capture (§9), same discipline
-as every other crosswalk in this design.
+(ESPN's pro-team IDs skip 31/32 and place the Ravens/Texans at 33/34 —
+an artifact of when those franchises were assigned IDs, not a bug in this
+table.) This table only needs to exist if the connected league actually
+rosters D/ST (`ESPN_SLOT_ID_TO_POSITION` includes slot `16` with count > 0,
+per §6) — it's dead weight for a league like the original Sleeper build's,
+which rosters neither K nor DEF.
 
 ## 5. Scoring-settings crosswalk
 
@@ -429,18 +438,11 @@ network in CI. Concretely, in build order:
 1. **Fixture capture — done during design, 2026-08-23**, ahead of schedule:
    `mSettings`, `mTeam`, and `mDraftDetail` were fetched live against the
    real league (§3.2, §4.4, §5, §6, §7.2, §8.1 above all cite findings from
-   this capture) and saved outside the repo for inspection. **Not yet
-   committed** — `mTeam`'s real response contains your league's other
-   members' real names and ESPN account GUIDs (`members[].id`,
-   `displayName`, `firstName`, `lastName` for all 10 teams, not just
-   yours), which is real personal data about people who never consented to
-   being in a public repo. Before these become committed test fixtures
-   (the first implementation task), they need the same sanitization
-   `snapshot.py`'s Sleeper fixtures never had to think about: replace every
-   other member's name/GUID with a synthetic placeholder, keep your own
-   entry and every player/scoring/slot value as-is (that's the data the
-   tests actually need to exercise). `mDraftDetail`'s picks carry `teamId`
-   references but no names directly, so it needs no equivalent scrubbing.
+   this capture), sanitized (every member's name/GUID and every team's
+   display name/logo in `mTeam` replaced with a synthetic placeholder —
+   `mSettings`/`mDraftDetail` carried no PII to begin with), and committed
+   at `data/snapshots/2026-08-23-espn-league/`. The implementation plan's
+   adapter tests read from these directly.
 2. **Crosswalk unit tests** — `espn_id` hit, fallback match hit (name
    variants: apostrophe, suffix), fallback ambiguous (two candidates, must
    exclude and log), fallback miss (must exclude and log).
@@ -468,5 +470,4 @@ network in CI. Concretely, in build order:
 | `SleeperClient` regression from the `ingest/http.py` extraction | Existing Sleeper test suite is the safety net, run before and after, same discipline as the recent `replacement.py` refactor |
 | ESPN league turns out to be auction | Rejected explicitly at connect time (§7.4), not silently mishandled |
 | Cookie credentials stored in plaintext `data/session.json` | Consistent with this app's existing single-local-user threat model (already gitignored, already true of the Sleeper session's identifying data); not a new class of risk for a local draft-day tool |
-| Captured ESPN fixtures expose real leaguemates' names/GUIDs (§9) | Sanitize (synthetic names/GUIDs for every member except the connecting user) before any ESPN fixture is committed — a real check, not a formality, since these are other people's data, not yours |
-| Team-defense crosswalk (§4.4) unverified beyond this one league | Its 32 entries (ESPN pro-team ID ↔ Sleeper team abbreviation) are league-independent — verify once against any league that rosters D/ST, reuse everywhere |
+| Captured ESPN fixtures expose real leaguemates' names/GUIDs (§9) | Sanitized (synthetic names/GUIDs for every member) before committing — done, see §9 |
