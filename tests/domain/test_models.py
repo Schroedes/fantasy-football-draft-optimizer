@@ -5,7 +5,7 @@ import pytest
 from ffdo.domain.constants import SEASON_LENGTH, is_offense_scoring_key
 from ffdo.domain.models import (
     DraftPick, DraftState, LeagueProfile, MarketADP,
-    PlayerProfile, SeasonProjection, SeasonStatLine,
+    PlayerProfile, SeasonProjection, SeasonStatLine, Session,
 )
 
 
@@ -51,6 +51,42 @@ def test_league_profile_derives_starting_slots_and_roster_size():
     )
     assert lg.starting_slots == ("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX")
     assert lg.roster_size == 13
+
+
+def test_league_profile_name_and_status_default_to_empty_string():
+    lg = LeagueProfile(
+        league_id="x", season=2026, num_teams=12,
+        roster_positions=("QB", "BN"), scoring_settings={}, budget=200,
+    )
+    assert lg.name == ""
+    assert lg.status == ""
+
+
+def test_league_profile_accepts_name_and_status():
+    lg = LeagueProfile(
+        league_id="x", season=2026, num_teams=12,
+        roster_positions=("QB", "BN"), scoring_settings={}, budget=200,
+        name="P-Vegas Ballers", status="pre_draft",
+    )
+    assert lg.name == "P-Vegas Ballers"
+    assert lg.status == "pre_draft"
+
+
+def test_session_is_frozen_and_holds_the_connected_leagues_identity():
+    session = Session(
+        username="tester", user_id="U1", league_id="L1", draft_id="D1",
+        roster_id=3, league_name="Test League", season=2026, num_teams=12,
+        budget=200,
+        roster_positions=("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX",
+                          "BN", "BN", "BN", "BN", "BN"),
+        scoring_settings={"rec": 0.5}, draft_type="auction",
+        draft_status="pre_draft", rounds=13,
+        connected_at="2026-08-22T00:00:00+00:00",
+    )
+    assert session.roster_id == 3
+    assert session.scoring_settings == {"rec": 0.5}
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        session.roster_id = 4
 
 
 def test_draft_state_reports_spend_per_roster():

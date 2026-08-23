@@ -1,5 +1,5 @@
 from ffdo.domain.models import LeagueProfile, PlayerProfile
-from ffdo.engine import vor
+from ffdo.engine import scoring, vor
 
 
 def _profiles(spec):
@@ -70,3 +70,29 @@ def test_tiers_are_assigned_within_position_not_across():
     valued = vor.assign_tiers(vor.compute(points, profiles, _league(n=1)))
     assert valued["rb0"].tier == 1
     assert valued["wr0"].tier == 1
+
+
+def test_vor_reflects_the_leagues_scoring_settings():
+    """Different scoring_settings must produce a different VOR for the same
+    raw stat line -- ffdo.engine.scoring.score_stats and ffdo.engine.vor.compute
+    take scoring_settings/league as parameters rather than hardcoding one
+    league's rules, so switching the connected league (see ffdo.ingest.connect)
+    must actually change valuations, not just round-trip the settings."""
+    stats = {
+        "star": {"rec": 80.0, "rec_yd": 600.0, "rush_yd": 400.0, "rush_td": 4},
+        "replacement": {"rec": 20.0, "rec_yd": 150.0, "rush_yd": 300.0, "rush_td": 1},
+    }
+    profiles = _profiles({"star": "RB", "replacement": "RB"})
+    league = LeagueProfile(league_id="x", season=2026, num_teams=1,
+                           roster_positions=("RB",), scoring_settings={}, budget=200)
+
+    def star_vor(scoring_settings):
+        points = {pid: scoring.score_stats(s, scoring_settings) for pid, s in stats.items()}
+        return vor.compute(points, profiles, league)["star"].vor
+
+    full_ppr_vor = star_vor({"rec": 1.0, "rec_yd": 0.1, "rush_yd": 0.1, "rush_td": 6})
+    standard_vor = star_vor({"rec": 0.0, "rec_yd": 0.1, "rush_yd": 0.1, "rush_td": 6})
+
+    assert full_ppr_vor != standard_vor
+    assert full_ppr_vor == 133.0  # 204 - 71
+    assert standard_vor == 73.0   # 124 - 51

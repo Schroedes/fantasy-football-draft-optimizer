@@ -1,8 +1,224 @@
+from ffdo.api import app as app_mod
 from ffdo.api.app import (
     _DEFAULT_DRAFT_ID, _DEFAULT_LEAGUE_ID, _TTLCache, _active_only,
-    _draft_id, _league_id, _roster_id,
+    _draft_id, _league_id, _roster_id, create_app,
 )
-from ffdo.domain.models import PlayerProfile
+from ffdo.api.session import SessionStore
+from ffdo.domain.models import PlayerProfile, Session
+from fastapi.testclient import TestClient
+
+
+def _session(**overrides):
+    base = dict(
+        username="tester", user_id="U1", league_id="session-league",
+        draft_id="session-draft", roster_id=5, league_name="Test League",
+        season=2026, num_teams=12, budget=200,
+        roster_positions=("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX",
+                          "BN", "BN", "BN", "BN", "BN"),
+        scoring_settings={"rec": 0.5}, draft_type="auction",
+        draft_status="pre_draft", rounds=13,
+        connected_at="2026-08-22T00:00:00+00:00",
+    )
+    return Session(**{**base, **overrides})
+
+
+class _FakeSleeperClient:
+    """Stands in for ffdo.ingest.client.SleeperClient so tests never make a
+    real network call. Returns an empty list for any projections URL (that
+    parser requires a list) and an empty dict otherwise."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    def get_json(self, url: str):
+        return [] if "/projections/" in url else {}
+
+    def close(self) -> None:
+        pass
+
+
+def test_has_value_is_false_before_the_first_load():
+    cache = _TTLCache(ttl_seconds=10)
+    assert cache.has_value() is False
+
+
+def test_has_value_is_true_after_a_load_and_does_not_trigger_a_fetch():
+    cache = _TTLCache(ttl_seconds=10)
+    calls = []
+    cache.get(lambda: calls.append(1) or "value")
+    assert cache.has_value() is True
+    assert cache.has_value() is True
+    assert calls == [1], "has_value() must not call the loader"
+
+
+def test_season_keyed_projections_caches_do_not_mix_seasons():
+    """Mirrors `ffdo.api.app.create_app()`'s `_projections_cache_for()`
+    pattern directly: `projections_cache` used to be a single shared
+    `_TTLCache`, so connecting League A (season 2025) then League B (season
+    2026) within the 1h TTL would silently serve 2025's cached payload for a
+    2026 board. A dict of `_TTLCache` instances keyed by season, created
+    lazily, is what fixes that -- proven here the same way the plain
+    `_TTLCache` tests above prove TTL behavior: an injectable clock and a
+    `calls` list, this time one pair per season."""
+    caches: dict[int, _TTLCache] = {}
+
+    def cache_for(season):
+        return caches.setdefault(season, _TTLCache(ttl_seconds=3600))
+
+    calls_2025 = []
+    calls_2026 = []
+
+    value_2025 = cache_for(2025).get(lambda: calls_2025.append(1) or "proj-2025")
+    value_2026 = cache_for(2026).get(lambda: calls_2026.append(1) or "proj-2026")
+
+    assert value_2025 == "proj-2025"
+    assert value_2026 == "proj-2026"
+    assert len(calls_2025) == 1
+    assert len(calls_2026) == 1
+
+    # Re-fetching season 2025 within the TTL must not re-run 2026's loader
+    # (or vice versa) and must not return the other season's cached value --
+    # this is exactly the cross-season contamination the single shared cache
+    # used to cause.
+    again_2025 = cache_for(2025).get(lambda: calls_2025.append(1) or "SHOULD-NOT-RUN")
+    assert again_2025 == "proj-2025"
+    assert len(calls_2025) == 1
+    assert len(calls_2026) == 1
+
+
+def test_league_id_prefers_the_connected_session_over_env_vars(monkeypatch, tmp_path):
+    monkeypatch.setenv("FFDO_LEAGUE_ID", "env-league")
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session())
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    assert _league_id() == "session-league"
+
+
+def test_draft_id_prefers_the_connected_session_over_env_vars(monkeypatch, tmp_path):
+    monkeypatch.setenv("FFDO_DRAFT_ID", "env-draft")
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session())
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    assert _draft_id() == "session-draft"
+
+
+def test_roster_id_prefers_the_connected_session_over_env_vars(monkeypatch, tmp_path):
+    monkeypatch.setenv("FFDO_ROSTER_ID", "999")
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session())
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    assert _roster_id() == 5
+
+
+def test_ids_fall_back_to_env_vars_when_no_session_is_connected(monkeypatch):
+    # No explicit store setup needed -- the autouse `_isolated_session_store`
+    # fixture in conftest.py already points `_SESSION_STORE` at a fresh,
+    # empty store, so there's nothing connected here by construction.
+    monkeypatch.delenv("FFDO_LEAGUE_ID", raising=False)
+
+    assert _league_id() == _DEFAULT_LEAGUE_ID
+
+
+def test_connect_endpoint_returns_400_for_a_connect_error(monkeypatch):
+    from ffdo.ingest import connect as connect_mod
+
+    def raise_connect_error(sleeper, league_id, username):
+        raise connect_mod.ConnectError("League not found")
+
+    monkeypatch.setattr("ffdo.ingest.connect.resolve", raise_connect_error)
+
+    client = TestClient(create_app())
+    res = client.post("/api/connect", json={"league_id": "bad", "username": "tester"})
+
+    assert res.status_code == 400
+    assert res.json()["detail"] == "League not found"
+
+
+def test_connect_endpoint_rejects_a_blank_league_id_or_username():
+    client = TestClient(create_app())
+
+    res = client.post("/api/connect", json={"league_id": "  ", "username": "tester"})
+
+    assert res.status_code == 400
+
+
+def test_connect_endpoint_saves_the_session_and_returns_it(monkeypatch, tmp_path):
+    store = SessionStore(tmp_path / "session.json")
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    fake_session = _session(league_id="L9")
+    monkeypatch.setattr("ffdo.ingest.connect.resolve",
+                        lambda sleeper, league_id, username: fake_session)
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeSleeperClient)
+
+    client = TestClient(create_app())
+    res = client.post("/api/connect", json={"league_id": "L9", "username": "tester"})
+
+    assert res.status_code == 200
+    assert res.json()["league_id"] == "L9"
+    assert store.get() == fake_session
+
+
+def test_session_endpoint_returns_null_when_nothing_is_connected():
+    client = TestClient(create_app())
+
+    res = client.get("/api/session")
+    assert res.json() is None
+
+
+def test_session_endpoint_returns_the_connected_session(monkeypatch, tmp_path):
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session())
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+    client = TestClient(create_app())
+
+    res = client.get("/api/session")
+    assert res.json()["league_id"] == "session-league"
+
+
+def test_readiness_endpoint_reports_pending_before_anything_is_connected():
+    client = TestClient(create_app())
+
+    res = client.get("/api/readiness")
+    assert res.json() == {"league_draft": "pending", "players": "pending", "projections": "pending"}
+
+
+def test_readiness_endpoint_reports_synced_after_connecting(monkeypatch):
+    monkeypatch.setattr("ffdo.ingest.connect.resolve",
+                        lambda sleeper, league_id, username: _session())
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeSleeperClient)
+
+    client = TestClient(create_app())
+    client.post("/api/connect", json={"league_id": "L1", "username": "tester"})
+
+    res = client.get("/api/readiness")
+    body = res.json()
+    assert body == {"league_draft": "synced", "players": "synced", "projections": "synced"}
+
+
+def test_readiness_reports_pending_for_projections_of_a_new_season_even_when_a_different_season_is_already_synced(monkeypatch):
+    """The crux of the unkeyed-cache bug: connecting League A (season 2025)
+    warms its projections cache. Switching to League B (season 2026) -- here
+    simulated by writing directly to `_SESSION_STORE`, standing in for the
+    instant after `/api/connect` returns but before the new season's
+    background warm task has run -- must report `projections: pending` for
+    2026, not spuriously `synced` off of 2025's stale cache entry. A
+    misleading `synced` here would be actively wrong, not just wasted work."""
+    monkeypatch.setattr("ffdo.ingest.connect.resolve",
+                        lambda sleeper, league_id, username: _session(season=2025))
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeSleeperClient)
+
+    client = TestClient(create_app())
+    client.post("/api/connect", json={"league_id": "L1", "username": "tester"})
+    assert client.get("/api/readiness").json()["projections"] == "synced"
+
+    app_mod._SESSION_STORE.save(_session(season=2026, league_id="L2"))
+
+    body = client.get("/api/readiness").json()
+    assert body["projections"] == "pending"
 
 
 def test_ttlcache_serves_cached_value_within_ttl_without_refetching():

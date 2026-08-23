@@ -60,6 +60,8 @@ class LeagueProfile:
     roster_positions: tuple[str, ...]
     scoring_settings: Mapping[str, float]
     budget: int | None
+    name: str = ""
+    status: str = ""
 
     @property
     def starting_slots(self) -> tuple[str, ...]:
@@ -111,3 +113,25 @@ class ValuedPlayer:
     vor: float
     tier: int
     adjustments: Mapping[str, float]
+
+
+@dataclass(frozen=True, slots=True)
+class Session:
+    """A connected Sleeper league/user/draft, as resolved by
+    `ffdo.ingest.connect.resolve()` and persisted by `ffdo.api.session.SessionStore`.
+    """
+    username: str
+    user_id: str
+    league_id: str
+    draft_id: str
+    roster_id: int | None
+    league_name: str
+    season: int
+    num_teams: int
+    budget: int | None
+    roster_positions: tuple[str, ...]
+    scoring_settings: Mapping[str, float]
+    draft_type: str
+    draft_status: str
+    rounds: int
+    connected_at: str
