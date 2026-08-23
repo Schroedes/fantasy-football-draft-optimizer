@@ -434,6 +434,66 @@ def test_get_board_mock_mode_backfills_picks_and_resolves_roster_id_live(
         "spent_by_roster() counts its $50 amount toward roster 2")
 
 
+def test_get_board_mock_mode_returns_a_clean_400_when_scoring_type_becomes_unsupported(
+        monkeypatch, tmp_path):
+    """Cross-cutting gap from the final whole-branch review: resolve_mock()
+    converts mock_draft.MockDraftError into a clean ConnectError -> 400 at
+    /api/connect, but get_board() calls the same build_league_profile() on
+    every 3s poll with no equivalent handling. A mock draft's scoring_type
+    can drift to an unsupported value AFTER a user has already connected
+    (documented in the spec: a real mock draft's scoring_type changed
+    between two live polls of the same draft), so this must surface as a
+    clean 400 with an actionable detail, not a bare 500."""
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session(league_id="", draft_id="D999", is_mock=True, user_id="U1"))
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    drifted_draft = {
+        **_BOARD_MOCK_DRAFT_RAW,
+        "metadata": {**_BOARD_MOCK_DRAFT_RAW["metadata"], "scoring_type": "dynasty_2qb"},
+    }
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D999/picks": [],
+        f"{V1}/draft/D999": drifted_draft,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    client = TestClient(create_app())
+    res = client.get("/api/board")
+
+    assert res.status_code == 400
+    assert "dynasty_2qb" in res.json()["detail"]
+
+
+def test_get_board_mock_mode_handles_a_snake_draft_without_crashing(
+        monkeypatch, tmp_path):
+    """The Task 5 fix-round tests for get_board()'s mock branch only ever
+    used an auction-type mock draft, so the `if lg.budget is None: lg =
+    replace(lg, budget=state.budget)` fallback (which behaves differently
+    for snake vs auction -- a snake mock's budget is legitimately None and
+    should stay None) was never exercised end to end through the real
+    endpoint for the mock path. This is a minimal smoke test, not a
+    duplicate of the auction test's full backfill/roster-id assertions."""
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session(league_id="", draft_id="D999", is_mock=True, user_id="U1"))
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    snake_draft = {**_BOARD_MOCK_DRAFT_RAW, "type": "snake"}
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D999/picks": [],
+        f"{V1}/draft/D999": snake_draft,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    client = TestClient(create_app())
+    res = client.get("/api/board")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["format"] == "snake"
+    assert body["is_mock"] is True
+
+
 def test_connect_endpoint_saves_the_session_and_returns_it(monkeypatch, tmp_path):
     store = SessionStore(tmp_path / "session.json")
     monkeypatch.setattr(app_mod, "_SESSION_STORE", store)

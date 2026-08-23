@@ -101,6 +101,16 @@ def resolve_mock(
     except httpx.HTTPStatusError as exc:
         raise ConnectError("Mock draft not found") from exc
 
+    # Sleeper answers some invalid/unknown draft IDs with `200 {}` (or
+    # `200 null`) instead of a 404. Without this guard, `is_mock_draft({})`
+    # returns True (an empty dict's `.get("league_id")` is None, same as a
+    # real mock draft), so resolution would proceed past the mock-draft
+    # check and die deep inside `build_league_profile()` on a bare
+    # `KeyError` for `draft_raw["season"]` -- a 500 instead of the same
+    # clean "Mock draft not found" a 404 already produces.
+    if not draft_raw:
+        raise ConnectError("Mock draft not found")
+
     if not mock_draft.is_mock_draft(draft_raw):
         raise ConnectError(
             "This looks like a real league draft — use the League ID + "

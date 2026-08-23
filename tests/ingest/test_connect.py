@@ -268,6 +268,20 @@ def test_resolve_mock_raises_when_the_draft_is_not_found():
         connect.resolve_mock(_mock_client(handler), "bad-id", "schroedes")
 
 
+def test_resolve_mock_raises_when_the_draft_fetch_returns_an_empty_response():
+    """Sleeper answers some invalid/unknown draft IDs with `200 {}` instead
+    of a 404. `is_mock_draft({})` would otherwise return True ({}.get(
+    "league_id") is None, same as a real mock draft) and resolution would
+    proceed to crash deep inside build_league_profile() on a bare KeyError
+    for draft_raw["season"] -- an unhelpful 500 instead of the same clean
+    "Mock draft not found" the 404 case already produces."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={})
+
+    with pytest.raises(connect.ConnectError, match="Mock draft not found"):
+        connect.resolve_mock(_mock_client(handler), "bad-id", "schroedes")
+
+
 def test_resolve_mock_rejects_a_real_league_draft():
     real_draft = {**MOCK_DRAFT_MID_DRAFT, "league_id": "1389375982783180800"}
 

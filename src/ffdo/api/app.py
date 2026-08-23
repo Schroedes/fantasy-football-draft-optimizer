@@ -221,7 +221,10 @@ def create_app() -> FastAPI:
         try:
             if is_mock:
                 draft_meta = sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}")
-                lg = mock_draft_mod.build_league_profile(draft_meta)
+                try:
+                    lg = mock_draft_mod.build_league_profile(draft_meta)
+                except mock_draft_mod.MockDraftError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
                 picks_raw = mock_draft_mod.backfill_roster_ids(
                     sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}/picks"),
                     draft_meta)
