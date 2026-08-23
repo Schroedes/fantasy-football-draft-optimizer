@@ -56,3 +56,40 @@ def test_league_parse_reads_roster_and_scoring():
     # This league penalises ALL fumbles, not just lost ones. It is the single
     # scoring rule that diverges from Sleeper's half-PPR preset.
     assert lg.scoring_settings["fum"] == -1
+
+
+def test_league_parse_reads_name_and_status():
+    raw = {"league_id": "1", "season": "2026", "settings": {"num_teams": 12},
+          "total_rosters": 12, "roster_positions": ["QB", "RB"],
+          "scoring_settings": {}, "name": "Test League", "status": "pre_draft"}
+    lg = league.parse(raw)
+    assert lg.name == "Test League"
+    assert lg.status == "pre_draft"
+
+
+def test_league_parse_defaults_missing_name_and_status_to_empty_string():
+    raw = {"league_id": "1", "season": "2026", "settings": {"num_teams": 12},
+          "total_rosters": 12, "roster_positions": ["QB"], "scoring_settings": {}}
+    lg = league.parse(raw)
+    assert lg.name == ""
+    assert lg.status == ""
+
+
+def test_most_recent_draft_id_takes_the_first_entry():
+    """Sleeper's /league/<id>/drafts returns a league's drafts newest-first."""
+    drafts = [{"draft_id": "newest"}, {"draft_id": "older"}]
+    assert league.most_recent_draft_id(drafts) == "newest"
+
+
+def test_most_recent_draft_id_is_none_for_an_empty_list():
+    assert league.most_recent_draft_id([]) is None
+
+
+def test_find_roster_id_matches_on_owner_id():
+    rosters = [{"roster_id": 1, "owner_id": "u1"}, {"roster_id": 2, "owner_id": "u2"}]
+    assert league.find_roster_id(rosters, "u2") == 2
+
+
+def test_find_roster_id_is_none_when_the_user_owns_no_roster():
+    rosters = [{"roster_id": 1, "owner_id": "u1"}]
+    assert league.find_roster_id(rosters, "stranger") is None

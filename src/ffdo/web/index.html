@@ -3,120 +3,80 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Draft Board</title>
+<title>FFDO — Connect</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/board.css">
+<link rel="stylesheet" href="main.css">
 </head>
 <body>
-<header id="strip">
-  <div class="brand">
-    <span class="brand-name">FFDO</span>
-    <span id="brand-tag" class="brand-tag">/ AUCTION</span>
-  </div>
-  <div class="strip-stats">
-    <div><span class="label">Inflation</span><b id="inflation">&mdash;</b></div>
-    <div><span class="label">Spent</span><b id="spent">&mdash;</b></div>
-    <div id="your-dollars-stat"><span class="label">Your $ left</span><b id="your-dollars">&mdash;</b></div>
-    <div id="your-slots-stat"><span class="label">Your slots left</span><b id="your-slots">&mdash;</b></div>
-    <div id="your-per-slot-stat"><span class="label">$/slot vs avg</span><b id="your-per-slot">&mdash;</b></div>
-    <div><span class="label">Picks</span><b id="picks">&mdash;</b></div>
-    <div><span class="label">Updated</span><b id="updated">&mdash;</b></div>
-  </div>
-</header>
+<div id="shell">
+  <header id="brand-row">
+    <div class="brand">
+      <span class="brand-name">FFDO</span>
+      <span class="brand-tag">/ DRAFT ROOM</span>
+    </div>
+    <p class="tagline">Draft-day decision support &mdash; values players, tracks the room, never names a pick.</p>
+  </header>
 
-<section id="cow" hidden>
-  <div class="cow-head">
-    <h2>Cost of waiting</h2>
-    <span class="cow-sub">what you give up per position if you pass now and take it at your next pick instead</span>
-  </div>
-  <div id="cow-rows"></div>
-</section>
+  <section id="connect-form" class="card">
+    <h1>Connect your league</h1>
+    <label class="field">
+      <span>Sleeper League ID</span>
+      <input id="league-id-input" type="text" placeholder="e.g. 1315881559957458944" autocomplete="off">
+    </label>
+    <label class="field">
+      <span>Sleeper Username</span>
+      <input id="username-input" type="text" placeholder="e.g. yourusername" autocomplete="off">
+    </label>
+    <p id="connect-error" class="error-msg" hidden></p>
+    <button id="connect-btn">Connect</button>
+  </section>
 
-<div id="layout">
-  <div id="sidebar">
-  <aside id="nominated" class="empty">
-    <div class="nom-empty-msg">Click a player row to pin them here while they're on the block.</div>
-    <div class="nom-body" hidden>
-      <div class="nom-head">
-        <span class="nom-kicker">On the block</span>
-        <span id="nom-tier" class="tier-chip"></span>
+  <section id="connected-view" hidden>
+    <div class="cards-row">
+      <div class="card league-card">
+        <div class="card-head">
+          <div class="league-identity">
+            <span class="eyebrow">League</span>
+            <h2 id="league-name">&mdash;</h2>
+            <span class="league-id-tag" id="league-id-tag"></span>
+          </div>
+          <span id="status-badge" class="status-badge"></span>
+        </div>
+        <div class="stat-grid">
+          <div class="stat"><span class="eyebrow">Teams</span><b id="stat-teams">&mdash;</b></div>
+          <div class="stat"><span class="eyebrow">Budget</span><b id="stat-budget">&mdash;</b></div>
+          <div class="stat"><span class="eyebrow">Rounds</span><b id="stat-rounds">&mdash;</b></div>
+          <div class="stat"><span class="eyebrow">Format</span><b id="stat-format" class="accent">&mdash;</b></div>
+        </div>
+        <div class="hr"></div>
+        <div class="roster-slots">
+          <span class="eyebrow">Roster</span>
+          <div id="roster-chips" class="chip-row"></div>
+        </div>
+        <div class="hr"></div>
+        <p id="scoring-note" class="note"></p>
       </div>
-      <div class="nom-name-block">
-        <span id="nom-name" class="nom-name"></span>
-        <span id="nom-meta" class="nom-meta"></span>
-      </div>
-      <div class="nom-stats">
-        <div class="nom-stat">
-          <span id="nom-baseline-label" class="label">Baseline</span>
-          <b id="nom-baseline">&mdash;</b>
-        </div>
-        <div class="nom-stat">
-          <span id="nom-adjusted-label" class="label">Adjusted</span>
-          <b id="nom-adjusted" class="accent">&mdash;</b>
-        </div>
-        <div class="nom-stat">
-          <span class="label">VOR</span>
-          <b id="nom-vor">&mdash;</b>
-        </div>
-        <div class="nom-stat" id="nom-maxbid-stat" hidden>
-          <span class="label">Your max</span>
-          <b id="nom-maxbid" class="accent">&mdash;</b>
-        </div>
-      </div>
-      <button id="lean-badge" class="lean-badge" disabled title="This board never names a pick — you decide.">
-        MODEL LEAN &middot; DISABLED
-      </button>
-      <div id="nom-hr" class="hr"></div>
-      <div id="bid-block" class="bid-block">
-        <div class="bid-head">
-          <span class="label">Your bid</span>
-          <span id="nom-surplus" class="surplus"></span>
-        </div>
-        <div class="bid-controls">
-          <button data-step="-5">&minus;5</button>
-          <button data-step="-1">&minus;1</button>
-          <span id="nom-bid" class="bid-amount">$0</span>
-          <button data-step="1">+1</button>
-          <button data-step="5">+5</button>
-        </div>
+
+      <div class="card readiness-card">
+        <span class="eyebrow">Data readiness</span>
+        <div id="readiness-rows"></div>
       </div>
     </div>
-  </aside>
 
-  <aside id="rosters">
-    <div class="rosters-head">
-      <h2>Roster power rankings</h2>
-      <span class="rosters-sub">starting-lineup VOR, live as rosters are built</span>
+    <div class="bottom-bar card">
+      <div class="format-block">
+        <div class="format-toggle" id="format-toggle">
+          <button data-format="auction">Auction</button>
+          <button data-format="snake">Snake</button>
+        </div>
+        <p id="format-note" class="note"></p>
+      </div>
+      <button id="enter-btn">Enter draft room &rarr;</button>
     </div>
-    <div id="rosters-rows"></div>
-  </aside>
-  </div>
-
-  <main id="board-panel">
-    <nav id="filters">
-      <button data-pos="ALL" class="on">All</button>
-      <button data-pos="QB">QB</button>
-      <button data-pos="RB">RB</button>
-      <button data-pos="WR">WR</button>
-      <button data-pos="TE">TE</button>
-      <label class="hide-drafted"><input type="checkbox" id="hide-drafted" checked> Hide drafted</label>
-      <input id="search" type="search" placeholder="Search players&hellip;" autocomplete="off">
-    </nav>
-    <div id="board-scroll">
-      <table id="board">
-        <thead><tr>
-          <th></th><th>Player</th><th>Pos</th><th>Tm</th><th>Age</th>
-          <th data-sort="tier">Tier</th><th data-sort="vor">VOR</th>
-          <th id="th-money" colspan="2" data-sort="adjusted">Adj $</th>
-        </tr></thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </main>
+  </section>
 </div>
-
-<script src="/board.js"></script>
+<script src="main.js"></script>
 </body>
 </html>

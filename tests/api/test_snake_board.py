@@ -71,3 +71,9 @@ def test_snake_board_also_exposes_rosters():
                                   roster_id=1, teams=teams)
     assert out["rosters"][0]["roster_id"] == 1
     assert out["rosters"][0]["is_you"] is True
+
+
+def test_snake_board_has_no_budget_field():
+    out = board.build_snake_board(_league(), _state(), _valued(),
+                                  {pid: 0.5 for pid in _valued()}, {})
+    assert "budget" not in out
