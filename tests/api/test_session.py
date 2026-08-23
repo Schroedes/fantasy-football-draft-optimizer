@@ -10,7 +10,7 @@ def _session(**overrides):
         roster_positions=("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX",
                           "BN", "BN", "BN", "BN", "BN"),
         scoring_settings={"rec": 0.5}, draft_type="auction",
-        draft_status="pre_draft", rounds=13,
+        draft_status="pre_draft", rounds=13, is_mock=False,
         connected_at="2026-08-22T00:00:00+00:00",
     )
     return Session(**{**base, **overrides})
@@ -46,6 +46,13 @@ def test_save_then_get_round_trips_rounds(tmp_path):
     session = _session(rounds=16)
     store.save(session)
     assert store.get().rounds == 16
+
+
+def test_save_then_get_round_trips_is_mock(tmp_path):
+    store = SessionStore(tmp_path / "session.json")
+    session = _session(is_mock=True, league_id="")
+    store.save(session)
+    assert store.get().is_mock is True
 
 
 def test_save_creates_missing_parent_directories(tmp_path):

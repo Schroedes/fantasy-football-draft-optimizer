@@ -58,6 +58,7 @@ function render() {
     d.budget ? `$${d.budget.spent}/${d.budget.total}` : "—";
   document.getElementById("picks").textContent = d.picks_made;
   document.getElementById("brand-tag").textContent = `/ ${d.format === "snake" ? "SNAKE" : "AUCTION"}`;
+  document.getElementById("mock-badge").hidden = !d.is_mock;
 
   const hasYourBudget = d.format !== "snake" && d.budget &&
     d.budget.your_slots_left !== undefined;

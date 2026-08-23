@@ -141,3 +141,4 @@ class Session:
     draft_status: str
     rounds: int
     connected_at: str
+    is_mock: bool

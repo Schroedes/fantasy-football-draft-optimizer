@@ -49,6 +49,7 @@ class SessionStore:
                 draft_status=raw["draft_status"],
                 rounds=raw["rounds"],
                 connected_at=raw["connected_at"],
+                is_mock=raw["is_mock"],
             )
         except (KeyError, TypeError):
             return None
@@ -71,6 +72,7 @@ class SessionStore:
             "draft_status": session.draft_status,
             "rounds": session.rounds,
             "connected_at": session.connected_at,
+            "is_mock": session.is_mock,
         }
         self._path.write_text(json.dumps(payload), encoding="utf-8")
         self._cached = session
