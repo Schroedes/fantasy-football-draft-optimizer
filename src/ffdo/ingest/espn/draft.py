@@ -13,16 +13,7 @@ def parse(raw: dict[str, Any], crosswalk: Crosswalk) -> DraftState:
     draft_settings = settings.get("draftSettings") or {}
     detail = raw["draftDetail"]
     all_picks = detail.get("picks", [])
-    # The `mDraftDetail` view (unlike `mSettings`, which ingest/espn/league.py
-    # reads) carries no top-level `size` field -- verified live 2026-08-23
-    # against the real committed fixture, whose `settings` object holds only
-    # `draftSettings`. `draftSettings.pickOrder` lists every team exactly
-    # once, so its length is this view's only reliable team count; fall back
-    # to `settings["size"]` first in case a future/other view does include it.
-    num_teams_raw = settings.get("size")
-    if num_teams_raw is None:
-        num_teams_raw = len(draft_settings.get("pickOrder") or [])
-    num_teams = int(num_teams_raw)
+    num_teams = int(settings["size"])
     rounds = len(all_picks) // num_teams if num_teams else 0
 
     if detail.get("drafted"):
