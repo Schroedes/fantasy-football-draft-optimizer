@@ -4,8 +4,57 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from ffdo.domain.models import DraftState, ValuedPlayer
+from ffdo.domain.models import DraftState, TeamProfile, ValuedPlayer
 from ffdo.engine import auction
+from ffdo.engine import roster as roster_engine
+
+
+def _build_rosters_payload(
+    league,
+    state: DraftState,
+    valued: Mapping[str, ValuedPlayer],
+    teams: Mapping[int, TeamProfile] | None,
+    your_roster_id: int | None,
+) -> list[dict]:
+    teams = teams or {}
+    picks_by_roster: dict[int, list[str]] = {}
+    for p in state.picks:
+        if p.roster_id is None:
+            continue
+        picks_by_roster.setdefault(p.roster_id, []).append(p.player_id)
+
+    roster_ids = set(teams) | set(picks_by_roster)
+    rows = []
+    for rid in roster_ids:
+        team_players = {pid: valued[pid] for pid in picks_by_roster.get(rid, [])
+                        if pid in valued}
+        lineup = roster_engine.team_lineup(team_players, league)
+        team = teams.get(rid)
+        players = sorted(
+            (
+                {
+                    "player_id": pid,
+                    "name": vp.profile.full_name,
+                    "position": vp.profile.position,
+                    "vor": round(vp.vor, 1),
+                    "starter": pid in lineup.starters,
+                }
+                for pid, vp in team_players.items()
+            ),
+            key=lambda r: (r["starter"], r["vor"]),
+            reverse=True,
+        )
+        rows.append({
+            "roster_id": rid,
+            "team_name": team.display_name if team else f"Team {rid}",
+            "is_you": rid == your_roster_id,
+            "starting_vor": round(lineup.starting_vor, 1),
+            "bench_vor": round(lineup.bench_vor, 1),
+            "by_position": {k: round(v, 1) for k, v in lineup.by_position.items()},
+            "players": players,
+        })
+    rows.sort(key=lambda r: (r["starting_vor"], r["bench_vor"]), reverse=True)
+    return rows
 
 
 def build_auction_board(
@@ -15,6 +64,7 @@ def build_auction_board(
     baseline: Mapping[str, float],
     *,
     roster_id: int | None = None,
+    teams: Mapping[int, TeamProfile] | None = None,
 ) -> dict:
     factor = auction.inflation_factor(baseline, state, league)
     drafted = state.drafted_player_ids()
@@ -78,6 +128,7 @@ def build_auction_board(
         },
         "picks_made": len(state.picks),
         "players": rows,
+        "rosters": _build_rosters_payload(league, state, valued, teams, roster_id),
     }
 
 
@@ -87,6 +138,9 @@ def build_snake_board(
     valued: Mapping[str, ValuedPlayer],
     survival: Mapping[str, float],
     cost_of_waiting: Mapping[str, Mapping[str, float]],
+    *,
+    roster_id: int | None = None,
+    teams: Mapping[int, TeamProfile] | None = None,
 ) -> dict:
     drafted = state.drafted_player_ids()
     rows = [
@@ -115,4 +169,5 @@ def build_snake_board(
         "cost_of_waiting": dict(cost_of_waiting),
         "picks_made": len(state.picks),
         "players": rows,
+        "rosters": _build_rosters_payload(league, state, valued, teams, roster_id),
     }

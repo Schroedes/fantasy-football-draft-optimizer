@@ -1,6 +1,6 @@
 from ffdo.api import board
 from ffdo.domain.models import (
-    DraftPick, DraftState, LeagueProfile, PlayerProfile, ValuedPlayer,
+    DraftPick, DraftState, LeagueProfile, PlayerProfile, TeamProfile, ValuedPlayer,
 )
 from ffdo.engine import auction
 from ffdo.ingest import draft, snapshot
@@ -124,3 +124,85 @@ def test_healthz_returns_ok():
     from ffdo.api.app import create_app
     client = TestClient(create_app())
     assert client.get("/healthz").json() == {"status": "ok"}
+
+
+def _teams():
+    return {1: TeamProfile(roster_id=1, display_name="Alpha"),
+            2: TeamProfile(roster_id=2, display_name="Bravo")}
+
+
+def test_rosters_payload_includes_every_known_team_even_with_zero_picks():
+    league = _league()
+    state = draft.parse({"draft_id": "d", "type": "auction", "status": "drafting",
+                         "settings": {"teams": 12, "rounds": 14, "budget": 200}}, [])
+    out = board.build_auction_board(league, state, {}, {}, teams=_teams())
+    assert {r["roster_id"] for r in out["rosters"]} == {1, 2}
+    assert all(r["starting_vor"] == 0.0 for r in out["rosters"])
+    assert all(r["players"] == [] for r in out["rosters"])
+
+
+def test_your_roster_is_flagged_is_you():
+    league = _league()
+    picks = (DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1,
+                       picked_by="u1", player_id="p0", amount=10),)
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=14, budget=200, picks=picks)
+    valued = _valued(["p0"])
+    out = board.build_auction_board(league, state, valued, {"p0": 10.0},
+                                    roster_id=1, teams=_teams())
+    you = next(r for r in out["rosters"] if r["roster_id"] == 1)
+    other = next(r for r in out["rosters"] if r["roster_id"] == 2)
+    assert you["is_you"] is True
+    assert other["is_you"] is False
+
+
+def test_team_name_falls_back_to_roster_id_label_when_profile_missing():
+    league = _league()
+    picks = (DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=5,
+                       picked_by="u5", player_id="p0", amount=10),)
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=14, budget=200, picks=picks)
+    valued = _valued(["p0"])
+    out = board.build_auction_board(league, state, valued, {"p0": 10.0})
+    row = next(r for r in out["rosters"] if r["roster_id"] == 5)
+    assert row["team_name"] == "Team 5"
+
+
+def test_rosters_sorted_by_starting_vor_descending():
+    league = _league()
+    picks = (
+        DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1,
+                 picked_by="u1", player_id="p0", amount=10),
+        DraftPick(pick_no=2, round=1, draft_slot=2, roster_id=2,
+                 picked_by="u2", player_id="p1", amount=10),
+    )
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=14, budget=200, picks=picks)
+    valued = _valued(["p0", "p1"])  # p0 has higher VOR than p1, see _valued()
+    out = board.build_auction_board(league, state, valued,
+                                    {"p0": 10.0, "p1": 10.0}, teams=_teams())
+    assert [r["roster_id"] for r in out["rosters"]] == [1, 2]
+
+
+def test_roster_players_are_flagged_starter_or_bench():
+    league = LeagueProfile(league_id="x", season=2026, num_teams=12,
+                           roster_positions=("RB", "RB", "BN"),
+                           scoring_settings={}, budget=200)
+    picks = (
+        DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1,
+                 picked_by="u1", player_id="p0", amount=10),
+        DraftPick(pick_no=2, round=1, draft_slot=2, roster_id=1,
+                 picked_by="u1", player_id="p1", amount=10),
+        DraftPick(pick_no=3, round=1, draft_slot=3, roster_id=1,
+                 picked_by="u1", player_id="p2", amount=10),
+    )
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=3, picks=picks, budget=200)
+    valued = _valued(["p0", "p1", "p2"])  # descending VOR: p0 > p1 > p2
+    out = board.build_auction_board(league, state, valued,
+                                    {pid: 10.0 for pid in ("p0", "p1", "p2")})
+    row = next(r for r in out["rosters"] if r["roster_id"] == 1)
+    by_id = {p["player_id"]: p for p in row["players"]}
+    assert by_id["p0"]["starter"] is True
+    assert by_id["p1"]["starter"] is True
+    assert by_id["p2"]["starter"] is False
