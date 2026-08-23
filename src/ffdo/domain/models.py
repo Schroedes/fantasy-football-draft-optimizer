@@ -116,6 +116,12 @@ class ValuedPlayer:
 
 
 @dataclass(frozen=True, slots=True)
+class TeamProfile:
+    roster_id: int
+    display_name: str
+
+
+@dataclass(frozen=True, slots=True)
 class Session:
     """A connected Sleeper league/user/draft, as resolved by
     `ffdo.ingest.connect.resolve()` and persisted by `ffdo.api.session.SessionStore`.

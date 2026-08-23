@@ -206,6 +206,7 @@ Core dataclasses, all frozen:
 - `LeagueProfile` — teams, `roster_positions`, `scoring_settings`, budget
 - `DraftState` — type, picks so far, pick order, current pick, budgets remaining
 - `ValuedPlayer` — profile + projected points + VOR + tier + adjustment audit trail
+- `TeamProfile` — roster_id, display_name (§10.1)
 
 `ValuedPlayer` carries the audit trail deliberately: with no manual overrides, the
 user needs to see *why* a number is what it is.
@@ -240,7 +241,7 @@ stats, does not reach a draft decision.
 
 The layer stays, for two reasons: it is required for the user's other leagues
 (TE premium, bonus tiers, and 6-point passing TDs all have real projection
-inputs), and it is what makes §11's golden test possible. Deriving a projected
+inputs), and it is what makes §12's golden test possible. Deriving a projected
 fumble rate from historical data would recover the edge, but that is a model
 adjustment and belongs under §8's default-off, backtest-gated discipline rather
 than smuggled into ingest.
@@ -552,7 +553,94 @@ across all five historical drafts.
 Plus budget state: dollars left, slots left, $/slot vs league average. Board sorts
 by surplus (`adjusted $ − current bid`).
 
-## 10. Board
+## 10. Roster valuation
+
+*Added 2026-08-22, alongside the live roster ranking screen.* Same VOR the rest
+of the model produces; this layer asks a different question again — not "what's
+a player worth" or "when will he be gone," but "whose roster is actually best,
+right now, as it's being built." Applies identically to both draft formats,
+since VOR carries no format-specific pricing — one implementation serves both
+boards.
+
+### 10.1 Team identity
+
+`ingest/teams.py` adds two more documented endpoints, `/league/<id>/users` and
+`/league/<id>/rosters`, parsed into `TeamProfile(roster_id, display_name)`.
+Cached once per draft session, same tier as league settings (§4.2). Sourcing the
+full roster_id set from here — not from `state.picks` — is what lets a team with
+zero picks still appear on the leaderboard at 0 VOR from the first poll, rather
+than only appearing once they've made a pick.
+
+### 10.2 Starting-lineup VOR
+
+The greedy slot-fill in §6.4 answers "what does replacement level look like" by
+filling every team's lineup at once, `num_teams` deep, and reading off what's
+left over. Running the same fill for a single team's drafted players against
+that team's own `league.starting_slots`, and reading off what got **in** instead
+of what's left over, gives the headline number:
+
+```
+starting_vor(team) = Σ vor(p) for p assigned to a starting slot
+```
+
+Dedicated slots claim by-position first; FLEX/SUPER_FLEX slots then take the
+best remaining eligible player — exactly the §6.4 rule. The fill loop is
+extracted into a shared helper so both call sites (league-wide replacement,
+single-team lineup) stay identical by construction, not by discipline.
+
+A FLEX slot's occupant is credited to their own position, not a separate FLEX
+bucket, so the position breakdown is an exact partition of the headline number:
+
+```
+by_position(team)[pos] = Σ vor(p) for p assigned to a starting slot at `pos`
+Σ by_position(team).values() == starting_vor(team)          # always, by construction
+```
+
+Unfilled slots contribute zero. A team three picks into the draft shows partial
+value acquired so far, not a penalty for incompleteness.
+
+### 10.3 Bench VOR
+
+```
+bench_vor(team) = Σ vor(p) for p drafted by team, not assigned a starting slot
+```
+
+Reported as one aggregate per team — a secondary, lower-emphasis number next to
+`starting_vor`, not broken out by position. A team's actual bench composition is
+visible by expanding its row (§11), so the aggregate doesn't need to carry that
+detail too.
+
+### 10.4 Ranking and ties
+
+The leaderboard sorts by `starting_vor` descending, `bench_vor` descending as
+tiebreaker. Early in a draft most teams sit at zero `starting_vor`, so the
+tiebreak keeps ordering meaningful — a team already stockpiling value on the
+bench outranks one with nothing at all — rather than falling back to an
+arbitrary roster_id order.
+
+### 10.5 Exclusions
+
+Picks with no `roster_id` (commissioner/keeper artifacts) are excluded from
+every team's lineup fill, the same treatment `spent_by_roster` (§9.2) already
+gives them.
+
+### 10.6 API shape
+
+Added to the existing `/api/board` payload — no new endpoint, no separate poll
+cycle. A `rosters` array, present in both auction and snake responses:
+
+| Field | Meaning |
+|---|---|
+| `roster_id` | Sleeper roster id |
+| `team_name` | From §10.1; falls back to `Team {roster_id}` if unavailable |
+| `is_you` | True for the roster matching `FFDO_ROSTER_ID` |
+| `starting_vor` | §10.2 |
+| `bench_vor` | §10.3 |
+| `by_position` | `{QB, RB, WR, TE}` → VOR, per §10.2 |
+
+Sorted by `starting_vor` desc, `bench_vor` desc (§10.4).
+
+## 11. Board
 
 Auction is primary; snake is the secondary path.
 
@@ -566,10 +654,21 @@ thing on screen the user cannot compute in their head. Ranked board beneath it
 with VOR, tier, ADP, and P(survive to next pick). Run-detection banner when
 triggered.
 
+**Roster rankings panel.** *Added 2026-08-22.* A sidebar card beneath the
+nominated-player card, present on both board types — it doesn't depend on
+format, so it isn't duplicated per board. Rows: rank, team name, `starting_vor`,
+per-position VOR (QB/RB/WR/TE, colored to match the existing position palette),
+`bench_vor` in a lower-emphasis weight. The user's own team is highlighted the
+same way the nominated card marks its pinned state. Clicking a row expands that
+team's full roster — starters and bench, same table conventions as the main
+board — so the compact ranking never hides the underlying detail. Own internal
+scroll once the list runs past the visible height, same pattern as the main
+board's scroll region.
+
 Both refresh on a 3-second poll of the draft feed. No named pick anywhere; the
 "model's lean" badge exists but is disabled.
 
-## 11. Testing
+## 12. Testing
 
 - **Golden test** — rescore reproduces `pts_ppr` under standard PPR weights (§6.1).
 - **Fixture-based ingest tests** — recorded JSON from the real league; no network
@@ -582,8 +681,15 @@ Both refresh on a 3-second poll of the draft feed. No named pick anywhere; the
 - **Backtest harness** — runs as a test, not a notebook.
 - **Property tests** on engine purity: replacement level monotone in team count,
   VOR invariant to scoring rescale, dollar values summing to the league budget.
+- **Roster valuation property tests** *(added 2026-08-22)* — `by_position`
+  always sums to `starting_vor`; a roster with zero picks returns all-zero;
+  `bench_vor` never double-counts a starter.
+- **Roster valuation fixture test** *(added 2026-08-22)* — replay a completed
+  historical auction (reusing the auction-replay fixtures above) and assert the
+  resulting `starting_vor` ranking lands in a sane order relative to that
+  draft's actual, known-in-hindsight outcome.
 
-## 12. Build phases
+## 13. Build phases
 
 Draft is **2026-08-25**, three days out.
 
@@ -595,22 +701,25 @@ Draft is **2026-08-25**, three days out.
 | ④ | Auction board — **must be live for Aug 25** | Day 2 |
 | ⑤ | Snake: survival sim + CoW + snake board | Day 3 |
 | ⑥ | Backtest harness → promote or zero age/durability weights | Day 3, timeboxed |
+| ⑦ | Roster valuation engine + rankings panel (both boards) | Added 2026-08-22, before Aug 25 |
 
 Phase ④ is the hard commitment. Phases ⑤–⑥ serve the user's snake leagues and
 model validation; both degrade safely (⑥'s default-off weights mean skipping it
-ships a sound model).
+ships a sound model). Phase ⑦ is additive on top of an already-live board and
+does not touch ①–⑥.
 
 A preseason-final snapshot (§3.3) must be captured before 2026-09-09, after the
 draft and outside this phase plan.
 
-## 13. Risks
+## 14. Risks
 
 | Risk | Mitigation |
 |---|---|
 | Undocumented endpoint changes shape mid-draft | Adapter isolation (§4); local cache serves last-known-good; snapshot exists |
-| Contaminated data silently poisoning the model | Explicit `last_modified` rejection + guard test (§11); ADP-only backtest baseline |
+| Contaminated data silently poisoning the model | Explicit `last_modified` rejection + guard test (§12); ADP-only backtest baseline |
 | 2025 superflex skewing room calibration | Residual-against-own-season-baseline calibration (§7.2) |
 | Three-day timeline | Phase ④ is the only hard commitment; ⑤–⑥ degrade safely |
 | Age/durability adjustments turn out worthless | Default-off weights (§8); model is sound without them |
 | Simulation too slow for a 3s refresh | Vectorized numpy; budget is milliseconds against a seconds-scale target |
+| `/league/<id>/users`/`/rosters` shape drifts | Same adapter isolation as every other endpoint (§4); falls back to `Team {roster_id}` (§10.1, §10.6) |
 | No override escape hatch during the draft | Deliberate user choice; mitigated by the `ValuedPlayer` audit trail (§5) |

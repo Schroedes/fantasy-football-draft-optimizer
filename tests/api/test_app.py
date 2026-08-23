@@ -332,6 +332,13 @@ def test_get_board_real_league_mode_reports_is_mock_false_and_scores_a_player(
     FakeClient, calls = _recording_client({
         f"{V1}/draft/D123/picks": [],
         f"{V1}/draft/D123": _BOARD_REAL_LEAGUE_DRAFT_RAW,
+        # Registered before the shorter /league/L123 key below: PR #4's
+        # team-name fetch hits /league/L123/rosters and /league/L123/users,
+        # both of which contain "/league/L123" as a substring -- without
+        # these more-specific entries winning first, they'd incorrectly
+        # match the plain league fixture and crash teams_mod.parse().
+        f"{V1}/league/L123/rosters": [],
+        f"{V1}/league/L123/users": [],
         f"{V1}/league/L123": _BOARD_REAL_LEAGUE_RAW,
         f"{V1}/players/nfl": _BOARD_PLAYERS_RAW,
         f"{PROJECTIONS}/2025": _BOARD_PROJECTIONS_RAW,
