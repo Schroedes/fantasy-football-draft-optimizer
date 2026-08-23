@@ -34,3 +34,21 @@ def parse(raw: dict[str, Any]) -> dict[str, PlayerProfile]:
             active=bool(rec.get("active")),
         )
     return out
+
+
+def espn_id_index(raw: dict[str, Any]) -> dict[str, str]:
+    """player_id (Sleeper) -> espn_id, for every record that has one.
+
+    Coverage is real but incomplete -- verified 2026-08-23 against a real
+    snapshot: ~46% of active skill-position players, skewed toward
+    established veterans over recent draftees. See
+    docs/superpowers/specs/2026-08-23-espn-league-support-design.md §4.1.
+    """
+    out: dict[str, str] = {}
+    for player_id, rec in raw.items():
+        if not isinstance(rec, dict):
+            continue
+        espn_id = rec.get("espn_id")
+        if espn_id:
+            out[player_id] = str(espn_id)
+    return out

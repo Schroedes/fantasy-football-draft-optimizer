@@ -93,3 +93,28 @@ def test_find_roster_id_matches_on_owner_id():
 def test_find_roster_id_is_none_when_the_user_owns_no_roster():
     rosters = [{"roster_id": 1, "owner_id": "u1"}]
     assert league.find_roster_id(rosters, "stranger") is None
+
+
+def test_espn_id_index_maps_sleeper_id_to_espn_id_when_present():
+    raw = {"1": {"position": "RB", "espn_id": 3117251},
+          "2": {"position": "WR", "espn_id": None},
+          "3": {"position": "TE"}}
+    idx = players.espn_id_index(raw)
+    assert idx == {"1": "3117251"}
+
+
+def test_espn_id_index_skips_non_dict_records():
+    raw = {"1": {"position": "RB", "espn_id": 42}, "shard_count": 4}
+    idx = players.espn_id_index(raw)
+    assert idx == {"1": "42"}
+
+
+def test_espn_id_index_against_the_real_snapshot():
+    """Verified 2026-08-23 (see the ESPN design doc, §4.1): Jahmyr Gibbs
+    ("9221" in this snapshot, confirmed by test_players_parse_extracts_profile_fields
+    above) has no espn_id despite being an obviously-active, highly relevant
+    fantasy asset -- a real, documented coverage gap the crosswalk's
+    fallback exists for, not a bug in this function."""
+    idx = players.espn_id_index(snapshot.load("players_nfl"))
+    assert "9221" not in idx
+    assert len(idx) > 1000  # ~6,736 players verified to have espn_id
