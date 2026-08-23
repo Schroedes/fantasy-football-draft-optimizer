@@ -16,7 +16,7 @@ def _session(**overrides):
         roster_positions=("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX",
                           "BN", "BN", "BN", "BN", "BN"),
         scoring_settings={"rec": 0.5}, draft_type="auction",
-        draft_status="pre_draft", rounds=13,
+        draft_status="pre_draft", rounds=13, is_mock=False,
         connected_at="2026-08-22T00:00:00+00:00",
     )
     return Session(**{**base, **overrides})
@@ -143,6 +143,75 @@ def test_connect_endpoint_rejects_a_blank_league_id_or_username():
     res = client.post("/api/connect", json={"league_id": "  ", "username": "tester"})
 
     assert res.status_code == 400
+
+
+def test_connect_endpoint_rejects_both_league_id_and_draft_id_together():
+    client = TestClient(create_app())
+
+    res = client.post("/api/connect", json={
+        "league_id": "L1", "draft_id": "D1", "username": "tester"})
+
+    assert res.status_code == 400
+
+
+def test_connect_endpoint_rejects_neither_league_id_nor_draft_id():
+    client = TestClient(create_app())
+
+    res = client.post("/api/connect", json={"username": "tester"})
+
+    assert res.status_code == 400
+
+
+def test_connect_endpoint_routes_a_draft_id_payload_to_resolve_mock(monkeypatch):
+    fake_mock_session = _session(
+        league_id="", draft_id="1397145756879605760", is_mock=True)
+    captured = {}
+
+    def fake_resolve_mock(sleeper, draft_id, username):
+        captured["draft_id"] = draft_id
+        return fake_mock_session
+
+    monkeypatch.setattr("ffdo.ingest.connect.resolve_mock", fake_resolve_mock)
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeSleeperClient)
+
+    client = TestClient(create_app())
+    res = client.post("/api/connect", json={
+        "draft_id": "https://sleeper.app/draft/nfl/1397145756879605760",
+        "username": "schroedes"})
+
+    assert res.status_code == 200
+    assert res.json()["is_mock"] is True
+    # The share URL's trailing numeric ID must reach resolve_mock() bare,
+    # not the whole pasted URL.
+    assert captured["draft_id"] == "1397145756879605760"
+
+
+def test_connect_endpoint_accepts_a_bare_draft_id_without_a_url(monkeypatch):
+    captured = {}
+
+    def fake_resolve_mock(sleeper, draft_id, username):
+        captured["draft_id"] = draft_id
+        return _session(league_id="", is_mock=True)
+
+    monkeypatch.setattr("ffdo.ingest.connect.resolve_mock", fake_resolve_mock)
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeSleeperClient)
+
+    client = TestClient(create_app())
+    client.post("/api/connect", json={"draft_id": "1397145756879605760",
+                                      "username": "schroedes"})
+
+    assert captured["draft_id"] == "1397145756879605760"
+
+
+def test_league_id_is_empty_string_for_a_connected_mock_session(monkeypatch, tmp_path):
+    """get_board()'s mock-vs-real branch is driven entirely by whether
+    _league_id() returns a falsy value -- this is the one fact that whole
+    dispatch depends on, so it gets its own direct test."""
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session(league_id="", is_mock=True))
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    assert _league_id() == ""
 
 
 def test_connect_endpoint_saves_the_session_and_returns_it(monkeypatch, tmp_path):
