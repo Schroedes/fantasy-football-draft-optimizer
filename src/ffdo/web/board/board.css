@@ -147,6 +147,11 @@ body {
 .nom-stat .label { font-size: 9.5px; }
 .nom-stat b { font-family: var(--font-mono); font-size: 15px; font-weight: 600; }
 .nom-stat .accent { color: var(--accent); }
+.nom-next-best { display: flex; flex-direction: column; gap: 4px; }
+.nom-next-best .label { font-size: 9.5px; color: var(--faint); text-transform: uppercase; letter-spacing: 1px; }
+.nom-next-best-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.nom-next-best-name { font-size: 13px; font-weight: 500; }
+.nom-next-best-gap { font-family: var(--font-mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
 .lean-badge {
   align-self: flex-start;
   display: flex; align-items: center; gap: 6px;

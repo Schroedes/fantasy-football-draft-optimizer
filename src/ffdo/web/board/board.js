@@ -213,7 +213,8 @@ function nominate(p) {
 function renderNominated() {
   const el = document.getElementById("nominated");
   const body = el.querySelector(".nom-body");
-  const p = state.data && state.data.players.find(x => x.player_id === state.nominatedId);
+  const d = state.data;
+  const p = d && d.players.find(x => x.player_id === state.nominatedId);
 
   if (!p) {
     el.classList.remove("pinned");
@@ -231,6 +232,8 @@ function renderNominated() {
   const bidBlock = document.getElementById("bid-block");
   const hr = document.getElementById("nom-hr");
   const maxBidStat = document.getElementById("nom-maxbid-stat");
+  const posBudgetStat = document.getElementById("nom-posbudget-stat");
+  const nextBestEl = document.getElementById("nom-next-best");
   const isAuction = p.baseline !== undefined;
 
   document.getElementById("nom-baseline-label").textContent = isAuction ? "Baseline" : "Survival";
@@ -252,9 +255,38 @@ function renderNominated() {
     const positive = surplus >= 0;
     surplusEl.textContent = (positive ? "+$" : "−$") + Math.abs(surplus) + (positive ? " bargain" : " over value");
     surplusEl.className = "surplus " + (positive ? "bargain" : "over");
+
+    const posBudget = d.budget && d.budget.by_position && d.budget.by_position[p.position];
+    if (posBudget) {
+      posBudgetStat.hidden = false;
+      const ratio = posBudget.recommended > 0
+        ? Math.round((state.bid / posBudget.recommended) * 100) : 0;
+      document.getElementById("nom-posbudget").textContent =
+        `$${posBudget.recommended} / ${posBudget.slots_open} slot${posBudget.slots_open === 1 ? "" : "s"} · ${ratio}%`;
+    } else {
+      posBudgetStat.hidden = true;
+    }
+
+    const nextBest = d.players
+      .filter(x => x.position === p.position && !x.drafted && x.player_id !== p.player_id)
+      .sort((a, b) => b.vor - a.vor)[0];
+    if (nextBest) {
+      nextBestEl.hidden = false;
+      document.getElementById("nom-next-best-name").textContent = nextBest.name;
+      const vorGap = Math.round((p.vor - nextBest.vor) * 10) / 10;
+      const dollarGap = Math.round((p.adjusted - nextBest.adjusted) * 10) / 10;
+      const vorWord = vorGap >= 0 ? "lower" : "higher";
+      const dollarWord = dollarGap >= 0 ? "cheaper" : "pricier";
+      document.getElementById("nom-next-best-gap").textContent =
+        `${Math.abs(vorGap)} VOR ${vorWord} · $${Math.abs(dollarGap)} ${dollarWord}`;
+    } else {
+      nextBestEl.hidden = true;
+    }
   } else {
     document.getElementById("nom-baseline").textContent = `${Math.round((p.survival ?? 0) * 100)}%`;
     document.getElementById("nom-adjusted").textContent = p.position;
+    posBudgetStat.hidden = true;
+    nextBestEl.hidden = true;
   }
 }
 
