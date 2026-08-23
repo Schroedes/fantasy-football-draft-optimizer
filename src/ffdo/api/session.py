@@ -49,6 +49,9 @@ class SessionStore:
                 draft_status=raw["draft_status"],
                 rounds=raw["rounds"],
                 connected_at=raw["connected_at"],
+                provider=raw.get("provider", "sleeper"),
+                espn_s2=raw.get("espn_s2"),
+                swid=raw.get("swid"),
             )
         except (KeyError, TypeError):
             return None
@@ -71,6 +74,9 @@ class SessionStore:
             "draft_status": session.draft_status,
             "rounds": session.rounds,
             "connected_at": session.connected_at,
+            "provider": session.provider,
+            "espn_s2": session.espn_s2,
+            "swid": session.swid,
         }
         self._path.write_text(json.dumps(payload), encoding="utf-8")
         self._cached = session

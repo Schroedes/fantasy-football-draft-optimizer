@@ -1,3 +1,5 @@
+import json
+
 from ffdo.api.session import SessionStore
 from ffdo.domain.models import Session
 
@@ -67,3 +69,37 @@ def test_clear_deletes_the_file_and_resets_the_cache(tmp_path):
     store.clear()
     assert store.get() is None
     assert not path.exists()
+
+
+def test_save_then_get_round_trips_espn_provider_and_cookies(tmp_path):
+    store = SessionStore(tmp_path / "session.json")
+    session = _session(provider="espn", espn_s2="s2-value",
+                       swid="{00000004-0000-0000-0000-000000000000}")
+    store.save(session)
+    loaded = store.get()
+    assert loaded.provider == "espn"
+    assert loaded.espn_s2 == "s2-value"
+    assert loaded.swid == "{00000004-0000-0000-0000-000000000000}"
+
+
+def test_a_session_file_written_before_this_feature_loads_as_sleeper(tmp_path):
+    """A pre-existing data/session.json has no provider/espn_s2/swid keys at
+    all -- must load as a Sleeper session, not crash or silently misreport
+    the provider."""
+    path = tmp_path / "session.json"
+    old_style = {
+        "username": "tester", "user_id": "U1", "league_id": "L1", "draft_id": "D1",
+        "roster_id": 3, "league_name": "Test League", "season": 2026, "num_teams": 12,
+        "budget": 200,
+        "roster_positions": ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX",
+                             "BN", "BN", "BN", "BN", "BN"],
+        "scoring_settings": {"rec": 0.5}, "draft_type": "auction",
+        "draft_status": "pre_draft", "rounds": 13,
+        "connected_at": "2026-08-22T00:00:00+00:00",
+    }
+    path.write_text(json.dumps(old_style), encoding="utf-8")
+
+    loaded = SessionStore(path).get()
+    assert loaded.provider == "sleeper"
+    assert loaded.espn_s2 is None
+    assert loaded.swid is None
