@@ -110,10 +110,10 @@ body {
 
 /* ---- layout ---- */
 #layout { display: flex; gap: 18px; align-items: flex-start; }
+#sidebar { display: flex; flex-direction: column; gap: 18px; width: 320px; flex-shrink: 0; }
 
 /* ---- nominated card ---- */
 #nominated {
-  width: 320px;
   flex-shrink: 0;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -124,6 +124,35 @@ body {
   gap: 16px;
   min-height: 200px;
 }
+
+/* ---- roster rankings card ---- */
+#rosters {
+  flex-shrink: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.rosters-head h2 { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
+.rosters-sub { font-size: 11px; color: var(--faint); }
+#rosters-rows { display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; }
+.roster-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 4px; border-radius: 7px; cursor: pointer; }
+.roster-row:hover { background: var(--surface-2); }
+.roster-row.you { box-shadow: inset 3px 0 0 var(--accent); background: color-mix(in oklch, var(--accent) 8%, transparent); }
+.roster-line1 { display: flex; align-items: center; gap: 8px; }
+.roster-line2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-left: 26px; }
+.roster-rank { width: 18px; font-family: var(--font-mono); font-size: 11px; color: var(--faint); text-align: right; flex-shrink: 0; }
+.roster-name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.roster-total { font-family: var(--font-mono); font-size: 13px; font-weight: 700; width: 38px; text-align: right; flex-shrink: 0; }
+.roster-positions { display: flex; gap: 6px; flex-shrink: 0; }
+.roster-pos { font-family: var(--font-mono); font-size: 10px; width: 24px; text-align: center; }
+.roster-bench { font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); width: 32px; text-align: right; flex-shrink: 0; }
+.roster-detail { padding: 4px 4px 10px 26px; display: flex; flex-direction: column; gap: 3px; }
+.roster-detail-player { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; font-family: var(--font-mono); }
+.roster-detail-player.bench { color: var(--faint); }
 #nominated.pinned { border-color: var(--accent); }
 .nom-empty-msg { color: var(--faint); font-size: 13px; line-height: 1.5; }
 #nominated.pinned .nom-empty-msg { display: none; }
@@ -225,5 +254,5 @@ tr.tier-break td { border-top: 2px solid var(--border-strong); }
 
 @media (max-width: 900px) {
   #layout { flex-direction: column; }
-  #nominated { width: 100%; }
+  #sidebar { width: 100%; }
 }

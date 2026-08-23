@@ -118,6 +118,7 @@ def create_app() -> FastAPI:
     from ffdo.ingest import league as league_mod
     from ffdo.ingest import players as players_mod
     from ffdo.ingest import projections as proj_mod
+    from ffdo.ingest import teams as teams_mod
 
     players_cache = _TTLCache(ttl_seconds=24 * 3600)
     # Keyed by season rather than a single shared cache: the projections feed
@@ -128,9 +129,18 @@ def create_app() -> FastAPI:
     # `_projections_cache_for()` below. `players_cache` above does NOT need
     # this treatment -- the players feed is not season-scoped.
     projections_caches: dict[int, _TTLCache] = {}
+    # Same reasoning, keyed by league_id instead of season: team display
+    # names are league-scoped (`/league/<id>/rosters` + `/users`), so a
+    # single shared cache would keep serving one league's team names against
+    # another league's roster_ids after a league switch within the TTL
+    # window. Created lazily per league via `_teams_cache_for()` below.
+    teams_caches: dict[str, _TTLCache] = {}
 
     def _projections_cache_for(season: int) -> _TTLCache:
         return projections_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
+
+    def _teams_cache_for(league_id: str) -> _TTLCache:
+        return teams_caches.setdefault(league_id, _TTLCache(ttl_seconds=24 * 3600))
 
     def _load_players(sleeper: client_mod.SleeperClient) -> dict:
         return players_mod.parse(sleeper.get_json(f"{client_mod.V1}/players/nfl"))
@@ -143,14 +153,20 @@ def create_app() -> FastAPI:
                 "&position[]=WR&position[]=TE"),
             season)
 
-    def _warm_caches(season: int) -> None:
-        """Pre-populates the players/projections TTL caches in the
+    def _load_teams(sleeper: client_mod.SleeperClient, league_id: str):
+        return teams_mod.parse(
+            sleeper.get_json(f"{client_mod.V1}/league/{league_id}/rosters"),
+            sleeper.get_json(f"{client_mod.V1}/league/{league_id}/users"))
+
+    def _warm_caches(season: int, league_id: str) -> None:
+        """Pre-populates the players/projections/teams TTL caches in the
         background after a successful /api/connect, so the draft room's
-        first load doesn't pay for both fetches synchronously."""
+        first load doesn't pay for three fetches synchronously."""
         sleeper = client_mod.SleeperClient()
         try:
             players_cache.get(lambda: _load_players(sleeper))
             _projections_cache_for(season).get(lambda: _load_projections(sleeper, season))
+            _teams_cache_for(league_id).get(lambda: _load_teams(sleeper, league_id))
         finally:
             sleeper.close()
 
@@ -171,7 +187,7 @@ def create_app() -> FastAPI:
             sleeper.close()
 
         _SESSION_STORE.save(session)
-        background_tasks.add_task(_warm_caches, session.season)
+        background_tasks.add_task(_warm_caches, session.season, session.league_id)
         return asdict(session)
 
     @app.get("/api/session")
@@ -204,6 +220,7 @@ def create_app() -> FastAPI:
             state = draft_mod.parse(
                 sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}"),
                 sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}/picks"))
+            teams = _teams_cache_for(league_id).get(lambda: _load_teams(sleeper, league_id))
         finally:
             sleeper.close()
 
@@ -231,7 +248,7 @@ def create_app() -> FastAPI:
         if state.draft_type == "auction":
             baseline = auction.baseline_prices(valued, lg)
             return board_mod.build_auction_board(
-                lg, state, valued, baseline, roster_id=_roster_id())
+                lg, state, valued, baseline, roster_id=_roster_id(), teams=teams)
 
         from ffdo.engine import market
         available = {pid for pid in valued if pid not in state.drafted_player_ids()}
@@ -240,7 +257,8 @@ def create_app() -> FastAPI:
         picks_until = lg.num_teams  # conservative: one full round
         survival = market.simulate_survival(adp_means, available, picks_until)
         cow = market.cost_of_waiting(valued, survival, available)
-        return board_mod.build_snake_board(lg, state, valued, survival, cow)
+        return board_mod.build_snake_board(
+            lg, state, valued, survival, cow, roster_id=_roster_id(), teams=teams)
 
     # Static mounts MUST be registered last: StaticFiles("/") matches any
     # path under it, so routes declared after this point would be shadowed.

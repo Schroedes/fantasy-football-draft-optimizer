@@ -6,6 +6,7 @@ let state = {
   sortDir: "desc",
   nominatedId: null,
   bid: 0,
+  expandedRoster: null,
   data: null,
 };
 
@@ -78,6 +79,7 @@ function render() {
   renderMoneyHeader();
   renderTable();
   renderNominated();
+  renderRosters();
   renderSortHeaders();
 }
 
@@ -290,6 +292,48 @@ function renderNominated() {
   }
 }
 
+function renderRosters() {
+  const d = state.data;
+  const el = document.getElementById("rosters-rows");
+  if (!d || !d.rosters) { el.innerHTML = ""; return; }
+
+  el.innerHTML = d.rosters.map((r, i) => {
+    const posCells = ["QB", "RB", "WR", "TE"].map(pos => {
+      const v = r.by_position[pos];
+      const posColor = `var(--${pos.toLowerCase()}, var(--muted))`;
+      return `<span class="roster-pos" style="color:${posColor}">${v !== undefined ? Math.round(v) : "—"}</span>`;
+    }).join("");
+
+    const expanded = state.expandedRoster === r.roster_id;
+    const detail = !expanded ? "" : `<div class="roster-detail">${
+      r.players.length === 0
+        ? '<div class="roster-detail-player bench">No picks yet.</div>'
+        : r.players.map(p => `<div class="roster-detail-player${p.starter ? "" : " bench"}">
+            <span>${escapeHtml(p.name)} · ${p.position}</span>
+            <span>${p.vor}</span>
+          </div>`).join("")
+    }</div>`;
+
+    const bench = Math.round(r.bench_vor);
+    const benchLabel = (bench >= 0 ? "+" : "") + bench;
+
+    return `<div>
+      <div class="roster-row${r.is_you ? " you" : ""}" data-roster-id="${r.roster_id}">
+        <div class="roster-line1">
+          <span class="roster-rank">${i + 1}</span>
+          <span class="roster-name">${escapeHtml(r.team_name)}</span>
+          <span class="roster-total">${Math.round(r.starting_vor)}</span>
+        </div>
+        <div class="roster-line2">
+          <div class="roster-positions">${posCells}</div>
+          <span class="roster-bench">${benchLabel}</span>
+        </div>
+      </div>
+      ${detail}
+    </div>`;
+  }).join("");
+}
+
 function renderSortHeaders() {
   document.querySelectorAll("#board th[data-sort]").forEach(th => {
     th.classList.toggle("sorted", th.dataset.sort === state.sortKey);
@@ -359,6 +403,14 @@ document.querySelectorAll(".bid-controls button[data-step]").forEach(b =>
     state.bid = Math.max(1, state.bid + delta);
     renderNominated();
   }));
+
+document.getElementById("rosters-rows").addEventListener("click", e => {
+  const row = e.target.closest(".roster-row");
+  if (!row) return;
+  const rid = Number(row.dataset.rosterId);
+  state.expandedRoster = state.expandedRoster === rid ? null : rid;
+  renderRosters();
+});
 
 refresh();
 setInterval(refresh, 3000);
