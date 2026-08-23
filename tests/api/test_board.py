@@ -148,3 +148,47 @@ def test_board_includes_positional_budget_recommendation():
              + by_pos["WR"]["recommended"] + by_pos["TE"]["recommended"]
              + by_pos["flex_bench_reserve"])
     assert total == pytest.approx(out["budget"]["your_dollars_left"], abs=0.5)
+
+
+def test_positional_budget_slot_invariant_holds_for_a_real_roster():
+    """The strip's per-position slot counts and the header's 'your slots
+    left' stat render six inches apart on the same page -- nothing
+    previously checked that they agree for a roster with real picks."""
+    league = LeagueProfile(league_id="x", season=2025, num_teams=12,
+                           roster_positions=("QB", "RB", "RB", "WR", "WR", "TE",
+                                            "FLEX", "BN", "BN"),
+                           scoring_settings={}, budget=200)
+    picks = (
+        DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1, picked_by="u1",
+                 player_id="rb1", amount=50),
+    )
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=9, budget=200, picks=picks)
+
+    def _player(pid, pos, vor):
+        prof = PlayerProfile(player_id=pid, first_name="P", last_name=pid,
+                             position=pos, team="X", age=25, years_exp=3,
+                             injury_status=None, active=True)
+        return ValuedPlayer(profile=prof, projected_points=0.0,
+                            adjusted_points=0.0, vor=vor, tier=1,
+                            adjustments={})
+
+    valued = {
+        "rb1": _player("rb1", "RB", 80.0),
+        "qb1": _player("qb1", "QB", 50.0),
+        "rb2": _player("rb2", "RB", 60.0),
+        "wr1": _player("wr1", "WR", 90.0),
+        "wr2": _player("wr2", "WR", 85.0),
+        "te1": _player("te1", "TE", 30.0),
+    }
+    baseline = {pid: max(1.0, vp.vor) for pid, vp in valued.items()}
+
+    out = board.build_auction_board(league, state, valued, baseline, roster_id=1)
+
+    by_pos = out["budget"]["by_position"]
+    slots_accounted = (
+        sum(by_pos[p]["slots_open"] for p in ("QB", "RB", "WR", "TE"))
+        + by_pos["flex_bench_slots_open"])
+    assert slots_accounted == out["budget"]["your_slots_left"]
+    # roster 1 already drafted 1 of 2 dedicated RB slots
+    assert by_pos["RB"]["slots_open"] == 1

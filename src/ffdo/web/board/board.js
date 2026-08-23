@@ -260,9 +260,9 @@ function renderNominated() {
     if (posBudget) {
       posBudgetStat.hidden = false;
       const ratio = posBudget.recommended > 0
-        ? Math.round((state.bid / posBudget.recommended) * 100) : 0;
+        ? `${Math.round((state.bid / posBudget.recommended) * 100)}%` : "—";
       document.getElementById("nom-posbudget").textContent =
-        `$${posBudget.recommended} / ${posBudget.slots_open} slot${posBudget.slots_open === 1 ? "" : "s"} · ${ratio}%`;
+        `$${posBudget.recommended} / ${posBudget.slots_open} slot${posBudget.slots_open === 1 ? "" : "s"} · ${ratio}`;
     } else {
       posBudgetStat.hidden = true;
     }
