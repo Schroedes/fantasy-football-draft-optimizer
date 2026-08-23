@@ -161,6 +161,47 @@ applies to its market-calibration fallback (§7.2). Team is deliberately
 where the two providers' team fields are most likely to disagree, and excluding
 on team mismatch would silently drop players mid-relevance.
 
+### 4.2a Where `espn_players` actually comes from — and a second, distinct ID table
+
+**Discovered live, 2026-08-23**, while working out exactly how `build()`'s
+`espn_players` argument gets populated: a draft pick in `mDraftDetail` carries
+only a bare `playerId` integer, no embedded name or position — even once a
+pick is real, not a `-1` placeholder (§8.1). So `espn_players` cannot come
+from the draft's own picks; it has to come from ESPN's player-pool endpoint,
+fetched independently (cacheable, parallel to how Sleeper's global
+`/players/nfl` isn't scoped to any one draft either):
+
+```
+GET /apis/v3/games/ffl/seasons/{season}/players?view=kona_player_info
+X-Fantasy-Filter: {"filterActive":{"value":true},"filterSlotIds":{"value":[16]}}
+```
+
+(that exact filter, restricted to `lineupSlotId` 16, is what was used to
+verify §4.4's team-defense table against 32 real D/ST entries; fetching the
+full offense+K+DEF pool needs broadening `filterSlotIds` to every rostered
+slot, e.g. `[0,2,4,6,16,17]` — plausible by the same mechanism, but not yet
+confirmed at that broader scope. Confirming the request that reliably
+returns the *complete* pool, not a truncated page of it, is a first
+implementation step.)
+
+Each entry in that response is **flat** (`id`, `fullName`,
+`defaultPositionId`, `proTeamId` directly on the object, no wrapper) and
+uses **its own numbering for `defaultPositionId` — not the same table as
+`lineupSlotId`** (§6). This is a second, independently-confirmed table,
+verified against six real players by name (Nick Chubb, DeAndre Hopkins,
+Travis Vokolek, Geno Smith, Dustin Hopkins, and the Falcons D/ST):
+
+```python
+ESPN_PLAYER_POSITION_ID_TO_POSITION: dict[int, str] = {
+    1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K", 16: "DEF",
+}
+```
+
+Do not reuse `ESPN_SLOT_ID_TO_POSITION` (§6) for this — the two tables
+share some values by coincidence (`2` happens to mean `RB` in both) but
+diverge elsewhere (`WR` is slot `4` but position `3`; `TE` is slot `6` but
+position `4`), and conflating them silently mis-identifies players.
+
 ### 4.3 Interface
 
 ```python
@@ -173,10 +214,10 @@ def build(
     espn_id_index: Mapping[str, str],           # sleeper_id -> espn_id
     profiles: Mapping[str, PlayerProfile],       # sleeper_id -> profile
     espn_players: Mapping[str, tuple[str, str]], # espn_id -> (full_name, position),
-                                                  # read directly off this league's
-                                                  # draft/roster response -- not a new
-                                                  # domain dataclass, just the two fields
-                                                  # the fallback match needs
+                                                  # from ESPN's player-pool endpoint
+                                                  # (see §4.2a) -- not a new domain
+                                                  # dataclass, just the two fields the
+                                                  # fallback match needs
 ) -> Crosswalk: ...
 ```
 
