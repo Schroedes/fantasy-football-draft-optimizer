@@ -80,7 +80,8 @@ def test_session_is_frozen_and_holds_the_connected_leagues_identity():
         roster_positions=("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX",
                           "BN", "BN", "BN", "BN", "BN"),
         scoring_settings={"rec": 0.5}, draft_type="auction",
-        draft_status="pre_draft", connected_at="2026-08-22T00:00:00+00:00",
+        draft_status="pre_draft", rounds=13,
+        connected_at="2026-08-22T00:00:00+00:00",
     )
     assert session.roster_id == 3
     assert session.scoring_settings == {"rec": 0.5}

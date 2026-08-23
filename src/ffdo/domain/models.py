@@ -133,4 +133,5 @@ class Session:
     scoring_settings: Mapping[str, float]
     draft_type: str
     draft_status: str
+    rounds: int
     connected_at: str

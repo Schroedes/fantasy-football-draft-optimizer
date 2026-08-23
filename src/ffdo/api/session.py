@@ -47,6 +47,7 @@ class SessionStore:
                 scoring_settings=raw["scoring_settings"],
                 draft_type=raw["draft_type"],
                 draft_status=raw["draft_status"],
+                rounds=raw["rounds"],
                 connected_at=raw["connected_at"],
             )
         except (KeyError, TypeError):
@@ -68,6 +69,7 @@ class SessionStore:
             "scoring_settings": dict(session.scoring_settings),
             "draft_type": session.draft_type,
             "draft_status": session.draft_status,
+            "rounds": session.rounds,
             "connected_at": session.connected_at,
         }
         self._path.write_text(json.dumps(payload), encoding="utf-8")

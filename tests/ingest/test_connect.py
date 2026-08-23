@@ -62,7 +62,37 @@ def test_resolve_returns_a_fully_populated_session():
     assert session.scoring_settings == {"rec": 0.5, "pass_td": 4}
     assert session.draft_type == "auction"
     assert session.draft_status == "pre_draft"
+    assert session.rounds == 13
     assert session.connected_at == "2026-08-22T00:00:00+00:00"
+
+
+def test_resolve_reads_rounds_from_the_draft_metas_settings():
+    """`Session.rounds` must come from the draft's actual round count
+    (`draft_mod.parse(draft_meta, []).rounds`), not be derived from roster
+    size -- these diverge for keeper/supplemental drafts. Bumping
+    DRAFT_META's settings.rounds here (independent of LEAGUE_RAW's 13-slot
+    roster_positions) proves the value is actually threaded through rather
+    than coincidentally matching roster size."""
+    draft_meta_different_rounds = {
+        **DRAFT_META, "settings": {**DRAFT_META["settings"], "rounds": 16},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url.endswith("/league/L1/rosters"):
+            return httpx.Response(200, json=ROSTERS_RAW)
+        if url.endswith("/league/L1/drafts"):
+            return httpx.Response(200, json=DRAFTS_RAW)
+        if url.endswith("/league/L1"):
+            return httpx.Response(200, json=LEAGUE_RAW)
+        if url.endswith("/draft/D1"):
+            return httpx.Response(200, json=draft_meta_different_rounds)
+        if url.endswith("/user/tester"):
+            return httpx.Response(200, json=USER_RAW)
+        raise AssertionError(f"unexpected URL: {url}")
+
+    session = connect.resolve(_client(handler), "L1", "tester")
+    assert session.rounds == 16
 
 
 def test_resolve_falls_back_to_the_drafts_budget_when_league_settings_omit_it():

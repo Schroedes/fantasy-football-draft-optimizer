@@ -120,7 +120,17 @@ def create_app() -> FastAPI:
     from ffdo.ingest import projections as proj_mod
 
     players_cache = _TTLCache(ttl_seconds=24 * 3600)
-    projections_cache = _TTLCache(ttl_seconds=3600)
+    # Keyed by season rather than a single shared cache: the projections feed
+    # is season-specific (`_load_projections` fetches a season-scoped URL),
+    # so a single cache would serve a stale season's payload after a league
+    # switch within the TTL window (e.g. connect a 2025 league, then a 2026
+    # league within the hour). Created lazily per season via
+    # `_projections_cache_for()` below. `players_cache` above does NOT need
+    # this treatment -- the players feed is not season-scoped.
+    projections_caches: dict[int, _TTLCache] = {}
+
+    def _projections_cache_for(season: int) -> _TTLCache:
+        return projections_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
 
     def _load_players(sleeper: client_mod.SleeperClient) -> dict:
         return players_mod.parse(sleeper.get_json(f"{client_mod.V1}/players/nfl"))
@@ -140,7 +150,7 @@ def create_app() -> FastAPI:
         sleeper = client_mod.SleeperClient()
         try:
             players_cache.get(lambda: _load_players(sleeper))
-            projections_cache.get(lambda: _load_projections(sleeper, season))
+            _projections_cache_for(season).get(lambda: _load_projections(sleeper, season))
         finally:
             sleeper.close()
 
@@ -172,10 +182,12 @@ def create_app() -> FastAPI:
     @app.get("/api/readiness")
     def get_readiness() -> dict:
         session = _SESSION_STORE.get()
+        projections_synced = (
+            session is not None and _projections_cache_for(session.season).has_value())
         return {
             "league_draft": "synced" if session is not None else "pending",
             "players": "synced" if players_cache.has_value() else "pending",
-            "projections": "synced" if projections_cache.has_value() else "pending",
+            "projections": "synced" if projections_synced else "pending",
         }
 
     @app.get("/api/board")
@@ -187,7 +199,7 @@ def create_app() -> FastAPI:
             lg = league_mod.parse(
                 sleeper.get_json(f"{client_mod.V1}/league/{league_id}"))
             profiles = players_cache.get(lambda: _load_players(sleeper))
-            proj, adp_data = projections_cache.get(
+            proj, adp_data = _projections_cache_for(lg.season).get(
                 lambda: _load_projections(sleeper, lg.season))
             state = draft_mod.parse(
                 sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}"),

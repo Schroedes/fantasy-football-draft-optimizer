@@ -6,13 +6,17 @@ let state = {
 };
 
 async function fetchSession() {
-  const res = await fetch("/api/session");
-  const session = await res.json();
-  if (session) {
-    state.session = session;
-    state.format = session.draft_type;
-    showConnected();
-    pollReadiness();
+  try {
+    const res = await fetch("/api/session");
+    const session = await res.json();
+    if (session) {
+      state.session = session;
+      state.format = session.draft_type;
+      showConnected();
+      pollReadiness();
+    }
+  } catch (err) {
+    console.error("fetchSession failed", err);
   }
 }
 
@@ -31,7 +35,7 @@ function renderConnected() {
   document.getElementById("status-badge").textContent = (s.draft_status || "").toUpperCase();
   document.getElementById("stat-teams").textContent = s.num_teams;
   document.getElementById("stat-budget").textContent = s.budget !== null ? `$${s.budget}` : "—";
-  document.getElementById("stat-rounds").textContent = s.roster_positions ? s.roster_positions.length : "—";
+  document.getElementById("stat-rounds").textContent = s.rounds || "—";
   document.getElementById("stat-format").textContent = s.draft_type === "auction" ? "Auction" : "Snake";
 
   const positions = s.roster_positions || [];
@@ -69,13 +73,22 @@ document.getElementById("enter-btn").addEventListener("click", () => {
 });
 
 async function pollReadiness() {
-  const res = await fetch("/api/readiness");
-  const r = await res.json();
-  renderReadiness(r);
-
   if (state.readinessTimer) clearTimeout(state.readinessTimer);
-  const allSynced = r.league_draft === "synced" && r.players === "synced" && r.projections === "synced";
-  if (!allSynced) {
+
+  try {
+    const res = await fetch("/api/readiness");
+    const r = await res.json();
+    renderReadiness(r);
+
+    const allSynced = r.league_draft === "synced" && r.players === "synced" && r.projections === "synced";
+    if (!allSynced) {
+      state.readinessTimer = setTimeout(pollReadiness, 1500);
+    }
+  } catch (err) {
+    console.error("pollReadiness failed", err);
+    // A transient network failure must not permanently kill the
+    // self-rescheduling poll loop -- keep retrying just like a
+    // successful-but-still-pending poll would.
     state.readinessTimer = setTimeout(pollReadiness, 1500);
   }
 }
@@ -118,7 +131,7 @@ async function connect() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ league_id: leagueId, username }),
     });
-    const body = await res.json();
+    const body = await res.json().catch(() => ({}));
     if (!res.ok) {
       errorEl.textContent = body.detail || "Could not connect to that league.";
       errorEl.hidden = false;

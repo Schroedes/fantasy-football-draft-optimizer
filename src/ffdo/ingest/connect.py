@@ -80,5 +80,6 @@ def resolve(
         scoring_settings=league.scoring_settings,
         draft_type=state.draft_type,
         draft_status=state.status,
+        rounds=state.rounds,
         connected_at=now().isoformat(),
     )
