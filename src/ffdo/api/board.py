@@ -9,6 +9,24 @@ from ffdo.engine import auction
 from ffdo.engine import roster as roster_engine
 
 
+def build_live_nomination(state: DraftState) -> dict | None:
+    """Whoever Sleeper says is on the block right now, or None.
+
+    Split out from `build_auction_board` so the fast nomination/bid poll
+    (see `/api/board/live`) can compute this without paying for the full
+    valuation rebuild that endpoint's heavier sibling does -- nomination
+    and bid come straight off `state`, not off `valued`/`baseline`.
+    """
+    if state.nominated_player_id is None:
+        return None
+    # Sleeper keeps reporting the last nomination for a beat after the
+    # player sells -- surface it only while he's still actually available,
+    # so the board never shows a stale "on the block" player as live.
+    if state.nominated_player_id in state.drafted_player_ids():
+        return None
+    return {"player_id": state.nominated_player_id, "bid": state.current_bid}
+
+
 def _build_rosters_payload(
     league,
     state: DraftState,
@@ -115,19 +133,9 @@ def build_auction_board(
         })
     rows.sort(key=lambda r: r["vor"], reverse=True)
 
-    # Sleeper keeps reporting the last nomination for a beat after the
-    # player sells -- surface it only while he's still actually available,
-    # so the board never shows a stale "on the block" player as live.
-    live_nomination = None
-    if state.nominated_player_id is not None and state.nominated_player_id not in drafted:
-        live_nomination = {
-            "player_id": state.nominated_player_id,
-            "bid": state.current_bid,
-        }
-
     return {
         "format": "auction",
-        "live_nomination": live_nomination,
+        "live_nomination": build_live_nomination(state),
         "inflation": round(factor, 3),
         "budget": {
             "total": league.num_teams * league.budget,

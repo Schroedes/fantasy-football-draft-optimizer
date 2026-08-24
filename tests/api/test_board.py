@@ -154,6 +154,12 @@ def test_live_nomination_is_suppressed_once_the_player_is_already_drafted():
     assert out["live_nomination"] is None
 
 
+def test_build_live_nomination_returns_none_when_nothing_is_on_the_block():
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=14, budget=200, picks=())
+    assert board.build_live_nomination(state) is None
+
+
 def test_healthz_returns_ok():
     from fastapi.testclient import TestClient
     from ffdo.api.app import create_app

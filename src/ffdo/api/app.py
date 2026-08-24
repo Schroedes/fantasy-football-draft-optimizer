@@ -316,6 +316,28 @@ def create_app() -> FastAPI:
             "projections": "synced" if projections_synced else "pending",
         }
 
+    @app.get("/api/board/live")
+    def get_board_live() -> dict:
+        """Just the nomination/bid, at the cost of the two Sleeper calls that
+        actually carry them -- draft meta and picks -- skipping the league
+        fetch and the full scoring/VOR/baseline/roster rebuild that
+        `/api/board` does. Polled every second (see board.js) so an auction's
+        split-second bidding tracks live without waiting on the heavier
+        endpoint's multi-second valuation recompute.
+        """
+        draft_id = _draft_id()
+        sleeper = client_mod.SleeperClient()
+        try:
+            draft_meta = sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}")
+            picks_raw = sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}/picks")
+        finally:
+            sleeper.close()
+        state = draft_mod.parse(draft_meta, picks_raw)
+        return {
+            "live_nomination": board_mod.build_live_nomination(state),
+            "picks_made": len(state.picks),
+        }
+
     @app.get("/api/board")
     def get_board() -> dict:
         session = _SESSION_STORE.get()
