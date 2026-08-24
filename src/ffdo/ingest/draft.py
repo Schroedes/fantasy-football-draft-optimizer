@@ -16,6 +16,7 @@ def _as_int(value: Any) -> int | None:
 
 def parse(meta: dict[str, Any], picks: list[dict[str, Any]]) -> DraftState:
     settings = meta.get("settings") or {}
+    metadata = meta.get("metadata") or {}
     parsed = tuple(
         DraftPick(
             pick_no=int(p["pick_no"]),
@@ -37,4 +38,6 @@ def parse(meta: dict[str, Any], picks: list[dict[str, Any]]) -> DraftState:
         rounds=int(settings.get("rounds", 0)),
         budget=settings.get("budget"),
         picks=parsed,
+        nominated_player_id=metadata.get("nominated_player_id") or None,
+        current_bid=_as_int(metadata.get("highest_offer")),
     )
