@@ -80,7 +80,7 @@ def test_session_is_frozen_and_holds_the_connected_leagues_identity():
         roster_positions=("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX",
                           "BN", "BN", "BN", "BN", "BN"),
         scoring_settings={"rec": 0.5}, draft_type="auction",
-        draft_status="pre_draft", rounds=13,
+        draft_status="pre_draft", rounds=13, is_mock=False,
         connected_at="2026-08-22T00:00:00+00:00",
     )
     assert session.roster_id == 3
@@ -97,7 +97,7 @@ def test_session_defaults_provider_to_sleeper_with_no_espn_credentials():
         roster_positions=("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX",
                           "BN", "BN", "BN", "BN", "BN"),
         scoring_settings={"rec": 0.5}, draft_type="auction",
-        draft_status="pre_draft", rounds=13,
+        draft_status="pre_draft", rounds=13, is_mock=False,
         connected_at="2026-08-22T00:00:00+00:00",
     )
     assert session.provider == "sleeper"
@@ -114,7 +114,7 @@ def test_session_accepts_espn_provider_and_cookies():
         roster_positions=("QB", "RB", "RB", "WR", "WR", "TE", "FLEX",
                           "DEF", "K", "BN", "BN", "BN", "BN", "BN", "BN", "IR"),
         scoring_settings={"pass_yd": 0.04}, draft_type="snake",
-        draft_status="pre_draft", rounds=15,
+        draft_status="pre_draft", rounds=15, is_mock=False,
         connected_at="2026-08-23T00:00:00+00:00",
         provider="espn", espn_s2="s2-value",
         swid="{00000004-0000-0000-0000-000000000000}",
@@ -122,6 +122,22 @@ def test_session_accepts_espn_provider_and_cookies():
     assert session.provider == "espn"
     assert session.espn_s2 == "s2-value"
     assert session.swid == "{00000004-0000-0000-0000-000000000000}"
+
+
+def test_session_is_mock_defaults_to_nothing_it_must_be_explicit():
+    """is_mock has no default -- every Session construction site must say
+    explicitly whether it's a real league or a mock draft, the same way
+    `rounds` was made required rather than guessable."""
+    with pytest.raises(TypeError):
+        Session(
+            username="tester", user_id="U1", league_id="L1", draft_id="D1",
+            roster_id=3, league_name="Test League", season=2026, num_teams=12,
+            budget=200,
+            roster_positions=("QB", "BN"),
+            scoring_settings={"rec": 0.5}, draft_type="auction",
+            draft_status="pre_draft", rounds=13,
+            connected_at="2026-08-22T00:00:00+00:00",
+        )
 
 
 def test_draft_state_reports_spend_per_roster():

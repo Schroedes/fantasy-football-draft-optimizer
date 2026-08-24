@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -113,6 +114,17 @@ class _TTLCache:
         return self._value is not None
 
 
+_TRAILING_DRAFT_ID_RE = re.compile(r"(\d+)/?$")
+
+
+def _extract_draft_id(value: str) -> str:
+    """Accepts either a bare draft ID or a pasted share URL like
+    https://sleeper.app/draft/nfl/1397145756879605760 -- the trailing digit
+    run is the ID either way."""
+    match = _TRAILING_DRAFT_ID_RE.search(value)
+    return match.group(1) if match else value
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="ffdo")
 
@@ -126,6 +138,7 @@ def create_app() -> FastAPI:
     from ffdo.ingest import connect as connect_mod
     from ffdo.ingest import draft as draft_mod
     from ffdo.ingest import league as league_mod
+    from ffdo.ingest import mock_draft as mock_draft_mod
     from ffdo.ingest import players as players_mod
     from ffdo.ingest import projections as proj_mod
     from ffdo.ingest import teams as teams_mod
@@ -259,14 +272,23 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
             league_id = str(payload.get("league_id", "")).strip()
+            draft_id_input = str(payload.get("draft_id", "")).strip()
             username = str(payload.get("username", "")).strip()
-            if not league_id or not username:
+
+            if bool(league_id) == bool(draft_id_input):
                 raise HTTPException(
-                    status_code=400, detail="League ID and username are required")
+                    status_code=400,
+                    detail="Provide exactly one of league_id or draft_id")
+            if not username:
+                raise HTTPException(status_code=400, detail="Username is required")
 
             sleeper = client_mod.SleeperClient()
             try:
-                session = connect_mod.resolve(sleeper, league_id, username)
+                if league_id:
+                    session = connect_mod.resolve(sleeper, league_id, username)
+                else:
+                    session = connect_mod.resolve_mock(
+                        sleeper, _extract_draft_id(draft_id_input), username)
             except connect_mod.ConnectError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             finally:
@@ -305,6 +327,10 @@ def create_app() -> FastAPI:
                     status_code=400,
                     detail="No connected ESPN session -- connect from the main screen first")
 
+            # ESPN's snake-only MVP has no mock-draft equivalent, so this
+            # branch is never a mock draft.
+            is_mock = False
+
             sleeper = client_mod.SleeperClient()
             try:
                 profiles, espn_id_index = players_cache.get(lambda: _load_players(sleeper))
@@ -336,17 +362,35 @@ def create_app() -> FastAPI:
         else:
             league_id = _league_id()
             draft_id = _draft_id()
+            is_mock = not league_id
             sleeper = client_mod.SleeperClient()
             try:
-                lg = league_mod.parse(
-                    sleeper.get_json(f"{client_mod.V1}/league/{league_id}"))
+                if is_mock:
+                    draft_meta = sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}")
+                    try:
+                        lg = mock_draft_mod.build_league_profile(draft_meta)
+                    except mock_draft_mod.MockDraftError as exc:
+                        raise HTTPException(status_code=400, detail=str(exc)) from exc
+                    picks_raw = mock_draft_mod.backfill_roster_ids(
+                        sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}/picks"),
+                        draft_meta)
+                else:
+                    lg = league_mod.parse(
+                        sleeper.get_json(f"{client_mod.V1}/league/{league_id}"))
+                    draft_meta = sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}")
+                    picks_raw = sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}/picks")
+
                 profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
                 proj, adp_data = _projections_cache_for(lg.season).get(
                     lambda: _load_projections(sleeper, lg.season))
-                state = draft_mod.parse(
-                    sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}"),
-                    sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}/picks"))
-                teams = _teams_cache_for(league_id).get(lambda: _load_teams(sleeper, league_id))
+                state = draft_mod.parse(draft_meta, picks_raw)
+                # Mock drafts have no /league/<id>/rosters or /users to derive
+                # team display names from -- board.py's rosters payload already
+                # falls back to "Team {roster_id}" when `teams` is None, which
+                # is exactly the right behavior here (no separate mock-specific
+                # naming logic needed).
+                teams = (None if is_mock else
+                         _teams_cache_for(league_id).get(lambda: _load_teams(sleeper, league_id)))
             finally:
                 sleeper.close()
 
@@ -371,20 +415,34 @@ def create_app() -> FastAPI:
         points = _active_only(points, profiles)
         valued = vor.assign_tiers(vor.compute(points, profiles, lg))
 
+        if is_mock:
+            # draft_order (and therefore roster_id) can only appear AFTER
+            # connecting, so it must be re-resolved live from the same
+            # draft_meta fetched above every poll -- never trusted from the
+            # persisted session's static roster_id.
+            session = _SESSION_STORE.get()
+            roster_id = (mock_draft_mod.resolve_roster_id(draft_meta, session.user_id)
+                        if session is not None else None)
+        else:
+            roster_id = _roster_id()
+
         if state.draft_type == "auction":
             baseline = auction.baseline_prices(valued, lg)
-            return board_mod.build_auction_board(
-                lg, state, valued, baseline, roster_id=_roster_id(), teams=teams)
+            board = board_mod.build_auction_board(
+                lg, state, valued, baseline, roster_id=roster_id, teams=teams)
+        else:
+            from ffdo.engine import market
+            available = {pid for pid in valued if pid not in state.drafted_player_ids()}
+            adp_means = {pid: a.adp["half_ppr"] for pid, a in adp_data.items()
+                        if a.adp.get("half_ppr", 999) < 999}
+            picks_until = lg.num_teams  # conservative: one full round
+            survival = market.simulate_survival(adp_means, available, picks_until)
+            cow = market.cost_of_waiting(valued, survival, available)
+            board = board_mod.build_snake_board(
+                lg, state, valued, survival, cow, roster_id=roster_id, teams=teams)
 
-        from ffdo.engine import market
-        available = {pid for pid in valued if pid not in state.drafted_player_ids()}
-        adp_means = {pid: a.adp["half_ppr"] for pid, a in adp_data.items()
-                     if a.adp.get("half_ppr", 999) < 999}
-        picks_until = lg.num_teams  # conservative: one full round
-        survival = market.simulate_survival(adp_means, available, picks_until)
-        cow = market.cost_of_waiting(valued, survival, available)
-        return board_mod.build_snake_board(
-            lg, state, valued, survival, cow, roster_id=_roster_id(), teams=teams)
+        board["is_mock"] = is_mock
+        return board
 
     # Static mounts MUST be registered last: StaticFiles("/") matches any
     # path under it, so routes declared after this point would be shadowed.

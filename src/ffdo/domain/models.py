@@ -92,6 +92,11 @@ class DraftState:
     rounds: int
     budget: int | None
     picks: tuple[DraftPick, ...]
+    # Sleeper's live "who's on the block right now" state, from the draft
+    # object's `metadata` (distinct from `settings`). Both are None outside
+    # an active nomination -- e.g. pre-draft, or between sales.
+    nominated_player_id: str | None = None
+    current_bid: int | None = None
 
     def drafted_player_ids(self) -> frozenset[str]:
         return frozenset(p.player_id for p in self.picks)
@@ -143,6 +148,7 @@ class Session:
     draft_status: str
     rounds: int
     connected_at: str
+    is_mock: bool
     provider: str = "sleeper"
     espn_s2: str | None = None
     swid: str | None = None

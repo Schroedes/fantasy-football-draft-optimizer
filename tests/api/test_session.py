@@ -12,7 +12,7 @@ def _session(**overrides):
         roster_positions=("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX",
                           "BN", "BN", "BN", "BN", "BN"),
         scoring_settings={"rec": 0.5}, draft_type="auction",
-        draft_status="pre_draft", rounds=13,
+        draft_status="pre_draft", rounds=13, is_mock=False,
         connected_at="2026-08-22T00:00:00+00:00",
     )
     return Session(**{**base, **overrides})
@@ -50,6 +50,13 @@ def test_save_then_get_round_trips_rounds(tmp_path):
     assert store.get().rounds == 16
 
 
+def test_save_then_get_round_trips_is_mock(tmp_path):
+    store = SessionStore(tmp_path / "session.json")
+    session = _session(is_mock=True, league_id="")
+    store.save(session)
+    assert store.get().is_mock is True
+
+
 def test_save_creates_missing_parent_directories(tmp_path):
     path = tmp_path / "nested" / "dir" / "session.json"
     SessionStore(path).save(_session())
@@ -85,7 +92,9 @@ def test_save_then_get_round_trips_espn_provider_and_cookies(tmp_path):
 def test_a_session_file_written_before_this_feature_loads_as_sleeper(tmp_path):
     """A pre-existing data/session.json has no provider/espn_s2/swid keys at
     all -- must load as a Sleeper session, not crash or silently misreport
-    the provider."""
+    the provider. (It does carry `is_mock`, since that field predates
+    provider/espn_s2/swid -- a file missing it is covered separately by
+    `is_mock`'s own required-field behavior, not this test.)"""
     path = tmp_path / "session.json"
     old_style = {
         "username": "tester", "user_id": "U1", "league_id": "L1", "draft_id": "D1",
@@ -94,7 +103,7 @@ def test_a_session_file_written_before_this_feature_loads_as_sleeper(tmp_path):
         "roster_positions": ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX",
                              "BN", "BN", "BN", "BN", "BN"],
         "scoring_settings": {"rec": 0.5}, "draft_type": "auction",
-        "draft_status": "pre_draft", "rounds": 13,
+        "draft_status": "pre_draft", "rounds": 13, "is_mock": False,
         "connected_at": "2026-08-22T00:00:00+00:00",
     }
     path.write_text(json.dumps(old_style), encoding="utf-8")

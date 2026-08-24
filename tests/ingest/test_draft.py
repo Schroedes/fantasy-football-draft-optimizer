@@ -40,3 +40,18 @@ def test_pre_draft_state_has_no_picks():
     state = draft.parse(lg["drafts"]["2025"]["meta"], [])
     assert state.picks == ()
     assert state.drafted_player_ids() == frozenset()
+
+
+def test_parses_live_nomination_and_bid_from_metadata():
+    d = _hist()["2025"]
+    state = draft.parse(d["meta"], d["picks"])
+    assert state.nominated_player_id == "7670"
+    assert state.current_bid == 1
+
+
+def test_missing_metadata_yields_no_live_nomination():
+    state = draft.parse(
+        {"draft_id": "d", "type": "auction", "status": "drafting",
+         "settings": {"teams": 12, "rounds": 14, "budget": 200}}, [])
+    assert state.nominated_player_id is None
+    assert state.current_bid is None

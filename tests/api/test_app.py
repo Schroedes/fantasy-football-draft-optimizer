@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from ffdo.api import app as app_mod
 from ffdo.api.app import (
     _DEFAULT_DRAFT_ID, _DEFAULT_LEAGUE_ID, _TTLCache, _active_only,
@@ -5,6 +7,7 @@ from ffdo.api.app import (
 )
 from ffdo.api.session import SessionStore
 from ffdo.domain.models import PlayerProfile, Session
+from ffdo.ingest.client import PROJECTIONS, V1
 from fastapi.testclient import TestClient
 
 
@@ -16,7 +19,7 @@ def _session(**overrides):
         roster_positions=("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX",
                           "BN", "BN", "BN", "BN", "BN"),
         scoring_settings={"rec": 0.5}, draft_type="auction",
-        draft_status="pre_draft", rounds=13,
+        draft_status="pre_draft", rounds=13, is_mock=False,
         connected_at="2026-08-22T00:00:00+00:00",
     )
     return Session(**{**base, **overrides})
@@ -35,6 +38,42 @@ class _FakeSleeperClient:
 
     def close(self) -> None:
         pass
+
+
+def _recording_client(responses: dict[str, object]):
+    """Builds a fake SleeperClient class (plus the list it records calls
+    into) for tests that need to assert on get_board()'s actual HTTP call
+    pattern -- e.g. proving /draft/<id> is fetched exactly once in mock
+    mode, or that a specific pick payload flows all the way through to the
+    response. Production code always constructs `SleeperClient()` with no
+    arguments, so `responses` and the shared `calls` list are captured by
+    closure rather than passed to `__init__`.
+
+    `responses` maps a URL (or a unique substring/prefix of one, e.g. the
+    projections URL before its query string) to the canned get_json()
+    return value. The first matching key, checked via `in` and tested in
+    insertion order, wins -- so when one key is a substring of another
+    (e.g. ".../draft/D1" vs ".../draft/D1/picks"), register the longer,
+    more specific one first. Unmatched URLs fall back to the same default
+    `_FakeSleeperClient` above uses: [] for a projections URL, {} otherwise.
+    """
+    calls: list[str] = []
+
+    class _RecordingClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def get_json(self, url: str):
+            calls.append(url)
+            for key, value in responses.items():
+                if key in url:
+                    return value
+            return [] if "/projections/" in url else {}
+
+        def close(self) -> None:
+            pass
+
+    return _RecordingClient, calls
 
 
 def test_has_value_is_false_before_the_first_load():
@@ -143,6 +182,323 @@ def test_connect_endpoint_rejects_a_blank_league_id_or_username():
     res = client.post("/api/connect", json={"league_id": "  ", "username": "tester"})
 
     assert res.status_code == 400
+
+
+def test_connect_endpoint_rejects_both_league_id_and_draft_id_together():
+    client = TestClient(create_app())
+
+    res = client.post("/api/connect", json={
+        "league_id": "L1", "draft_id": "D1", "username": "tester"})
+
+    assert res.status_code == 400
+
+
+def test_connect_endpoint_rejects_neither_league_id_nor_draft_id():
+    client = TestClient(create_app())
+
+    res = client.post("/api/connect", json={"username": "tester"})
+
+    assert res.status_code == 400
+
+
+def test_connect_endpoint_routes_a_draft_id_payload_to_resolve_mock(monkeypatch):
+    fake_mock_session = _session(
+        league_id="", draft_id="1397145756879605760", is_mock=True)
+    captured = {}
+
+    def fake_resolve_mock(sleeper, draft_id, username):
+        captured["draft_id"] = draft_id
+        return fake_mock_session
+
+    monkeypatch.setattr("ffdo.ingest.connect.resolve_mock", fake_resolve_mock)
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeSleeperClient)
+
+    client = TestClient(create_app())
+    res = client.post("/api/connect", json={
+        "draft_id": "https://sleeper.app/draft/nfl/1397145756879605760",
+        "username": "schroedes"})
+
+    assert res.status_code == 200
+    assert res.json()["is_mock"] is True
+    # The share URL's trailing numeric ID must reach resolve_mock() bare,
+    # not the whole pasted URL.
+    assert captured["draft_id"] == "1397145756879605760"
+
+
+def test_connect_endpoint_accepts_a_bare_draft_id_without_a_url(monkeypatch):
+    captured = {}
+
+    def fake_resolve_mock(sleeper, draft_id, username):
+        captured["draft_id"] = draft_id
+        return _session(league_id="", is_mock=True)
+
+    monkeypatch.setattr("ffdo.ingest.connect.resolve_mock", fake_resolve_mock)
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeSleeperClient)
+
+    client = TestClient(create_app())
+    client.post("/api/connect", json={"draft_id": "1397145756879605760",
+                                      "username": "schroedes"})
+
+    assert captured["draft_id"] == "1397145756879605760"
+
+
+def test_league_id_is_empty_string_for_a_connected_mock_session(monkeypatch, tmp_path):
+    """get_board()'s mock-vs-real branch is driven entirely by whether
+    _league_id() returns a falsy value -- this is the one fact that whole
+    dispatch depends on, so it gets its own direct test."""
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session(league_id="", is_mock=True))
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    assert _league_id() == ""
+
+
+# ---------------------------------------------------------------------------
+# GET /api/board -- real-league and mock-draft branches, through TestClient.
+#
+# Everything above this point that touches `get_board()`'s internals
+# (_league_id/_draft_id/_roster_id) or the mock-draft translation layer
+# (ffdo.ingest.mock_draft, tested in tests/ingest/test_mock_draft.py) is a
+# unit test of a piece the endpoint is BUILT from. None of it actually calls
+# `GET /api/board`, so the endpoint's own wiring -- single-fetch reuse of
+# /draft/<id> in mock mode, running backfill_roster_ids() before
+# draft.parse() sees the picks, and re-resolving roster_id live rather than
+# trusting the persisted session -- was previously proven only by reading
+# app.py, not by a test. The fixtures below are adapted from the real
+# captured Sleeper payloads in tests/ingest/test_mock_draft.py /
+# tests/ingest/test_connect.py (MOCK_DRAFT_PRE_DRAFT / MOCK_DRAFT_MID_DRAFT),
+# switched to an auction-type mock so the response carries a `budget`
+# section with a `your_roster_id` to assert on.
+
+_BOARD_REAL_LEAGUE_RAW = {
+    "league_id": "L123",
+    "season": "2025",
+    "settings": {"num_teams": 2, "budget": 200},
+    "roster_positions": ["QB", "RB", "BN"],
+    "scoring_settings": {"rush_yd": 0.1, "rush_td": 6.0},
+    "name": "Board Test League",
+    "status": "drafting",
+}
+
+_BOARD_REAL_LEAGUE_DRAFT_RAW = {
+    "draft_id": "D123",
+    "type": "auction",
+    "status": "drafting",
+    "settings": {"teams": 2, "rounds": 3, "budget": 200},
+}
+
+_BOARD_PLAYERS_RAW = {
+    "P1": {"first_name": "Test", "last_name": "Runner", "position": "RB",
+           "team": "AAA", "age": 25, "years_exp": 3, "active": True},
+}
+
+_BOARD_PROJECTIONS_RAW = [
+    {"player_id": "P1",
+     "last_modified": int(datetime(2025, 8, 1, tzinfo=timezone.utc).timestamp() * 1000),
+     "stats": {"rush_yd": 1000.0, "rush_td": 10.0}},
+]
+
+# Real captured /v1/draft/<id> shape (see MOCK_DRAFT_PRE_DRAFT /
+# MOCK_DRAFT_MID_DRAFT in tests/ingest/test_mock_draft.py), adapted to an
+# auction-type mock with a budget so build_auction_board's `budget` section
+# (with `your_roster_id` / `your_spent`) is exercised end to end.
+_BOARD_MOCK_DRAFT_RAW = {
+    "created": 1787468015451,
+    "creators": ["U1"],
+    "draft_id": "D999",
+    "draft_order": None,
+    "last_message_id": "D999",
+    "last_message_time": 1787468015451,
+    "last_picked": None,
+    "league_id": None,
+    "metadata": {"description": "", "name": "", "scoring_type": "half_ppr"},
+    "season": "2026",
+    "season_type": "regular",
+    "settings": {
+        "autostart": 0, "cpu_autopick": 1, "pick_timer": 120, "rounds": 3,
+        "slots_qb": 1, "slots_rb": 1, "slots_bn": 1, "teams": 2, "budget": 200,
+    },
+    "slot_to_roster_id": {"1": 1, "2": 2},
+    "sport": "nfl", "start_time": None, "status": "drafting", "type": "auction",
+}
+
+
+def test_get_board_real_league_mode_reports_is_mock_false_and_scores_a_player(
+        monkeypatch, tmp_path):
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session(league_id="L123", draft_id="D123", is_mock=False))
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D123/picks": [],
+        f"{V1}/draft/D123": _BOARD_REAL_LEAGUE_DRAFT_RAW,
+        # Registered before the shorter /league/L123 key below: PR #4's
+        # team-name fetch hits /league/L123/rosters and /league/L123/users,
+        # both of which contain "/league/L123" as a substring -- without
+        # these more-specific entries winning first, they'd incorrectly
+        # match the plain league fixture and crash teams_mod.parse().
+        f"{V1}/league/L123/rosters": [],
+        f"{V1}/league/L123/users": [],
+        f"{V1}/league/L123": _BOARD_REAL_LEAGUE_RAW,
+        f"{V1}/players/nfl": _BOARD_PLAYERS_RAW,
+        f"{PROJECTIONS}/2025": _BOARD_PROJECTIONS_RAW,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    client = TestClient(create_app())
+    res = client.get("/api/board")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["is_mock"] is False
+    assert f"{V1}/league/L123" in calls
+    player_ids = {p["player_id"] for p in body["players"]}
+    assert "P1" in player_ids, (
+        "the one scoreable player in the fixture must reach the response "
+        "-- proves players/projections still flow through the real-league "
+        "branch unchanged")
+
+
+def test_get_board_mock_mode_reports_is_mock_true_and_fetches_the_draft_once(
+        monkeypatch, tmp_path):
+    """Direct proof of single-fetch reuse: get_board()'s mock branch must
+    fetch /draft/<id> exactly once and reuse that same payload for both
+    build_league_profile() and draft_meta, rather than fetching it twice."""
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session(league_id="", draft_id="D999", is_mock=True, user_id="U1"))
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D999/picks": [],
+        f"{V1}/draft/D999": _BOARD_MOCK_DRAFT_RAW,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    client = TestClient(create_app())
+    res = client.get("/api/board")
+
+    assert res.status_code == 200
+    assert res.json()["is_mock"] is True
+
+    draft_meta_calls = [c for c in calls if c == f"{V1}/draft/D999"]
+    assert len(draft_meta_calls) == 1, (
+        f"expected exactly one fetch of /draft/D999 (single-fetch reuse "
+        f"for both LeagueProfile and draft_meta), got {len(draft_meta_calls)}: "
+        f"{calls}")
+    assert f"{V1}/draft/D999/picks" in calls
+
+
+def test_get_board_mock_mode_backfills_picks_and_resolves_roster_id_live(
+        monkeypatch, tmp_path):
+    """The core regression guard this task exists for. Two things are
+    proven together here:
+
+    1. Live roster_id resolution: the persisted session's roster_id is
+       None (as it would be if the user connected before joining a draft
+       slot), but THIS poll's draft object has draft_order[user_id] = 2.
+       get_board() must re-resolve roster_id from that live draft_meta via
+       mock_draft.resolve_roster_id() -- never trust the stale persisted
+       None (which is what calling `_roster_id()` in mock mode would do).
+
+    2. backfill_roster_ids() running BEFORE draft.parse() sees the picks:
+       Sleeper never populates roster_id on a mock-draft pick (it arrives
+       null even for the connecting human's own pick). The one pick below
+       has roster_id: null and draft_slot: 2, which maps to roster_id 2 via
+       slot_to_roster_id. If backfill did not run, or ran after parsing,
+       DraftState.spent_by_roster() would skip this pick entirely (it
+       explicitly skips a null roster_id) and `your_spent` would be 0
+       instead of the pick's $50 amount.
+    """
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session(league_id="", draft_id="D999", is_mock=True,
+                        user_id="U1", roster_id=None))
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    draft_meta = {**_BOARD_MOCK_DRAFT_RAW, "draft_order": {"U1": 2}}
+    picks_raw = [{
+        "draft_id": "D999", "draft_slot": 2, "pick_no": 1,
+        "picked_by": "U1", "player_id": "P1", "roster_id": None,
+        "round": 1, "metadata": {"amount": "50"},
+    }]
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D999/picks": picks_raw,
+        f"{V1}/draft/D999": draft_meta,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    client = TestClient(create_app())
+    res = client.get("/api/board")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["is_mock"] is True
+    assert body["budget"]["your_roster_id"] == 2, (
+        "must reflect the LIVE roster_id resolved from this poll's "
+        "draft_order, not the stale persisted session.roster_id (None)")
+    assert body["budget"]["your_spent"] == 50, (
+        "the pick's null roster_id must have been backfilled to 2 (via "
+        "draft_slot 2 -> slot_to_roster_id) before draft.parse() ran, so "
+        "spent_by_roster() counts its $50 amount toward roster 2")
+
+
+def test_get_board_mock_mode_returns_a_clean_400_when_scoring_type_becomes_unsupported(
+        monkeypatch, tmp_path):
+    """Cross-cutting gap from the final whole-branch review: resolve_mock()
+    converts mock_draft.MockDraftError into a clean ConnectError -> 400 at
+    /api/connect, but get_board() calls the same build_league_profile() on
+    every 3s poll with no equivalent handling. A mock draft's scoring_type
+    can drift to an unsupported value AFTER a user has already connected
+    (documented in the spec: a real mock draft's scoring_type changed
+    between two live polls of the same draft), so this must surface as a
+    clean 400 with an actionable detail, not a bare 500."""
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session(league_id="", draft_id="D999", is_mock=True, user_id="U1"))
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    drifted_draft = {
+        **_BOARD_MOCK_DRAFT_RAW,
+        "metadata": {**_BOARD_MOCK_DRAFT_RAW["metadata"], "scoring_type": "dynasty_2qb"},
+    }
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D999/picks": [],
+        f"{V1}/draft/D999": drifted_draft,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    client = TestClient(create_app())
+    res = client.get("/api/board")
+
+    assert res.status_code == 400
+    assert "dynasty_2qb" in res.json()["detail"]
+
+
+def test_get_board_mock_mode_handles_a_snake_draft_without_crashing(
+        monkeypatch, tmp_path):
+    """The Task 5 fix-round tests for get_board()'s mock branch only ever
+    used an auction-type mock draft, so the `if lg.budget is None: lg =
+    replace(lg, budget=state.budget)` fallback (which behaves differently
+    for snake vs auction -- a snake mock's budget is legitimately None and
+    should stay None) was never exercised end to end through the real
+    endpoint for the mock path. This is a minimal smoke test, not a
+    duplicate of the auction test's full backfill/roster-id assertions."""
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session(league_id="", draft_id="D999", is_mock=True, user_id="U1"))
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    snake_draft = {**_BOARD_MOCK_DRAFT_RAW, "type": "snake"}
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D999/picks": [],
+        f"{V1}/draft/D999": snake_draft,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    client = TestClient(create_app())
+    res = client.get("/api/board")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["format"] == "snake"
+    assert body["is_mock"] is True
 
 
 def test_connect_endpoint_saves_the_session_and_returns_it(monkeypatch, tmp_path):

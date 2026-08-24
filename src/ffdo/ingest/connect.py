@@ -17,6 +17,7 @@ import httpx
 from ffdo.domain.models import Session
 from ffdo.ingest import draft as draft_mod
 from ffdo.ingest import league as league_mod
+from ffdo.ingest import mock_draft
 from ffdo.ingest import user as user_mod
 from ffdo.ingest.client import V1, SleeperClient
 
@@ -82,4 +83,68 @@ def resolve(
         draft_status=state.status,
         rounds=state.rounds,
         connected_at=now().isoformat(),
+        is_mock=False,
+    )
+
+
+def resolve_mock(
+    sleeper: SleeperClient,
+    draft_id: str,
+    username: str,
+    *,
+    now: Callable[[], datetime] | None = None,
+) -> Session:
+    now = now or (lambda: datetime.now(timezone.utc))
+
+    try:
+        draft_raw = sleeper.get_json(f"{V1}/draft/{draft_id}")
+    except httpx.HTTPStatusError as exc:
+        raise ConnectError("Mock draft not found") from exc
+
+    # Sleeper answers some invalid/unknown draft IDs with `200 {}` (or
+    # `200 null`) instead of a 404. Without this guard, `is_mock_draft({})`
+    # returns True (an empty dict's `.get("league_id")` is None, same as a
+    # real mock draft), so resolution would proceed past the mock-draft
+    # check and die deep inside `build_league_profile()` on a bare
+    # `KeyError` for `draft_raw["season"]` -- a 500 instead of the same
+    # clean "Mock draft not found" a 404 already produces.
+    if not draft_raw:
+        raise ConnectError("Mock draft not found")
+
+    if not mock_draft.is_mock_draft(draft_raw):
+        raise ConnectError(
+            "This looks like a real league draft — use the League ID + "
+            "Username form instead")
+
+    try:
+        lg = mock_draft.build_league_profile(draft_raw)
+    except mock_draft.MockDraftError as exc:
+        raise ConnectError(str(exc)) from exc
+
+    try:
+        user_raw = sleeper.get_json(f"{V1}/user/{username}")
+    except httpx.HTTPStatusError as exc:
+        raise ConnectError("Username not found") from exc
+    user_id, _display_name = user_mod.parse(user_raw)
+
+    roster_id = mock_draft.resolve_roster_id(draft_raw, user_id)
+    settings = draft_raw.get("settings") or {}
+
+    return Session(
+        username=username,
+        user_id=user_id,
+        league_id="",
+        draft_id=draft_id,
+        roster_id=roster_id,
+        league_name=lg.name,
+        season=lg.season,
+        num_teams=lg.num_teams,
+        budget=lg.budget,
+        roster_positions=lg.roster_positions,
+        scoring_settings=lg.scoring_settings,
+        draft_type=draft_raw["type"],
+        draft_status=draft_raw["status"],
+        rounds=int(settings.get("rounds", 0)),
+        connected_at=now().isoformat(),
+        is_mock=True,
     )

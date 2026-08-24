@@ -109,6 +109,7 @@ def resolve(
         draft_status=state.status,
         rounds=state.rounds,
         connected_at=now().isoformat(),
+        is_mock=False,
         provider="espn",
         espn_s2=espn_s2,
         swid=swid,

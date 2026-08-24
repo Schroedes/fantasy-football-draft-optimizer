@@ -115,8 +115,19 @@ def build_auction_board(
         })
     rows.sort(key=lambda r: r["vor"], reverse=True)
 
+    # Sleeper keeps reporting the last nomination for a beat after the
+    # player sells -- surface it only while he's still actually available,
+    # so the board never shows a stale "on the block" player as live.
+    live_nomination = None
+    if state.nominated_player_id is not None and state.nominated_player_id not in drafted:
+        live_nomination = {
+            "player_id": state.nominated_player_id,
+            "bid": state.current_bid,
+        }
+
     return {
         "format": "auction",
+        "live_nomination": live_nomination,
         "inflation": round(factor, 3),
         "budget": {
             "total": league.num_teams * league.budget,
@@ -147,6 +158,19 @@ def build_snake_board(
     teams: Mapping[int, TeamProfile] | None = None,
 ) -> dict:
     drafted = state.drafted_player_ids()
+
+    # `roster_id=None` (FFDO_ROSTER_ID unset) is treated as a fresh roster --
+    # zero drafted -- the same fallback auction.positional_budget applies;
+    # filtering picks by `p.roster_id == roster_id` without this guard would
+    # otherwise match commissioner/keeper picks, which also carry
+    # `roster_id=None`, as if they were "yours".
+    your_players = (
+        {p.player_id: valued[p.player_id] for p in state.picks
+         if p.roster_id == roster_id and p.player_id in valued}
+        if roster_id is not None else {}
+    )
+    lineup_value = roster_engine.marginal_lineup_values(your_players, valued, league)
+
     rows = [
         {
             "player_id": pid,
@@ -163,6 +187,11 @@ def build_snake_board(
             # to still be on the board -- backwards. Absence means no
             # signal either way, so default to certain survival (1.0).
             "survival": round(survival.get(pid, 1.0), 3),
+            # How much this player would actually add to *your* starting
+            # lineup right now, given who you've already drafted -- not
+            # just how good they are league-wide. See
+            # ffdo.engine.roster.marginal_lineup_values.
+            "lineup_value": round(lineup_value.get(pid, 0.0), 1),
             "drafted": pid in drafted,
         }
         for pid, vp in valued.items()

@@ -54,6 +54,7 @@ body {
 /* ---- connect form ---- */
 #connect-form { display: flex; flex-direction: column; gap: 16px; max-width: 420px; }
 #connect-form h1 { margin: 0; font-size: 20px; }
+#connect-mode-toggle { align-self: flex-start; margin-bottom: 4px; }
 .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
 .field input {
   font: 14px var(--font-mono);
@@ -88,6 +89,19 @@ body {
 .provider-toggle button.on { background: var(--accent); color: #0a0f14; }
 #sleeper-fields, #espn-fields { display: flex; flex-direction: column; gap: 16px; }
 #sleeper-fields[hidden], #espn-fields[hidden] { display: none; }
+
+.badge-row { display: flex; align-items: center; gap: 8px; }
+.mock-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--red);
+  background: color-mix(in oklch, var(--red) 14%, transparent);
+  border: 1px solid color-mix(in oklch, var(--red) 40%, transparent);
+  padding: 6px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
 
 button {
   font-family: var(--font-sans);

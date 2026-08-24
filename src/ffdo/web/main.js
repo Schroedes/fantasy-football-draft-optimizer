@@ -4,6 +4,7 @@ let state = {
   connecting: false,
   readinessTimer: null,
   provider: "sleeper",
+  connectMode: "league",
 };
 
 async function fetchSession() {
@@ -38,6 +39,7 @@ function renderConnected() {
   document.getElementById("stat-budget").textContent = s.budget !== null ? `$${s.budget}` : "—";
   document.getElementById("stat-rounds").textContent = s.rounds || "—";
   document.getElementById("stat-format").textContent = s.draft_type === "auction" ? "Auction" : "Snake";
+  document.getElementById("mock-badge").hidden = !s.is_mock;
 
   const positions = s.roster_positions || [];
   const starters = positions.filter(p => p !== "BN");
@@ -118,16 +120,27 @@ function connectPayload() {
       swid: document.getElementById("espn-swid-input").value.trim(),
     };
   }
+  const username = document.getElementById("username-input").value.trim();
+  if (state.connectMode === "mock") {
+    return {
+      provider: "sleeper",
+      draft_id: document.getElementById("draft-id-input").value.trim(),
+      username,
+    };
+  }
   return {
     provider: "sleeper",
     league_id: document.getElementById("league-id-input").value.trim(),
-    username: document.getElementById("username-input").value.trim(),
+    username,
   };
 }
 
 function connectPayloadIsComplete(payload) {
   if (payload.provider === "espn") {
     return payload.league_id && payload.season && payload.espn_s2 && payload.swid;
+  }
+  if ("draft_id" in payload) {
+    return payload.draft_id && payload.username;
   }
   return payload.league_id && payload.username;
 }
@@ -140,7 +153,9 @@ async function connect() {
   if (!connectPayloadIsComplete(payload)) {
     errorEl.textContent = payload.provider === "espn"
       ? "League ID, season, espn_s2, and SWID are all required."
-      : "League ID and username are both required.";
+      : ("draft_id" in payload
+          ? "Draft link/ID and username are both required."
+          : "League ID and username are both required.");
     errorEl.hidden = false;
     return;
   }
@@ -159,7 +174,7 @@ async function connect() {
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
-      errorEl.textContent = body.detail || "Could not connect to that league.";
+      errorEl.textContent = body.detail || "Could not connect.";
       errorEl.hidden = false;
       return;
     }
@@ -177,6 +192,15 @@ async function connect() {
     btn.textContent = "Connect";
   }
 }
+
+document.querySelectorAll("#connect-mode-toggle button").forEach(btn =>
+  btn.addEventListener("click", () => {
+    state.connectMode = btn.dataset.mode;
+    document.querySelectorAll("#connect-mode-toggle button").forEach(b =>
+      b.classList.toggle("on", b.dataset.mode === state.connectMode));
+    document.getElementById("league-fields").hidden = state.connectMode !== "league";
+    document.getElementById("mock-fields").hidden = state.connectMode !== "mock";
+  }));
 
 document.getElementById("connect-btn").addEventListener("click", connect);
 

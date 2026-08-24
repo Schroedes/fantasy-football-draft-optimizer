@@ -4,8 +4,21 @@ let state = {
   search: "",
   sortKey: "vor",
   sortDir: "desc",
+  // True until the user manually clicks a sort header. While true, the
+  // snake board's default sort follows lineup_value instead of raw vor --
+  // the nudge toward whatever position you're actually thin at -- without
+  // permanently overriding a sort the user picked for themselves.
+  sortKeyIsDefault: true,
   nominatedId: null,
   bid: 0,
+  // The player_id of the last live nomination we auto-applied from Sleeper
+  // (distinct from `nominatedId`, which also changes on a manual row click).
+  // Lets us tell "a new nomination just happened" from "still the same one".
+  liveNominatedId: null,
+  // True while `bid` should keep following Sleeper's live high offer on
+  // every poll. A manual bid nudge (or inspecting a different player) sets
+  // this false; it resumes once the next real nomination comes in.
+  bidIsLive: true,
   expandedRoster: null,
   data: null,
 };
@@ -15,11 +28,35 @@ async function refresh() {
     const res = await fetch("/api/board");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     state.data = await res.json();
+    applyLiveNomination();
     document.getElementById("updated").textContent = new Date().toLocaleTimeString();
     render();
   } catch (err) {
     document.getElementById("updated").textContent = "error";
     console.error("board refresh failed", err);
+  }
+}
+
+function defaultBidGuess(p) {
+  return p.baseline !== undefined ? Math.max(1, Math.round(p.baseline * 0.9)) : 0;
+}
+
+// Follows whoever Sleeper says is actually on the block right now, so the
+// sidebar tracks the live auction without needing a click. A manual row
+// click or bid nudge holds its own state in between polls -- see `nominate`
+// and the bid-controls handler -- but the moment an actual new nomination
+// comes in from Sleeper, it takes back over.
+function applyLiveNomination() {
+  const live = state.data && state.data.live_nomination;
+  if (!live) return;
+  if (live.player_id !== state.liveNominatedId) {
+    state.liveNominatedId = live.player_id;
+    state.nominatedId = live.player_id;
+    state.bidIsLive = true;
+  }
+  if (state.bidIsLive) {
+    const p = state.data.players.find(x => x.player_id === live.player_id);
+    state.bid = live.bid ?? (p ? defaultBidGuess(p) : 0);
   }
 }
 
@@ -52,12 +89,17 @@ function render() {
   const d = state.data;
   if (!d) return;
 
+  if (state.sortKeyIsDefault) {
+    state.sortKey = d.format === "snake" ? "lineup_value" : "vor";
+  }
+
   document.getElementById("inflation").textContent =
     d.inflation !== undefined ? `${d.inflation.toFixed(2)}x` : "—";
   document.getElementById("spent").textContent =
     d.budget ? `$${d.budget.spent}/${d.budget.total}` : "—";
   document.getElementById("picks").textContent = d.picks_made;
   document.getElementById("brand-tag").textContent = `/ ${d.format === "snake" ? "SNAKE" : "AUCTION"}`;
+  document.getElementById("mock-badge").hidden = !d.is_mock;
 
   const hasYourBudget = d.format !== "snake" && d.budget &&
     d.budget.your_slots_left !== undefined;
@@ -85,14 +127,20 @@ function render() {
 
 function renderMoneyHeader() {
   const th = document.getElementById("th-money");
+  const thBaseline = document.getElementById("th-baseline");
   const d = state.data;
   if (d.format === "snake") {
     th.textContent = "Survives";
     th.dataset.sort = "survival";
+    th.colSpan = 2;
+    thBaseline.hidden = true;
   } else {
     th.textContent = "Adj $";
     th.dataset.sort = "adjusted";
+    th.colSpan = 1;
+    thBaseline.hidden = false;
   }
+  document.getElementById("th-lineup-value").hidden = d.format !== "snake";
 }
 
 function renderCow() {
@@ -174,9 +222,10 @@ function renderPositionBudget() {
 function renderTable() {
   const rows = visibleRows();
   const tbody = document.querySelector("#board tbody");
+  const isSnake = state.data.format === "snake";
 
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="9" class="empty-msg">No players match the current filters.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${isSnake ? 10 : 9}" class="empty-msg">No players match the current filters.</td></tr>`;
     return;
   }
 
@@ -193,6 +242,7 @@ function renderTable() {
     const money = p.baseline !== undefined
       ? `<td>$${p.baseline}</td><td class="adj-cell">$${p.adjusted}</td>`
       : `<td colspan="2">${survivalCell(p.survival)}</td>`;
+    const lineupValue = isSnake ? `<td class="lineup-value-cell">${p.lineup_value}</td>` : "";
     return `<tr class="${classes}" data-id="${p.player_id}">
       <td></td>
       <td class="name-cell">${escapeHtml(p.name)}</td>
@@ -201,6 +251,7 @@ function renderTable() {
       <td>${p.age ?? ""}</td>
       <td>${p.tier}</td>
       <td>${p.vor}</td>
+      ${lineupValue}
       ${money}
     </tr>`;
   }).join("");
@@ -208,7 +259,11 @@ function renderTable() {
 
 function nominate(p) {
   state.nominatedId = p.player_id;
-  state.bid = p.baseline !== undefined ? Math.max(1, Math.round(p.baseline * 0.9)) : 0;
+  state.bid = defaultBidGuess(p);
+  // Clicking the player who's actually live keeps following Sleeper's bid;
+  // clicking anyone else is inspection, so stop tracking until the next
+  // real nomination comes in.
+  state.bidIsLive = p.player_id === state.liveNominatedId;
   render();
 }
 
@@ -226,6 +281,9 @@ function renderNominated() {
 
   el.classList.add("pinned");
   body.hidden = false;
+  const isTrackingLive = p.player_id === state.liveNominatedId && state.bidIsLive;
+  document.getElementById("nom-kicker").textContent =
+    isTrackingLive ? "On the block · LIVE" : "On the block";
   document.getElementById("nom-tier").textContent = `TIER ${p.tier}`;
   document.getElementById("nom-name").textContent = p.name;
   document.getElementById("nom-meta").textContent = `${p.position} · ${p.team ?? "FA"} · age ${p.age ?? "?"}`;
@@ -387,6 +445,7 @@ document.getElementById("search").addEventListener("input", e => {
 
 document.querySelectorAll("#board th[data-sort]").forEach(th =>
   th.addEventListener("click", () => {
+    state.sortKeyIsDefault = false;
     const key = th.dataset.sort;
     if (state.sortKey === key) {
       state.sortDir = state.sortDir === "desc" ? "asc" : "desc";
@@ -401,6 +460,7 @@ document.querySelectorAll(".bid-controls button[data-step]").forEach(b =>
   b.addEventListener("click", () => {
     const delta = Number(b.dataset.step);
     state.bid = Math.max(1, state.bid + delta);
+    state.bidIsLive = false;
     renderNominated();
   }));
 
@@ -413,4 +473,4 @@ document.getElementById("rosters-rows").addEventListener("click", e => {
 });
 
 refresh();
-setInterval(refresh, 3000);
+setInterval(refresh, 1000);

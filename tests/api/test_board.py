@@ -121,6 +121,39 @@ def test_adjusted_price_never_drops_below_the_legal_minimum_bid():
     assert all(r["adjusted"] >= auction.MIN_BID for r in out["players"])
 
 
+def test_live_nomination_is_surfaced_when_player_is_still_available():
+    league = _league()
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=14, budget=200, picks=(),
+                       nominated_player_id="p0", current_bid=42)
+    ids = ["p0", "p1"]
+    valued = _valued(ids)
+    baseline = {pid: 10.0 for pid in ids}
+
+    out = board.build_auction_board(_league(), state, valued, baseline)
+
+    assert out["live_nomination"] == {"player_id": "p0", "bid": 42}
+
+
+def test_live_nomination_is_suppressed_once_the_player_is_already_drafted():
+    """Sleeper keeps the last nomination in its metadata for a beat after the
+    player sells -- surfacing it as still 'on the block' would be stale and
+    misleading, so the board omits it once that player shows up as drafted."""
+    league = _league()
+    picks = (DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1,
+                       picked_by="u1", player_id="p0", amount=42),)
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=14, budget=200, picks=picks,
+                       nominated_player_id="p0", current_bid=42)
+    ids = ["p0", "p1"]
+    valued = _valued(ids)
+    baseline = {pid: 10.0 for pid in ids}
+
+    out = board.build_auction_board(league, state, valued, baseline)
+
+    assert out["live_nomination"] is None
+
+
 def test_healthz_returns_ok():
     from fastapi.testclient import TestClient
     from ffdo.api.app import create_app

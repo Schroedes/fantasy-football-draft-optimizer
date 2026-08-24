@@ -83,3 +83,46 @@ def test_unfilled_slots_contribute_zero_not_a_penalty():
     result = roster.team_lineup(team, league)
     assert result.starting_vor == pytest.approx(20.0)
     assert result.by_position == pytest.approx({"QB": 20.0})
+
+
+def test_marginal_value_credits_full_vor_for_an_empty_slot():
+    """A position with no starter yet has nothing to bump -- a candidate
+    who fills that empty slot should be credited close to their full VOR,
+    not discounted for a "need" that isn't actually competing with anyone."""
+    league = _league(["RB", "WR", "BN"])
+    team = {"rb1": _vp("rb1", "RB", 10.0)}
+    candidates = {"wr1": _vp("wr1", "WR", 25.0)}
+
+    result = roster.marginal_lineup_values(team, candidates, league)
+
+    assert result["wr1"] == pytest.approx(25.0)
+
+
+def test_marginal_value_is_near_zero_when_position_already_stacked():
+    """The user's actual complaint: a 4th RB with high raw VOR that can't
+    crack an already-full, already-better RB group nets nothing -- even
+    though its VOR alone looks like a great pick."""
+    league = _league(["RB", "RB", "BN", "BN"])
+    team = {
+        "rb1": _vp("rb1", "RB", 50.0),
+        "rb2": _vp("rb2", "RB", 45.0),
+        "rb3": _vp("rb3", "RB", 40.0),
+    }
+    candidates = {"rb4": _vp("rb4", "RB", 35.0)}
+
+    result = roster.marginal_lineup_values(team, candidates, league)
+
+    assert result["rb4"] == pytest.approx(0.0)
+
+
+def test_marginal_value_credits_the_bump_delta_not_the_full_vor():
+    """A candidate who beats the current weakest starter at a full position
+    bumps that starter to the bench -- the marginal gain is the VOR
+    difference between them, not the candidate's raw VOR."""
+    league = _league(["RB", "BN"])
+    team = {"rb1": _vp("rb1", "RB", 10.0)}
+    candidates = {"rb2": _vp("rb2", "RB", 18.0)}
+
+    result = roster.marginal_lineup_values(team, candidates, league)
+
+    assert result["rb2"] == pytest.approx(8.0)
