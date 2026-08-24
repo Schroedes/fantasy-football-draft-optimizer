@@ -37,6 +37,31 @@ async function refresh() {
   }
 }
 
+// `/api/board` recomputes VOR/baseline/rosters for the whole player pool on
+// every call, which is too slow to poll at auction speed -- see `refresh`
+// above, kept on its own slower interval for that data. Nomination and bid
+// don't need any of that: they come straight off Sleeper's draft metadata,
+// so `/api/board/live` fetches just that and this poll can run fast without
+// paying for the heavy rebuild. Skipped until the first full `refresh()`
+// lands, since it only patches fields onto `state.data` rather than
+// populating it.
+async function refreshLive() {
+  if (!state.data) return;
+  try {
+    const res = await fetch("/api/board/live");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const live = await res.json();
+    state.data.live_nomination = live.live_nomination;
+    state.data.picks_made = live.picks_made;
+    applyLiveNomination();
+    document.getElementById("updated").textContent = new Date().toLocaleTimeString();
+    document.getElementById("picks").textContent = state.data.picks_made;
+    renderNominated();
+  } catch (err) {
+    console.error("live refresh failed", err);
+  }
+}
+
 function defaultBidGuess(p) {
   return p.baseline !== undefined ? Math.max(1, Math.round(p.baseline * 0.9)) : 0;
 }
@@ -473,4 +498,5 @@ document.getElementById("rosters-rows").addEventListener("click", e => {
 });
 
 refresh();
-setInterval(refresh, 1000);
+setInterval(refresh, 3000);
+setInterval(refreshLive, 1000);

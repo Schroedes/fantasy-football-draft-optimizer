@@ -323,6 +323,39 @@ _BOARD_MOCK_DRAFT_RAW = {
 }
 
 
+def test_get_board_live_returns_nomination_without_the_heavy_fetches(
+        monkeypatch, tmp_path):
+    """The whole point of this endpoint: it must answer using only the two
+    Sleeper calls that actually carry nomination/bid (draft meta + picks),
+    never touching /league/<id>, /players/nfl, or the projections feed --
+    those are what made /api/board too slow to poll at the once-a-second
+    cadence auction bidding needs (see board.js's `refreshLive`)."""
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session(league_id="L123", draft_id="D123", is_mock=False))
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    draft_meta = {**_BOARD_REAL_LEAGUE_DRAFT_RAW,
+                 "metadata": {"nominated_player_id": "P1", "highest_offer": "42"}}
+    picks_raw = [{
+        "draft_id": "D123", "draft_slot": 1, "pick_no": 1, "picked_by": "U1",
+        "player_id": "P2", "roster_id": 1, "round": 1, "metadata": {"amount": "10"},
+    }]
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D123/picks": picks_raw,
+        f"{V1}/draft/D123": draft_meta,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    client = TestClient(create_app())
+    res = client.get("/api/board/live")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body == {"live_nomination": {"player_id": "P1", "bid": 42}, "picks_made": 1}
+    assert not any("/league/" in c or "/players/" in c or "/projections/" in c
+                  for c in calls), f"must not fetch league/players/projections -- got {calls}"
+
+
 def test_get_board_real_league_mode_reports_is_mock_false_and_scores_a_player(
         monkeypatch, tmp_path):
     store = SessionStore(tmp_path / "session.json")
