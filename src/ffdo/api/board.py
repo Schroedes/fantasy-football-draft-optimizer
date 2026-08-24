@@ -101,6 +101,33 @@ def _build_auction_history(
     return rows
 
 
+def _build_snake_history(
+    state: DraftState,
+    valued: Mapping[str, ValuedPlayer],
+    teams: Mapping[int, TeamProfile],
+) -> list[dict]:
+    """Newest pick first. Each pick is graded against the VOR of every other
+    still-fantasy-relevant (VOR > 0) player who was undrafted immediately
+    before it -- reconstructed by replaying picks in order, not against the
+    full player pool, so a 10th-round pick isn't graded against 1st-round
+    talent that was already gone."""
+    drafted_so_far: set[str] = set()
+    rows = []
+    for pick in sorted(state.picks, key=lambda p: p.pick_no):
+        vp = valued.get(pick.player_id)
+        grade = None
+        if vp is not None:
+            alternatives = [
+                other.vor for pid, other in valued.items()
+                if other.vor > 0 and pid != pick.player_id and pid not in drafted_so_far
+            ]
+            grade = grading.grade_snake_pick(vp.vor, alternatives)
+        rows.append(_history_row(pick, vp, teams, grade, None))
+        drafted_so_far.add(pick.player_id)
+    rows.reverse()
+    return rows
+
+
 def build_auction_board(
     league,
     state: DraftState,
@@ -248,4 +275,5 @@ def build_snake_board(
         "picks_made": len(state.picks),
         "players": rows,
         "rosters": _build_rosters_payload(league, state, valued, teams, roster_id),
+        "history": _build_snake_history(state, valued, teams or {}),
     }
