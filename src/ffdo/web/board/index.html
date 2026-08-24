@@ -49,7 +49,7 @@
     <div class="nom-empty-msg">Click a player row to pin them here while they're on the block.</div>
     <div class="nom-body" hidden>
       <div class="nom-head">
-        <span class="nom-kicker">On the block</span>
+        <span id="nom-kicker" class="nom-kicker">On the block</span>
         <span id="nom-tier" class="tier-chip"></span>
       </div>
       <div class="nom-name-block">
@@ -130,7 +130,8 @@
           <th></th><th>Player</th><th>Pos</th><th>Tm</th><th>Age</th>
           <th data-sort="tier">Tier</th><th data-sort="vor">VOR</th>
           <th id="th-lineup-value" data-sort="lineup_value" hidden title="How much this player would add to your starting lineup right now, given who you've already drafted">Lineup Val</th>
-          <th id="th-money" colspan="2" data-sort="adjusted">Adj $</th>
+          <th id="th-baseline" data-sort="baseline">Fair $</th>
+          <th id="th-money" data-sort="adjusted">Adj $</th>
         </tr></thead>
         <tbody></tbody>
       </table>

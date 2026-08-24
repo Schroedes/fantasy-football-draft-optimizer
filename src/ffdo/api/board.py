@@ -115,8 +115,19 @@ def build_auction_board(
         })
     rows.sort(key=lambda r: r["vor"], reverse=True)
 
+    # Sleeper keeps reporting the last nomination for a beat after the
+    # player sells -- surface it only while he's still actually available,
+    # so the board never shows a stale "on the block" player as live.
+    live_nomination = None
+    if state.nominated_player_id is not None and state.nominated_player_id not in drafted:
+        live_nomination = {
+            "player_id": state.nominated_player_id,
+            "bid": state.current_bid,
+        }
+
     return {
         "format": "auction",
+        "live_nomination": live_nomination,
         "inflation": round(factor, 3),
         "budget": {
             "total": league.num_teams * league.budget,
