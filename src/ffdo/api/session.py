@@ -50,6 +50,9 @@ class SessionStore:
                 rounds=raw["rounds"],
                 connected_at=raw["connected_at"],
                 is_mock=raw["is_mock"],
+                provider=raw.get("provider", "sleeper"),
+                espn_s2=raw.get("espn_s2"),
+                swid=raw.get("swid"),
             )
         except (KeyError, TypeError):
             return None
@@ -73,6 +76,9 @@ class SessionStore:
             "rounds": session.rounds,
             "connected_at": session.connected_at,
             "is_mock": session.is_mock,
+            "provider": session.provider,
+            "espn_s2": session.espn_s2,
+            "swid": session.swid,
         }
         self._path.write_text(json.dumps(payload), encoding="utf-8")
         self._cached = session

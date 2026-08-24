@@ -1,4 +1,4 @@
-"""The only module that performs HTTP. Everything else reads cache or snapshot."""
+"""The only Sleeper-specific HTTP client. Everything else reads cache or snapshot."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ import time
 from typing import Any
 
 import httpx
+
+from ffdo.ingest.http import get_json_with_retry
 
 V1 = "https://api.sleeper.app/v1"
 PROJECTIONS = "https://api.sleeper.app/projections/nfl"
@@ -24,32 +26,9 @@ class SleeperClient:
         self._client = httpx.Client(timeout=timeout, transport=transport)
 
     def get_json(self, url: str, max_attempts: int = 4) -> Any:
-        last: Exception | None = None
-        for attempt in range(max_attempts):
-            try:
-                resp = self._client.get(url)
-            except httpx.TransportError as exc:
-                last = exc
-                if attempt == max_attempts - 1:
-                    break
-                time.sleep(self._base_delay + 2**attempt)
-                continue
-
-            if resp.status_code == 429 or resp.status_code >= 500:
-                last = httpx.HTTPStatusError(
-                    f"retryable {resp.status_code}",
-                    request=resp.request, response=resp,
-                )
-                if attempt == max_attempts - 1:
-                    break
-                time.sleep(self._base_delay + 2**attempt)
-                continue
-
-            # Any other error status (404, 400, 401, 403, ...) is permanent:
-            # fail fast rather than burning retry attempts and backoff time.
-            resp.raise_for_status()
-            return resp.json()
-        raise RuntimeError(f"GET {url} failed after {max_attempts} attempts") from last
+        return get_json_with_retry(
+            self._client, url, base_delay=self._base_delay,
+            max_attempts=max_attempts, sleep=time.sleep)
 
     def close(self) -> None:
         self._client.close()

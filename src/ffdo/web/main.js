@@ -3,6 +3,7 @@ let state = {
   format: null,
   connecting: false,
   readinessTimer: null,
+  provider: "sleeper",
   connectMode: "league",
 };
 
@@ -109,28 +110,54 @@ function renderReadiness(r) {
     </div>`).join("");
 }
 
-async function connect() {
+function connectPayload() {
+  if (state.provider === "espn") {
+    return {
+      provider: "espn",
+      league_id: document.getElementById("espn-league-id-input").value.trim(),
+      season: document.getElementById("espn-season-input").value.trim(),
+      espn_s2: document.getElementById("espn-s2-input").value.trim(),
+      swid: document.getElementById("espn-swid-input").value.trim(),
+    };
+  }
   const username = document.getElementById("username-input").value.trim();
+  if (state.connectMode === "mock") {
+    return {
+      provider: "sleeper",
+      draft_id: document.getElementById("draft-id-input").value.trim(),
+      username,
+    };
+  }
+  return {
+    provider: "sleeper",
+    league_id: document.getElementById("league-id-input").value.trim(),
+    username,
+  };
+}
+
+function connectPayloadIsComplete(payload) {
+  if (payload.provider === "espn") {
+    return payload.league_id && payload.season && payload.espn_s2 && payload.swid;
+  }
+  if ("draft_id" in payload) {
+    return payload.draft_id && payload.username;
+  }
+  return payload.league_id && payload.username;
+}
+
+async function connect() {
+  const payload = connectPayload();
   const errorEl = document.getElementById("connect-error");
   errorEl.hidden = true;
 
-  const payload = { username };
-  if (state.connectMode === "mock") {
-    const draftId = document.getElementById("draft-id-input").value.trim();
-    if (!draftId || !username) {
-      errorEl.textContent = "Draft link/ID and username are both required.";
-      errorEl.hidden = false;
-      return;
-    }
-    payload.draft_id = draftId;
-  } else {
-    const leagueId = document.getElementById("league-id-input").value.trim();
-    if (!leagueId || !username) {
-      errorEl.textContent = "League ID and username are both required.";
-      errorEl.hidden = false;
-      return;
-    }
-    payload.league_id = leagueId;
+  if (!connectPayloadIsComplete(payload)) {
+    errorEl.textContent = payload.provider === "espn"
+      ? "League ID, season, espn_s2, and SWID are all required."
+      : ("draft_id" in payload
+          ? "Draft link/ID and username are both required."
+          : "League ID and username are both required.");
+    errorEl.hidden = false;
+    return;
   }
   if (state.connecting) return;
 
@@ -176,5 +203,15 @@ document.querySelectorAll("#connect-mode-toggle button").forEach(btn =>
   }));
 
 document.getElementById("connect-btn").addEventListener("click", connect);
+
+document.querySelectorAll("#provider-toggle button").forEach(btn =>
+  btn.addEventListener("click", () => {
+    state.provider = btn.dataset.provider;
+    document.querySelectorAll("#provider-toggle button").forEach(b =>
+      b.classList.toggle("on", b === btn));
+    document.getElementById("sleeper-fields").hidden = state.provider !== "sleeper";
+    document.getElementById("espn-fields").hidden = state.provider !== "espn";
+    document.getElementById("connect-error").hidden = true;
+  }));
 
 fetchSession();

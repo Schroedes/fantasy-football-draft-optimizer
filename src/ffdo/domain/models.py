@@ -128,8 +128,10 @@ class TeamProfile:
 
 @dataclass(frozen=True, slots=True)
 class Session:
-    """A connected Sleeper league/user/draft, as resolved by
-    `ffdo.ingest.connect.resolve()` and persisted by `ffdo.api.session.SessionStore`.
+    """A connected league/user/draft, as resolved by one of
+    `ffdo.ingest.connect.resolve()` (Sleeper) or
+    `ffdo.ingest.espn.connect.resolve()` (ESPN), and persisted by
+    `ffdo.api.session.SessionStore`.
     """
     username: str
     user_id: str
@@ -147,3 +149,6 @@ class Session:
     rounds: int
     connected_at: str
     is_mock: bool
+    provider: str = "sleeper"
+    espn_s2: str | None = None
+    swid: str | None = None
