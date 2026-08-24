@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 from ffdo.domain.models import DraftState, TeamProfile, ValuedPlayer
 from ffdo.engine import auction
+from ffdo.engine import grading
 from ffdo.engine import roster as roster_engine
 
 
@@ -54,6 +55,49 @@ def _build_rosters_payload(
             "players": players,
         })
     rows.sort(key=lambda r: (r["starting_vor"], r["bench_vor"]), reverse=True)
+    return rows
+
+
+def _history_row(pick, vp, teams, grade, amount) -> dict:
+    team = teams.get(pick.roster_id) if pick.roster_id is not None else None
+    if team is not None:
+        team_name = team.display_name
+    elif pick.roster_id is not None:
+        team_name = f"Team {pick.roster_id}"
+    else:
+        team_name = "—"
+    return {
+        "pick_no": pick.pick_no,
+        "round": pick.round,
+        "roster_id": pick.roster_id,
+        "team_name": team_name,
+        "player_id": pick.player_id,
+        "name": vp.profile.full_name if vp else pick.player_id,
+        "position": vp.profile.position if vp else None,
+        "vor": round(vp.vor, 1) if vp else None,
+        "amount": amount,
+        "grade": grade,
+    }
+
+
+def _build_auction_history(
+    state: DraftState,
+    valued: Mapping[str, ValuedPlayer],
+    baseline: Mapping[str, float],
+    teams: Mapping[int, TeamProfile],
+) -> list[dict]:
+    """Newest pick first. Ungraded (no badge) when the pick has no recorded
+    price -- e.g. a keeper slotted in without a bid -- since there is
+    nothing to compare against."""
+    rows = []
+    for pick in sorted(state.picks, key=lambda p: p.pick_no):
+        vp = valued.get(pick.player_id)
+        grade = None
+        if pick.amount is not None:
+            base = baseline.get(pick.player_id, 1.0)
+            grade = grading.grade_auction_pick(base, pick.amount)
+        rows.append(_history_row(pick, vp, teams, grade, pick.amount))
+    rows.reverse()
     return rows
 
 
@@ -144,6 +188,7 @@ def build_auction_board(
         "picks_made": len(state.picks),
         "players": rows,
         "rosters": _build_rosters_payload(league, state, valued, teams, roster_id),
+        "history": _build_auction_history(state, valued, baseline, teams or {}),
     }
 
 
