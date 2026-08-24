@@ -147,6 +147,7 @@ function render() {
   renderTable();
   renderNominated();
   renderRosters();
+  renderHistory();
   renderSortHeaders();
 }
 
@@ -415,6 +416,36 @@ function renderRosters() {
       ${detail}
     </div>`;
   }).join("");
+}
+
+function renderHistory() {
+  const d = state.data;
+  const el = document.getElementById("history-rows");
+  if (!d || !d.history) { el.innerHTML = ""; return; }
+
+  if (d.history.length === 0) {
+    el.innerHTML = `<div class="history-empty">No picks yet.</div>`;
+    return;
+  }
+
+  const prevScrollTop = el.scrollTop;
+  el.innerHTML = d.history.map(h => {
+    const posColor = `var(--${(h.position ?? "muted").toLowerCase()}, var(--muted))`;
+    const amount = h.amount !== null && h.amount !== undefined
+      ? `<span class="history-amount">$${h.amount}</span>` : "";
+    const badge = h.grade
+      ? `<span class="history-badge ${h.grade.toLowerCase()}">${h.grade}</span>` : "";
+    return `<div class="history-row">
+      <span class="history-pickno">R${h.round} P${h.pick_no}</span>
+      <div class="history-main">
+        <span class="history-name">${escapeHtml(h.name)}</span>
+        <span class="history-meta" style="color:${posColor}">${escapeHtml(h.position ?? "")} &middot; ${escapeHtml(h.team_name)}</span>
+      </div>
+      ${amount}
+      ${badge}
+    </div>`;
+  }).join("");
+  el.scrollTop = prevScrollTop;
 }
 
 function renderSortHeaders() {

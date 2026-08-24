@@ -313,3 +313,71 @@ def test_positional_budget_slot_invariant_holds_for_a_real_roster():
     assert slots_accounted == out["budget"]["your_slots_left"]
     # roster 1 already drafted 1 of 2 dedicated RB slots
     assert by_pos["RB"]["slots_open"] == 1
+
+
+def test_auction_history_is_newest_pick_first_with_grades():
+    league = _league()
+    picks = (
+        DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1,
+                 picked_by="u1", player_id="p0", amount=60),
+        DraftPick(pick_no=2, round=1, draft_slot=2, roster_id=2,
+                 picked_by="u2", player_id="p1", amount=130),
+    )
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=14, budget=200, picks=picks)
+    ids = ["p0", "p1"]
+    valued = _valued(ids)
+    baseline = {pid: 100.0 for pid in ids}
+
+    out = board.build_auction_board(league, state, valued, baseline, teams=_teams())
+
+    assert [h["player_id"] for h in out["history"]] == ["p1", "p0"]
+    assert out["history"][0]["grade"] == "POOR"   # p1: paid 130 vs baseline 100
+    assert out["history"][1]["grade"] == "GREAT"  # p0: paid 60 vs baseline 100
+    assert out["history"][0]["team_name"] == "Bravo"
+    assert out["history"][0]["amount"] == 130
+
+
+def test_auction_history_grade_is_none_when_no_amount_was_recorded():
+    """A keeper/commissioner pick can land with no bid amount -- there's
+    nothing to compare against, so it must not fabricate a grade."""
+    league = _league()
+    picks = (DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1,
+                       picked_by="u1", player_id="p0", amount=None),)
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=14, budget=200, picks=picks)
+    valued = _valued(["p0"])
+    out = board.build_auction_board(league, state, valued, {"p0": 100.0})
+    assert out["history"][0]["grade"] is None
+    assert out["history"][0]["amount"] is None
+
+
+def test_auction_history_grade_is_none_when_player_is_absent_from_valued_pool():
+    """A drafted player who never made it into the valued pool has no VOR/
+    tier signal to grade against. The old guard only checked `amount is not
+    None`, so this fell through to `baseline.get(pick.player_id, 1.0)` --
+    fabricating a real GREAT/GOOD/FAIR/POOR verdict from a made-up $1
+    baseline. Must return no grade at all, matching the snake path's
+    existing vp-is-not-None guard (see the mirrored test in
+    test_snake_board.py)."""
+    league = _league()
+    picks = (DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1,
+                       picked_by="u1", player_id="p0", amount=60),)
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=14, budget=200, picks=picks)
+    # p0 is deliberately absent from `valued` (empty dict) even though a
+    # baseline exists for it -- that baseline must not be used to grade.
+    out = board.build_auction_board(league, state, {}, {"p0": 100.0}, teams=_teams())
+    assert out["history"][0]["grade"] is None
+    assert out["history"][0]["amount"] == 60
+
+
+def test_auction_history_team_name_falls_back_when_profile_missing():
+    league = _league()
+    picks = (DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=5,
+                       picked_by="u5", player_id="p0", amount=10),)
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=14, budget=200, picks=picks)
+    valued = _valued(["p0"])
+    out = board.build_auction_board(league, state, valued, {"p0": 10.0})
+    assert out["history"][0]["team_name"] == "Team 5"
