@@ -119,6 +119,12 @@ def create_app() -> FastAPI:
     from ffdo.ingest import players as players_mod
     from ffdo.ingest import projections as proj_mod
     from ffdo.ingest import teams as teams_mod
+    from ffdo.ingest.espn import connect as espn_connect_mod
+    from ffdo.ingest.espn import client as espn_client_mod
+    from ffdo.ingest.espn import crosswalk as espn_crosswalk_mod
+    from ffdo.ingest.espn import draft as espn_draft_mod
+    from ffdo.ingest.espn import league as espn_league_mod
+    from ffdo.ingest.espn import teams as espn_teams_mod
 
     players_cache = _TTLCache(ttl_seconds=24 * 3600)
     # Keyed by season rather than a single shared cache: the projections feed
@@ -135,6 +141,12 @@ def create_app() -> FastAPI:
     # another league's roster_ids after a league switch within the TTL
     # window. Created lazily per league via `_teams_cache_for()` below.
     teams_caches: dict[str, _TTLCache] = {}
+    # Same reasoning as projections_caches/teams_caches: ESPN's player pool
+    # is season-scoped and expensive to re-fetch (thousands of entries), and
+    # get_board() is polled every 3s during a live draft -- an unkeyed or
+    # uncached fetch here would hammer ESPN's API for data that barely
+    # changes within a draft session.
+    espn_player_pool_caches: dict[int, _TTLCache] = {}
 
     def _projections_cache_for(season: int) -> _TTLCache:
         return projections_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
@@ -142,8 +154,15 @@ def create_app() -> FastAPI:
     def _teams_cache_for(league_id: str) -> _TTLCache:
         return teams_caches.setdefault(league_id, _TTLCache(ttl_seconds=24 * 3600))
 
-    def _load_players(sleeper: client_mod.SleeperClient) -> dict:
-        return players_mod.parse(sleeper.get_json(f"{client_mod.V1}/players/nfl"))
+    def _espn_player_pool_cache_for(season: int) -> _TTLCache:
+        return espn_player_pool_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
+
+    def _load_players(sleeper: client_mod.SleeperClient) -> tuple[dict, dict]:
+        """Returns (profiles, espn_id_index). Both are derived from the same
+        raw fetch so ESPN connect's crosswalk doesn't need a second,
+        separately-cached request for data players_cache already has."""
+        raw = sleeper.get_json(f"{client_mod.V1}/players/nfl")
+        return players_mod.parse(raw), players_mod.espn_id_index(raw)
 
     def _load_projections(sleeper: client_mod.SleeperClient, season: int):
         return proj_mod.parse(
@@ -164,7 +183,7 @@ def create_app() -> FastAPI:
         first load doesn't pay for three fetches synchronously."""
         sleeper = client_mod.SleeperClient()
         try:
-            players_cache.get(lambda: _load_players(sleeper))
+            players_cache.get(lambda: _load_players(sleeper))  # warms the cache; return value unused here
             _projections_cache_for(season).get(lambda: _load_projections(sleeper, season))
             _teams_cache_for(league_id).get(lambda: _load_teams(sleeper, league_id))
         finally:
@@ -172,19 +191,46 @@ def create_app() -> FastAPI:
 
     @app.post("/api/connect")
     def connect_league(payload: dict, background_tasks: BackgroundTasks) -> dict:
-        league_id = str(payload.get("league_id", "")).strip()
-        username = str(payload.get("username", "")).strip()
-        if not league_id or not username:
-            raise HTTPException(
-                status_code=400, detail="League ID and username are required")
+        provider = str(payload.get("provider") or "sleeper").strip().lower()
 
-        sleeper = client_mod.SleeperClient()
-        try:
-            session = connect_mod.resolve(sleeper, league_id, username)
-        except connect_mod.ConnectError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        finally:
-            sleeper.close()
+        if provider == "espn":
+            league_id = str(payload.get("league_id", "")).strip()
+            espn_s2 = str(payload.get("espn_s2", "")).strip()
+            swid = str(payload.get("swid", "")).strip()
+            if not league_id or not payload.get("season") or not espn_s2 or not swid:
+                raise HTTPException(
+                    status_code=400,
+                    detail="League ID, season, espn_s2, and SWID are required")
+            try:
+                season = int(payload["season"])
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="Season must be a year")
+
+            sleeper = client_mod.SleeperClient()
+            try:
+                profiles, espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            finally:
+                sleeper.close()
+
+            try:
+                session = espn_connect_mod.resolve(
+                    league_id, season, espn_s2, swid, profiles, espn_id_index)
+            except espn_connect_mod.ConnectError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        else:
+            league_id = str(payload.get("league_id", "")).strip()
+            username = str(payload.get("username", "")).strip()
+            if not league_id or not username:
+                raise HTTPException(
+                    status_code=400, detail="League ID and username are required")
+
+            sleeper = client_mod.SleeperClient()
+            try:
+                session = connect_mod.resolve(sleeper, league_id, username)
+            except connect_mod.ConnectError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            finally:
+                sleeper.close()
 
         _SESSION_STORE.save(session)
         background_tasks.add_task(_warm_caches, session.season, session.league_id)
@@ -208,21 +254,56 @@ def create_app() -> FastAPI:
 
     @app.get("/api/board")
     def get_board() -> dict:
-        league_id = _league_id()
-        draft_id = _draft_id()
-        sleeper = client_mod.SleeperClient()
-        try:
-            lg = league_mod.parse(
-                sleeper.get_json(f"{client_mod.V1}/league/{league_id}"))
-            profiles = players_cache.get(lambda: _load_players(sleeper))
-            proj, adp_data = _projections_cache_for(lg.season).get(
-                lambda: _load_projections(sleeper, lg.season))
-            state = draft_mod.parse(
-                sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}"),
-                sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}/picks"))
-            teams = _teams_cache_for(league_id).get(lambda: _load_teams(sleeper, league_id))
-        finally:
-            sleeper.close()
+        session = _SESSION_STORE.get()
+        provider = session.provider if session is not None else "sleeper"
+
+        if provider == "espn":
+            if session is None or session.espn_s2 is None or session.swid is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No connected ESPN session -- connect from the main screen first")
+
+            sleeper = client_mod.SleeperClient()
+            try:
+                profiles, espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+                proj, adp_data = _projections_cache_for(session.season).get(
+                    lambda: _load_projections(sleeper, session.season))
+            finally:
+                sleeper.close()
+
+            espn = espn_client_mod.EspnClient(session.espn_s2, session.swid)
+            try:
+                raw = espn.get_json(
+                    f"{espn_client_mod.BASE}/seasons/{session.season}/segments/0/"
+                    f"leagues/{session.league_id}?view=mSettings&view=mTeam&view=mDraftDetail")
+                player_pool_raw = _espn_player_pool_cache_for(session.season).get(
+                    lambda: espn.get_json(
+                        f"{espn_client_mod.BASE}/seasons/{session.season}/players"
+                        "?view=kona_player_info"))
+            finally:
+                espn.close()
+
+            lg = espn_league_mod.parse(raw)
+            espn_players = espn_crosswalk_mod.parse_player_pool(player_pool_raw)
+            cw = espn_crosswalk_mod.build(espn_id_index, profiles, espn_players)
+            state = espn_draft_mod.parse(raw, cw)
+            teams = espn_teams_mod.parse(raw)
+        else:
+            league_id = _league_id()
+            draft_id = _draft_id()
+            sleeper = client_mod.SleeperClient()
+            try:
+                lg = league_mod.parse(
+                    sleeper.get_json(f"{client_mod.V1}/league/{league_id}"))
+                profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+                proj, adp_data = _projections_cache_for(lg.season).get(
+                    lambda: _load_projections(sleeper, lg.season))
+                state = draft_mod.parse(
+                    sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}"),
+                    sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}/picks"))
+                teams = _teams_cache_for(league_id).get(lambda: _load_teams(sleeper, league_id))
+            finally:
+                sleeper.close()
 
         # Sleeper's /league/<id> settings carry no auction budget field for
         # this league -- the budget lives on the draft object instead (see
