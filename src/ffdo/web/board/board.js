@@ -531,3 +531,18 @@ document.getElementById("rosters-rows").addEventListener("click", e => {
 refresh();
 setInterval(refresh, 3000);
 setInterval(refreshLive, 1000);
+
+// Chrome/Edge/Firefox all clamp setInterval hard in a background tab (often
+// to a small fraction of the real rate, sometimes far less) to save power --
+// this board is typically backgrounded behind Sleeper's own draft room, so
+// the two intervals above silently crawl while it's hidden. There's no way
+// to lift that throttling from a normal tab, but the moment it's looked at
+// is exactly when a bid decision is being made, so catch up immediately on
+// regaining focus rather than waiting for the next (possibly minutes-away)
+// throttled tick.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    refresh();
+    refreshLive();
+  }
+});
