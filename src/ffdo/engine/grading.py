@@ -11,6 +11,7 @@ AUCTION_FAIR_RATIO = 1.10
 SNAKE_GREAT_PERCENTILE = 0.05
 SNAKE_GOOD_PERCENTILE = 0.20
 SNAKE_FAIR_PERCENTILE = 0.50
+SNAKE_MIN_POOL_SIZE = 10
 
 
 def grade_auction_pick(baseline: float, amount: int) -> str:
@@ -36,12 +37,16 @@ def grade_snake_pick(picked_vor: float, alternative_vors: Sequence[float]) -> st
 
     `alternative_vors` is the VOR of every other player who was still
     undrafted immediately before this pick and had positive VOR (i.e. was
-    still fantasy-relevant) -- the picked player itself is excluded. An
-    empty pool (nothing of value was left) grades FAIR: there was no
-    meaningfully better option to have reached past.
+    still fantasy-relevant) -- the picked player itself is excluded. A pool
+    with too few players to grade meaningfully (empty, or below
+    SNAKE_MIN_POOL_SIZE) grades FAIR: there isn't enough of a field left to
+    say whether a meaningfully better option was reached past. Without this
+    floor, a late-draft pick measured against the last handful of
+    fantasy-relevant survivors collapses to POOR almost automatically, since
+    percentile math against a tiny pool has nowhere else to land.
     """
     pool = list(alternative_vors)
-    if not pool:
+    if len(pool) < SNAKE_MIN_POOL_SIZE:
         return "FAIR"
     beat_by = sum(1 for v in pool if v > picked_vor)
     percentile = beat_by / len(pool)

@@ -59,5 +59,20 @@ def test_grade_snake_pick_defaults_to_fair_when_no_alternatives_remain():
     assert grading.grade_snake_pick(picked_vor=-5.0, alternative_vors=[]) == "FAIR"
 
 
-def test_grade_snake_pick_poor_when_picked_player_has_no_positive_vor_but_better_existed():
-    assert grading.grade_snake_pick(picked_vor=-5.0, alternative_vors=[10.0, 5.0, 1.0]) == "POOR"
+def test_grade_snake_pick_defaults_to_fair_when_pool_is_thin():
+    """A pool below SNAKE_MIN_POOL_SIZE (10) grades FAIR rather than running
+    the percentile math -- late in a real draft the pool of still-relevant
+    (VOR > 0) alternatives can shrink to a handful without ever emptying,
+    and measuring a pick against only 3 survivors it structurally can't beat
+    collapses to POOR almost automatically. This 3-element pool previously
+    graded POOR under the old percentile-only logic; it now grades FAIR."""
+    assert grading.grade_snake_pick(picked_vor=-5.0, alternative_vors=[10.0, 5.0, 1.0]) == "FAIR"
+
+
+def test_grade_snake_pick_thin_pool_floor_overrides_what_would_otherwise_be_poor():
+    """A 5-element pool where the picked player has the worst VOR of the six
+    total (picked + 5 alternatives) would have graded POOR under the old
+    percentile-only logic (beaten by 100% of a nonempty pool). Below
+    SNAKE_MIN_POOL_SIZE, the thin-pool floor grades it FAIR instead."""
+    assert grading.grade_snake_pick(
+        picked_vor=0.0, alternative_vors=[50.0, 40.0, 30.0, 20.0, 10.0]) == "FAIR"
