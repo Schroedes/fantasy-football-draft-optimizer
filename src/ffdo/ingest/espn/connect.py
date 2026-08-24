@@ -11,7 +11,7 @@ persist into the returned Session for later board polls to reuse.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Callable
 
 import httpx
 
@@ -20,7 +20,7 @@ from ffdo.ingest.espn import crosswalk as crosswalk_mod
 from ffdo.ingest.espn import draft as draft_mod
 from ffdo.ingest.espn import league as league_mod
 from ffdo.ingest.espn import teams as teams_mod
-from ffdo.ingest.espn.client import BASE, EspnClient
+from ffdo.ingest.espn.client import BASE, PLAYER_POOL_FILTER_HEADER, EspnClient
 
 
 class ConnectError(Exception):
@@ -61,6 +61,9 @@ def resolve(
                 f"{BASE}/seasons/{season}/segments/0/leagues/{league_id}"
                 "?view=mSettings&view=mTeam&view=mDraftDetail")
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (401, 403):
+                raise ConnectError(
+                    "Your ESPN cookies look expired -- grab fresh espn_s2/SWID values") from exc
             raise ConnectError("League not found") from exc
 
         league = league_mod.parse(raw)
@@ -72,8 +75,17 @@ def resolve(
         if roster_id is None:
             raise ConnectError("This SWID is not a member of that league")
 
-        player_pool_raw = espn.get_json(
-            f"{BASE}/seasons/{season}/players?view=kona_player_info")
+        try:
+            player_pool_raw = espn.get_json(
+                f"{BASE}/seasons/{season}/players?view=kona_player_info",
+                extra_headers=PLAYER_POOL_FILTER_HEADER)
+        except (httpx.HTTPStatusError, RuntimeError) as exc:
+            # get_json_with_retry raises httpx.HTTPStatusError directly for a
+            # non-retryable status (401/403/404/...) but, once retries are
+            # exhausted on a retryable one (429/5xx), raises a bare
+            # RuntimeError with the underlying HTTPStatusError only as
+            # `__cause__` -- both must be mapped to a user-facing error here.
+            raise ConnectError("Could not load the ESPN player pool") from exc
         espn_players = crosswalk_mod.parse_player_pool(player_pool_raw)
         cw = crosswalk_mod.build(espn_id_index, profiles, espn_players)
 

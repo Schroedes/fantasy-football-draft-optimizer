@@ -33,3 +33,9 @@ def test_find_roster_id_resolves_the_swid_that_owns_a_team():
 def test_find_roster_id_returns_none_for_an_unknown_swid():
     assert teams.find_roster_id(
         _mteam(), "{ffffffff-0000-0000-0000-000000000000}") is None
+
+
+def test_find_roster_id_matches_case_insensitively():
+    lowercase_swid = "{00000004-0000-0000-0000-000000000000}".lower()
+    roster_id = teams.find_roster_id(_mteam(), lowercase_swid)
+    assert roster_id == 7

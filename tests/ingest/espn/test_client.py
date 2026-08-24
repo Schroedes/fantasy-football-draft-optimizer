@@ -47,3 +47,19 @@ def test_non_retryable_status_raises_immediately():
                         base_delay=0, transport=httpx.MockTransport(handler))
     with pytest.raises(httpx.HTTPStatusError):
         client.get_json("https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/x")
+
+
+def test_extra_headers_are_merged_with_the_base_headers():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    client = EspnClient("s2value", "{00000001-0000-0000-0000-000000000000}",
+                        base_delay=0, transport=httpx.MockTransport(handler))
+    client.get_json("https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/x",
+                    extra_headers={"X-Fantasy-Filter": "some-filter"})
+
+    assert seen[0].headers["x-fantasy-filter"] == "some-filter"
+    assert "espn_s2=s2value" in seen[0].headers["cookie"]

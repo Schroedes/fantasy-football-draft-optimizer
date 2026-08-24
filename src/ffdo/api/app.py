@@ -63,6 +63,16 @@ def _roster_id() -> int | None:
         return None
 
 
+def _session_public_dict(session) -> dict:
+    """Never echo ESPN cookie credentials back over HTTP -- nothing in the
+    frontend reads them, and there's no reason to hand a browser-side
+    script (or a curious devtools user) a live copy of a session cookie."""
+    data = asdict(session)
+    data.pop("espn_s2", None)
+    data.pop("swid", None)
+    return data
+
+
 def _active_only(points: dict[str, float], profiles: dict) -> dict[str, float]:
     """Drop retired/inactive players from the valuation pool.
 
@@ -147,6 +157,7 @@ def create_app() -> FastAPI:
     # uncached fetch here would hammer ESPN's API for data that barely
     # changes within a draft session.
     espn_player_pool_caches: dict[int, _TTLCache] = {}
+    espn_crosswalk_caches: dict[int, _TTLCache] = {}
 
     def _projections_cache_for(season: int) -> _TTLCache:
         return projections_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
@@ -156,6 +167,14 @@ def create_app() -> FastAPI:
 
     def _espn_player_pool_cache_for(season: int) -> _TTLCache:
         return espn_player_pool_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
+
+    def _espn_crosswalk_cache_for(season: int) -> _TTLCache:
+        # Same TTL as the player-pool cache it's derived from -- caching the
+        # built Crosswalk (not just its raw inputs) avoids re-running
+        # build()'s O(pool size) matching AND re-emitting its "unmatched"
+        # warning logs for the same ~20 players on every single 3-second
+        # board poll during a live draft.
+        return espn_crosswalk_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
 
     def _load_players(sleeper: client_mod.SleeperClient) -> tuple[dict, dict]:
         """Returns (profiles, espn_id_index). Both are derived from the same
@@ -177,17 +196,38 @@ def create_app() -> FastAPI:
             sleeper.get_json(f"{client_mod.V1}/league/{league_id}/rosters"),
             sleeper.get_json(f"{client_mod.V1}/league/{league_id}/users"))
 
-    def _warm_caches(season: int, league_id: str) -> None:
-        """Pre-populates the players/projections/teams TTL caches in the
-        background after a successful /api/connect, so the draft room's
-        first load doesn't pay for three fetches synchronously."""
+    def _warm_caches(
+        season: int, league_id: str, provider: str,
+        espn_s2: str | None, swid: str | None,
+    ) -> None:
+        """Pre-populates the players/projections/(teams or ESPN player pool)
+        TTL caches in the background after a successful /api/connect, so the
+        draft room's first load doesn't pay for these fetches synchronously.
+        Branches on provider: Sleeper's team-name cache and ESPN's
+        player-pool cache are different, non-overlapping resources, and
+        warming the wrong one for a given provider is worse than useless --
+        Sleeper's /league/<id>/rosters called with an ESPN league_id 404s or
+        returns malformed data, raising inside this background task on every
+        ESPN connect."""
         sleeper = client_mod.SleeperClient()
         try:
             players_cache.get(lambda: _load_players(sleeper))  # warms the cache; return value unused here
             _projections_cache_for(season).get(lambda: _load_projections(sleeper, season))
-            _teams_cache_for(league_id).get(lambda: _load_teams(sleeper, league_id))
+            if provider != "espn":
+                _teams_cache_for(league_id).get(lambda: _load_teams(sleeper, league_id))
         finally:
             sleeper.close()
+
+        if provider == "espn" and espn_s2 is not None and swid is not None:
+            espn = espn_client_mod.EspnClient(espn_s2, swid)
+            try:
+                _espn_player_pool_cache_for(season).get(
+                    lambda: espn.get_json(
+                        f"{espn_client_mod.BASE}/seasons/{season}/players"
+                        "?view=kona_player_info",
+                        extra_headers=espn_client_mod.PLAYER_POOL_FILTER_HEADER))
+            finally:
+                espn.close()
 
     @app.post("/api/connect")
     def connect_league(payload: dict, background_tasks: BackgroundTasks) -> dict:
@@ -233,13 +273,15 @@ def create_app() -> FastAPI:
                 sleeper.close()
 
         _SESSION_STORE.save(session)
-        background_tasks.add_task(_warm_caches, session.season, session.league_id)
-        return asdict(session)
+        background_tasks.add_task(
+            _warm_caches, session.season, session.league_id, session.provider,
+            session.espn_s2, session.swid)
+        return _session_public_dict(session)
 
     @app.get("/api/session")
     def get_session() -> dict | None:
         session = _SESSION_STORE.get()
-        return asdict(session) if session is not None else None
+        return _session_public_dict(session) if session is not None else None
 
     @app.get("/api/readiness")
     def get_readiness() -> dict:
@@ -279,13 +321,16 @@ def create_app() -> FastAPI:
                 player_pool_raw = _espn_player_pool_cache_for(session.season).get(
                     lambda: espn.get_json(
                         f"{espn_client_mod.BASE}/seasons/{session.season}/players"
-                        "?view=kona_player_info"))
+                        "?view=kona_player_info",
+                        extra_headers=espn_client_mod.PLAYER_POOL_FILTER_HEADER))
             finally:
                 espn.close()
 
             lg = espn_league_mod.parse(raw)
-            espn_players = espn_crosswalk_mod.parse_player_pool(player_pool_raw)
-            cw = espn_crosswalk_mod.build(espn_id_index, profiles, espn_players)
+            cw = _espn_crosswalk_cache_for(session.season).get(
+                lambda: espn_crosswalk_mod.build(
+                    espn_id_index, profiles,
+                    espn_crosswalk_mod.parse_player_pool(player_pool_raw)))
             state = espn_draft_mod.parse(raw, cw)
             teams = espn_teams_mod.parse(raw)
         else:

@@ -26,6 +26,16 @@ _USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
 
+# Verified live: a request to the player-pool endpoint with no filter header
+# returns only a default top-50 page, not the full pool -- silently
+# breaking the crosswalk for almost every real draft pick. This filter
+# (verified live: 11,613 entries returned, covering all six fantasy-
+# relevant positions) is required on every kona_player_info request.
+PLAYER_POOL_FILTER_HEADER = {
+    "X-Fantasy-Filter": '{"players":{"filterSlotIds":{"value":[0,2,4,6,16,17]},"limit":3000}}',
+}
+
+
 class EspnClient:
     def __init__(
         self,
@@ -42,9 +52,12 @@ class EspnClient:
         self._base_delay = base_delay
         self._client = httpx.Client(timeout=timeout, transport=transport)
 
-    def get_json(self, url: str, max_attempts: int = 4) -> Any:
+    def get_json(
+        self, url: str, extra_headers: dict[str, str] | None = None, max_attempts: int = 4,
+    ) -> Any:
+        headers = {**self._headers, **extra_headers} if extra_headers else self._headers
         return get_json_with_retry(
-            self._client, url, headers=self._headers,
+            self._client, url, headers=headers,
             base_delay=self._base_delay, max_attempts=max_attempts,
             sleep=time.sleep)
 

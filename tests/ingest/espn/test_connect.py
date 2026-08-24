@@ -113,6 +113,31 @@ def test_resolve_raises_when_the_swid_matches_no_team():
                         transport=httpx.MockTransport(_handler()))
 
 
+def test_resolve_raises_a_cookie_expired_message_on_401():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": "unauthorized"})
+
+    with pytest.raises(connect.ConnectError, match="cookies look expired"):
+        connect.resolve("1882997948", 2026, "s2", YOUR_SWID, {}, {},
+                        transport=httpx.MockTransport(handler))
+
+
+def test_resolve_raises_when_the_player_pool_fetch_fails(monkeypatch):
+    monkeypatch.setattr("ffdo.ingest.espn.client.time.sleep", lambda *_a, **_kw: None)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "players?view=kona_player_info" in url:
+            return httpx.Response(500, json={"error": "server error"})
+        if "leagues/1882997948" in url:
+            return httpx.Response(200, json=_combined_league_response())
+        raise AssertionError(f"unexpected URL: {url}")
+
+    with pytest.raises(connect.ConnectError, match="player pool"):
+        connect.resolve("1882997948", 2026, "s2", YOUR_SWID, {}, {},
+                        transport=httpx.MockTransport(handler))
+
+
 def test_normalize_swid_adds_missing_braces():
     assert connect.normalize_swid("ABCD-1234") == "{ABCD-1234}"
     assert connect.normalize_swid("{ABCD-1234}") == "{ABCD-1234}"
