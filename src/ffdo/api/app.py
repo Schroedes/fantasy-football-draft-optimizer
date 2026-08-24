@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import time
+import uuid
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Callable
@@ -123,6 +124,26 @@ def _extract_draft_id(value: str) -> str:
     run is the ID either way."""
     match = _TRAILING_DRAFT_ID_RE.search(value)
     return match.group(1) if match else value
+
+
+def _uncached(url: str) -> str:
+    """Appends a cache-busting query param so Sleeper's CDN can't serve a
+    stale snapshot. Confirmed via response headers that /draft/<id> is
+    fronted by Cloudflare with `cache-control: s-maxage=30` -- its `Age`
+    header climbs steadily (HIT every time) across normal polls, so without
+    this every fetch below can silently be reading up to ~30s-old data
+    regardless of how fast we poll. Used only on draft meta + picks, the
+    two calls that actually carry live nomination/bid -- the players/
+    projections/teams feeds are already covered by this app's own TTL
+    caches and gain nothing from busting Sleeper's on top.
+
+    Uses a uuid rather than a timestamp: `time.time_ns()` isn't actually
+    unique call-to-call on every platform (observed colliding back-to-back
+    on Windows), and a collision here means two different polls share a
+    cache key -- the CDN would silently serve the first poll's stale
+    response to the second, defeating the whole point.
+    """
+    return f"{url}{'&' if '?' in url else '?'}_={uuid.uuid4().hex}"
 
 
 def create_app() -> FastAPI:
@@ -328,8 +349,8 @@ def create_app() -> FastAPI:
         draft_id = _draft_id()
         sleeper = client_mod.SleeperClient()
         try:
-            draft_meta = sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}")
-            picks_raw = sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}/picks")
+            draft_meta = sleeper.get_json(_uncached(f"{client_mod.V1}/draft/{draft_id}"))
+            picks_raw = sleeper.get_json(_uncached(f"{client_mod.V1}/draft/{draft_id}/picks"))
         finally:
             sleeper.close()
         state = draft_mod.parse(draft_meta, picks_raw)
@@ -388,19 +409,19 @@ def create_app() -> FastAPI:
             sleeper = client_mod.SleeperClient()
             try:
                 if is_mock:
-                    draft_meta = sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}")
+                    draft_meta = sleeper.get_json(_uncached(f"{client_mod.V1}/draft/{draft_id}"))
                     try:
                         lg = mock_draft_mod.build_league_profile(draft_meta)
                     except mock_draft_mod.MockDraftError as exc:
                         raise HTTPException(status_code=400, detail=str(exc)) from exc
                     picks_raw = mock_draft_mod.backfill_roster_ids(
-                        sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}/picks"),
+                        sleeper.get_json(_uncached(f"{client_mod.V1}/draft/{draft_id}/picks")),
                         draft_meta)
                 else:
                     lg = league_mod.parse(
                         sleeper.get_json(f"{client_mod.V1}/league/{league_id}"))
-                    draft_meta = sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}")
-                    picks_raw = sleeper.get_json(f"{client_mod.V1}/draft/{draft_id}/picks")
+                    draft_meta = sleeper.get_json(_uncached(f"{client_mod.V1}/draft/{draft_id}"))
+                    picks_raw = sleeper.get_json(_uncached(f"{client_mod.V1}/draft/{draft_id}/picks"))
 
                 profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
                 proj, adp_data = _projections_cache_for(lg.season).get(
