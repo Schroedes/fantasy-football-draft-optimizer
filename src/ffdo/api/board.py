@@ -93,7 +93,7 @@ def _build_auction_history(
     for pick in sorted(state.picks, key=lambda p: p.pick_no):
         vp = valued.get(pick.player_id)
         grade = None
-        if pick.amount is not None:
+        if pick.amount is not None and vp is not None:
             base = baseline.get(pick.player_id, 1.0)
             grade = grading.grade_auction_pick(base, pick.amount)
         rows.append(_history_row(pick, vp, teams, grade, pick.amount))

@@ -346,6 +346,26 @@ def test_auction_history_grade_is_none_when_no_amount_was_recorded():
     assert out["history"][0]["amount"] is None
 
 
+def test_auction_history_grade_is_none_when_player_is_absent_from_valued_pool():
+    """A drafted player who never made it into the valued pool has no VOR/
+    tier signal to grade against. The old guard only checked `amount is not
+    None`, so this fell through to `baseline.get(pick.player_id, 1.0)` --
+    fabricating a real GREAT/GOOD/FAIR/POOR verdict from a made-up $1
+    baseline. Must return no grade at all, matching the snake path's
+    existing vp-is-not-None guard (see the mirrored test in
+    test_snake_board.py)."""
+    league = _league()
+    picks = (DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1,
+                       picked_by="u1", player_id="p0", amount=60),)
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=14, budget=200, picks=picks)
+    # p0 is deliberately absent from `valued` (empty dict) even though a
+    # baseline exists for it -- that baseline must not be used to grade.
+    out = board.build_auction_board(league, state, {}, {"p0": 100.0}, teams=_teams())
+    assert out["history"][0]["grade"] is None
+    assert out["history"][0]["amount"] == 60
+
+
 def test_auction_history_team_name_falls_back_when_profile_missing():
     league = _league()
     picks = (DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=5,

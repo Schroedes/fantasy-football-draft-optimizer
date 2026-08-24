@@ -150,7 +150,21 @@ def test_snake_history_is_newest_pick_first_with_grades():
 def test_snake_history_pool_shrinks_as_earlier_picks_are_replayed():
     """The pool a pick is graded against must exclude players already taken
     earlier in the same draft, not just the one player being graded."""
-    valued = _valued()
+    valued = dict(_valued())
+    # Pad the pool well above grading.SNAKE_MIN_POOL_SIZE (10) with low-VOR
+    # filler so this test exercises the pool-shrinking/replay logic itself,
+    # not grading.grade_snake_pick's separate thin-pool-grades-FAIR floor
+    # (see test_grading.py) -- without padding, removing 2 drafted + the
+    # picked player from the base 12-player pool would drop it to 9 and
+    # collapse every grade to FAIR regardless of VOR.
+    for i in range(10):
+        pid = f"PAD{i}"
+        prof = PlayerProfile(player_id=pid, first_name="Pad", last_name=str(i),
+                             position="RB", team="X", age=25, years_exp=3,
+                             injury_status=None, active=True)
+        valued[pid] = ValuedPlayer(profile=prof, projected_points=1.0,
+                                   adjusted_points=1.0, vor=1.0, tier=5,
+                                   adjustments={})
     # Take the top-VOR RB and WR first, then take the (now second-best) RB.
     picks = (
         DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1, picked_by="u1",
@@ -170,3 +184,22 @@ def test_snake_history_pool_shrinks_as_earlier_picks_are_replayed():
     # RB1 (vor=90) is now the best VOR left on the board -- RB0 and WR0 are
     # already gone -- so it grades GREAT, not merely "good".
     assert by_id["RB1"]["grade"] == "GREAT"
+
+
+def test_snake_history_grade_is_none_when_player_is_absent_from_valued_pool():
+    """A drafted player who never made it into the valued pool has no VOR to
+    grade against. This locks parity with the auction path's equivalent
+    guard in board._build_auction_history (see the mirrored test in
+    test_board.py) -- the snake path already got this right, but nothing
+    previously proved it, so a future refactor could silently regress it."""
+    picks = (DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1, picked_by="u1",
+                       player_id="RB99", amount=None),)
+    state = DraftState(draft_id="d", draft_type="snake", status="drafting",
+                       num_teams=12, rounds=6, budget=None, picks=picks)
+    valued = _valued()  # RB99 is deliberately not a key here
+
+    out = board.build_snake_board(_league(), state, valued,
+                                  {pid: 0.5 for pid in valued}, {})
+
+    assert out["history"][0]["grade"] is None
+    assert out["history"][0]["name"] == "RB99"
