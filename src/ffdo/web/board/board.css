@@ -251,6 +251,7 @@ tr.pos-RB td.pos-cell { color: var(--rb); }
 tr.pos-WR td.pos-cell { color: var(--wr); }
 tr.pos-TE td.pos-cell { color: var(--te); }
 td.adj-cell { font-weight: 600; color: var(--text); }
+td.lineup-value-cell { font-weight: 600; color: var(--accent); }
 .survival-cell { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .survival-bar-track { width: 52px; height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
 .survival-bar-fill { height: 100%; border-radius: 3px; }
