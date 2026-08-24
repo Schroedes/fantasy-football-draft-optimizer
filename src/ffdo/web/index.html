@@ -21,14 +21,39 @@
 
   <section id="connect-form" class="card">
     <h1>Connect your league</h1>
-    <label class="field">
-      <span>Sleeper League ID</span>
-      <input id="league-id-input" type="text" placeholder="e.g. 1315881559957458944" autocomplete="off">
-    </label>
-    <label class="field">
-      <span>Sleeper Username</span>
-      <input id="username-input" type="text" placeholder="e.g. yourusername" autocomplete="off">
-    </label>
+    <div class="provider-toggle" id="provider-toggle">
+      <button data-provider="sleeper" class="on">Sleeper</button>
+      <button data-provider="espn">ESPN</button>
+    </div>
+    <div id="sleeper-fields">
+      <label class="field">
+        <span>Sleeper League ID</span>
+        <input id="league-id-input" type="text" placeholder="e.g. 1315881559957458944" autocomplete="off">
+      </label>
+      <label class="field">
+        <span>Sleeper Username</span>
+        <input id="username-input" type="text" placeholder="e.g. yourusername" autocomplete="off">
+      </label>
+    </div>
+    <div id="espn-fields" hidden>
+      <label class="field">
+        <span>ESPN League ID</span>
+        <input id="espn-league-id-input" type="text" placeholder="e.g. 1882997948" autocomplete="off">
+      </label>
+      <label class="field">
+        <span>Season</span>
+        <input id="espn-season-input" type="text" placeholder="e.g. 2026" autocomplete="off">
+      </label>
+      <label class="field">
+        <span>espn_s2 cookie</span>
+        <input id="espn-s2-input" type="text" placeholder="paste the espn_s2 cookie value" autocomplete="off">
+      </label>
+      <label class="field">
+        <span>SWID cookie</span>
+        <input id="espn-swid-input" type="text" placeholder="e.g. {XXXXXXXX-XXXX-...}" autocomplete="off">
+      </label>
+      <p class="note">Private league? Log into fantasy.espn.com, open your browser's devtools, and find these two cookie values under Storage/Application &rarr; Cookies &rarr; fantasy.espn.com.</p>
+    </div>
     <p id="connect-error" class="error-msg" hidden></p>
     <button id="connect-btn">Connect</button>
   </section>

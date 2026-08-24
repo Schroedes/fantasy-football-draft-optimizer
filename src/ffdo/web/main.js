@@ -3,6 +3,7 @@ let state = {
   format: null,
   connecting: false,
   readinessTimer: null,
+  provider: "sleeper",
 };
 
 async function fetchSession() {
@@ -107,14 +108,39 @@ function renderReadiness(r) {
     </div>`).join("");
 }
 
+function connectPayload() {
+  if (state.provider === "espn") {
+    return {
+      provider: "espn",
+      league_id: document.getElementById("espn-league-id-input").value.trim(),
+      season: document.getElementById("espn-season-input").value.trim(),
+      espn_s2: document.getElementById("espn-s2-input").value.trim(),
+      swid: document.getElementById("espn-swid-input").value.trim(),
+    };
+  }
+  return {
+    provider: "sleeper",
+    league_id: document.getElementById("league-id-input").value.trim(),
+    username: document.getElementById("username-input").value.trim(),
+  };
+}
+
+function connectPayloadIsComplete(payload) {
+  if (payload.provider === "espn") {
+    return payload.league_id && payload.season && payload.espn_s2 && payload.swid;
+  }
+  return payload.league_id && payload.username;
+}
+
 async function connect() {
-  const leagueId = document.getElementById("league-id-input").value.trim();
-  const username = document.getElementById("username-input").value.trim();
+  const payload = connectPayload();
   const errorEl = document.getElementById("connect-error");
   errorEl.hidden = true;
 
-  if (!leagueId || !username) {
-    errorEl.textContent = "League ID and username are both required.";
+  if (!connectPayloadIsComplete(payload)) {
+    errorEl.textContent = payload.provider === "espn"
+      ? "League ID, season, espn_s2, and SWID are all required."
+      : "League ID and username are both required.";
     errorEl.hidden = false;
     return;
   }
@@ -129,7 +155,7 @@ async function connect() {
     const res = await fetch("/api/connect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ league_id: leagueId, username }),
+      body: JSON.stringify(payload),
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -153,5 +179,15 @@ async function connect() {
 }
 
 document.getElementById("connect-btn").addEventListener("click", connect);
+
+document.querySelectorAll("#provider-toggle button").forEach(btn =>
+  btn.addEventListener("click", () => {
+    state.provider = btn.dataset.provider;
+    document.querySelectorAll("#provider-toggle button").forEach(b =>
+      b.classList.toggle("on", b === btn));
+    document.getElementById("sleeper-fields").hidden = state.provider !== "sleeper";
+    document.getElementById("espn-fields").hidden = state.provider !== "espn";
+    document.getElementById("connect-error").hidden = true;
+  }));
 
 fetchSession();
