@@ -403,8 +403,9 @@ function renderHistory() {
     return;
   }
 
+  const prevScrollTop = el.scrollTop;
   el.innerHTML = d.history.map(h => {
-    const posColor = `var(--${(h.position ?? "").toLowerCase()}, var(--muted))`;
+    const posColor = `var(--${(h.position ?? "muted").toLowerCase()}, var(--muted))`;
     const amount = h.amount !== null && h.amount !== undefined
       ? `<span class="history-amount">$${h.amount}</span>` : "";
     const badge = h.grade
@@ -413,12 +414,13 @@ function renderHistory() {
       <span class="history-pickno">R${h.round} P${h.pick_no}</span>
       <div class="history-main">
         <span class="history-name">${escapeHtml(h.name)}</span>
-        <span class="history-meta" style="color:${posColor}">${h.position ?? ""} &middot; ${escapeHtml(h.team_name)}</span>
+        <span class="history-meta" style="color:${posColor}">${escapeHtml(h.position ?? "")} &middot; ${escapeHtml(h.team_name)}</span>
       </div>
       ${amount}
       ${badge}
     </div>`;
   }).join("");
+  el.scrollTop = prevScrollTop;
 }
 
 function renderSortHeaders() {
