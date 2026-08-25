@@ -99,6 +99,121 @@ def _to_output(plan: list[dict], your_dollars_left: float) -> dict:
     }
 
 
+MAX_SWAP_ITERATIONS = 200
+CANDIDATES_PER_SLOT = 15
+
+
+def _is_legal(vp: ValuedPlayer, slot: dict, flex_positions: frozenset[str]) -> bool:
+    pos = vp.profile.position
+    if slot["type"] == "dedicated":
+        return pos == slot["category"]
+    if slot["type"] == "flex":
+        return pos in flex_positions
+    return True  # bench: any offense position is legal
+
+
+def _caps_ok(
+    pos_counts: dict[str, int],
+    old_pos_a: str, new_pos_a: str,
+    old_pos_b: str, new_pos_b: str,
+    caps: dict[str, int],
+) -> bool:
+    """True if swapping old_pos_a/old_pos_b out for new_pos_a/new_pos_b
+    keeps every position's plan usage within its cap."""
+    trial = dict(pos_counts)
+    trial[old_pos_a] -= 1
+    trial[old_pos_b] -= 1
+    trial[new_pos_a] = trial.get(new_pos_a, 0) + 1
+    trial[new_pos_b] = trial.get(new_pos_b, 0) + 1
+    return all(trial.get(pos, 0) <= caps.get(pos, 0) for pos in trial)
+
+
+def _apply(slot: dict, vp: ValuedPlayer, price: float) -> None:
+    slot["eligible_position"] = vp.profile.position
+    slot["player_id"] = vp.profile.player_id
+    slot["name"] = vp.profile.full_name
+    slot["target_price"] = price
+    slot["vor"] = vp.vor
+
+
+def _refine(
+    plan: list[dict],
+    available: list[ValuedPlayer],
+    used_ids: set[str],
+    baseline: Mapping[str, float],
+    factor: float,
+    needs: RosterNeeds,
+    caps: dict[str, int],
+) -> list[dict]:
+    """Bounded local search: repeatedly swap a pair of planned slots for a
+    higher-combined-VOR pair of legal replacements at no higher combined
+    cost, until no improving swap exists or the iteration cap is hit.
+
+    This is what catches "an early expensive pick blocked two efficient
+    players that together beat it" -- Phase 1's single greedy pass can't
+    see that after the fact; this pass can, within its search radius (top
+    `CANDIDATES_PER_SLOT` unplanned players by VOR per slot).
+    """
+    pos_counts = dict.fromkeys(needs.dedicated_count, 0)
+    for slot in plan:
+        pos_counts[slot["eligible_position"]] = pos_counts.get(slot["eligible_position"], 0) + 1
+
+    for _ in range(MAX_SWAP_ITERATIONS):
+        improved = False
+        for i, slot_a in enumerate(plan):
+            candidates_a = [vp for vp in available
+                            if vp.profile.player_id not in used_ids
+                            and _is_legal(vp, slot_a, needs.flex_positions)][:CANDIDATES_PER_SLOT]
+            for j, slot_b in enumerate(plan):
+                if j <= i:
+                    continue
+                candidates_b = [vp for vp in available
+                                if vp.profile.player_id not in used_ids
+                                and _is_legal(vp, slot_b, needs.flex_positions)][:CANDIDATES_PER_SLOT]
+
+                current_price = slot_a["target_price"] + slot_b["target_price"]
+                current_vor = slot_a["vor"] + slot_b["vor"]
+
+                best = None  # (vor_gain, ca, cb, pa, pb)
+                for ca in candidates_a:
+                    for cb in candidates_b:
+                        if ca.profile.player_id == cb.profile.player_id:
+                            continue
+                        pa = _price_of(ca, baseline, factor)
+                        pb = _price_of(cb, baseline, factor)
+                        if pa + pb > current_price:
+                            continue
+                        if not _caps_ok(pos_counts,
+                                        slot_a["eligible_position"], ca.profile.position,
+                                        slot_b["eligible_position"], cb.profile.position,
+                                        caps):
+                            continue
+                        vor_gain = (ca.vor + cb.vor) - current_vor
+                        if vor_gain > 0 and (best is None or vor_gain > best[0]):
+                            best = (vor_gain, ca, cb, pa, pb)
+
+                if best is not None:
+                    _, ca, cb, pa, pb = best
+                    used_ids.discard(slot_a["player_id"])
+                    used_ids.discard(slot_b["player_id"])
+                    pos_counts[slot_a["eligible_position"]] -= 1
+                    pos_counts[slot_b["eligible_position"]] -= 1
+                    _apply(slot_a, ca, pa)
+                    _apply(slot_b, cb, pb)
+                    used_ids.add(ca.profile.player_id)
+                    used_ids.add(cb.profile.player_id)
+                    pos_counts[ca.profile.position] = pos_counts.get(ca.profile.position, 0) + 1
+                    pos_counts[cb.profile.position] = pos_counts.get(cb.profile.position, 0) + 1
+                    improved = True
+                    break
+            if improved:
+                break
+        if not improved:
+            break
+
+    return plan
+
+
 def optimal_plan(
     valued: Mapping[str, ValuedPlayer],
     baseline: Mapping[str, float],
@@ -110,10 +225,12 @@ def optimal_plan(
 ) -> dict:
     """The specific, budget-affordable roster that maximizes starting VOR.
 
-    Phase 1 (`_greedy_fill`) builds an initial plan. A later task adds
-    Phase 2, a bounded local-search refinement, between the two calls
-    below.
+    Two phases: Phase 1 (`_greedy_fill`) builds an initial plan by walking
+    every available player once, VOR descending. Phase 2 (`_refine`)
+    then runs a bounded pairwise-swap local search to catch cases where
+    an early expensive pick blocked a better later combination.
     """
     plan, available, used_ids, needs, caps = _greedy_fill(
         valued, baseline, factor, state, league, roster_id, your_dollars_left)
+    plan = _refine(plan, available, used_ids, baseline, factor, needs, caps)
     return _to_output(plan, your_dollars_left)

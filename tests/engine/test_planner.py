@@ -127,3 +127,56 @@ def test_greedy_fill_skips_unaffordable_candidate_for_a_cheaper_one():
     assert "rb_cheap" in player_ids
     assert sum(s["target_price"] for s in plan) <= 10.0
     assert len(plan) == 2
+
+
+def test_swap_refinement_fixes_expensive_stud_blocking_two_good_players():
+    """Regression test for the exact failure mode that motivated Phase 2:
+    a single-pass greedy fill locks in an early expensive stud, leaving too
+    little budget for two players elsewhere whose combined VOR would have
+    been higher. The swap pass must find and apply that better pair."""
+    league = _league_multi(("RB", "WR", "BN"))
+    valued = _valued_positions({
+        "rb_stud": ("RB", 90.0), "rb_cheap": ("RB", 40.0),
+        "wr_good": ("WR", 70.0), "wr_backup": ("WR", 35.0),
+        "filler_wr": ("WR", 10.0), "filler_any": ("RB", 8.0),
+    })
+    baseline = {
+        "rb_stud": 19.0, "rb_cheap": 5.0,
+        "wr_good": 12.0, "wr_backup": 6.0,
+        "filler_wr": 1.0, "filler_any": 1.0,
+    }
+    state = _empty_state()
+
+    greedy_plan, available, used_ids, needs, caps = planner._greedy_fill(
+        valued, baseline, 1.0, state, league, roster_id=None, your_dollars_left=21.0)
+    greedy_vor = sum(s["vor"] for s in greedy_plan if s["type"] in ("dedicated", "flex"))
+    assert greedy_vor == pytest.approx(100.0)  # rb_stud(90) + filler_wr(10) -- suboptimal
+
+    result = planner.optimal_plan(
+        valued, baseline, 1.0, state, league, roster_id=None, your_dollars_left=21.0)
+
+    assert result["total_plan_vor"] == pytest.approx(110.0)  # rb_cheap(40) + wr_good(70)
+    by_category = {s["category"]: s["player_id"] for s in result["slots"]}
+    assert by_category["RB"] == "rb_cheap"
+    assert by_category["WR"] == "wr_good"
+    assert result["total_plan_cost"] <= 21.0
+
+
+def test_swap_refinement_leaves_already_optimal_plan_unchanged():
+    """When greedy's output is already locally optimal (no other legal
+    candidates exist), refinement must be a no-op."""
+    league = _league_multi(("RB", "BN"))
+    valued = _valued_positions({
+        "rb_best": ("RB", 90.0), "rb_next": ("RB", 40.0),
+    })
+    baseline = {"rb_best": 15.0, "rb_next": 10.0}
+    state = _empty_state()
+
+    greedy_plan, available, used_ids, needs, caps = planner._greedy_fill(
+        valued, baseline, 1.0, state, league, roster_id=None, your_dollars_left=25.0)
+    before = [(s["player_id"], s["target_price"]) for s in greedy_plan]
+
+    refined = planner._refine(greedy_plan, available, used_ids, baseline, 1.0, needs, caps)
+    after = [(s["player_id"], s["target_price"]) for s in refined]
+
+    assert before == after
