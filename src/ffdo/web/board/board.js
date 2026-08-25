@@ -143,6 +143,7 @@ function render() {
 
   renderCow();
   renderPositionBudget();
+  renderOptimalPlan();
   renderMoneyHeader();
   renderTable();
   renderNominated();
@@ -242,6 +243,31 @@ function renderPositionBudget() {
       <span>Bench reserve</span>
       <span>$${byPos.BENCH.recommended} · ${byPos.BENCH.slots_open} slot${byPos.BENCH.slots_open === 1 ? "" : "s"} open</span>
     </div>`;
+}
+
+function renderOptimalPlan() {
+  const el = document.getElementById("optimal-plan");
+  const d = state.data;
+  const plan = d && d.optimal_plan;
+  if (d.format === "snake" || !plan) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+
+  document.getElementById("plan-vor").textContent = plan.total_plan_vor;
+  document.getElementById("plan-cost").textContent = `$${plan.total_plan_cost}`;
+  document.getElementById("plan-left").textContent = `$${plan.dollars_left_after_plan}`;
+
+  document.getElementById("plan-rows").innerHTML = plan.slots.map(slot => {
+    const posColor = `var(--${slot.eligible_position.toLowerCase()}, var(--muted))`;
+    return `<div class="plan-row">
+      <span class="plan-category">${slot.category}</span>
+      <span class="plan-name" style="color:${posColor}">${slot.name}</span>
+      <span class="plan-price">$${slot.target_price}</span>
+      <span class="plan-vor-val">${slot.vor} VOR</span>
+    </div>`;
+  }).join("");
 }
 
 function renderTable() {
