@@ -81,7 +81,7 @@ def positional_budget(
     league,
     roster_id: int | None,
     your_dollars_left: float,
-) -> dict[str, dict[str, float] | float]:
+) -> dict[str, dict[str, float]]:
     """Recommended $ per position to fill your remaining roster slots.
 
     Dedicated slots (e.g. a plain "RB" slot) only ever take that exact
@@ -113,14 +113,22 @@ def positional_budget(
         pos: max(0, dedicated_count[pos] - min(dedicated_count[pos], drafted_count[pos]))
         for pos in OFFENSE_POSITIONS
     }
-    leftover = sum(max(0, drafted_count[pos] - dedicated_count[pos])
-                   for pos in OFFENSE_POSITIONS)
+    flex_positions = {
+        pos for slot in league.roster_positions if slot in FLEX_ELIGIBILITY
+        for pos in FLEX_ELIGIBILITY[slot]
+    }
+    flex_eligible_leftover = sum(
+        max(0, drafted_count[pos] - dedicated_count[pos])
+        for pos in OFFENSE_POSITIONS if pos in flex_positions)
+    non_flex_leftover = sum(
+        max(0, drafted_count[pos] - dedicated_count[pos])
+        for pos in OFFENSE_POSITIONS if pos not in flex_positions)
 
     flex_total = sum(1 for slot in league.roster_positions
                      if slot in FLEX_ELIGIBILITY)
     bench_total = league.roster_positions.count("BN")
-    flex_remaining = max(0, flex_total - leftover)
-    bench_spill = max(0, leftover - flex_total)
+    flex_remaining = max(0, flex_total - flex_eligible_leftover)
+    bench_spill = max(0, flex_eligible_leftover - flex_total) + non_flex_leftover
     bench_remaining = max(0, bench_total - bench_spill - undetermined)
 
     available = [vp for pid, vp in valued.items() if pid not in drafted]
@@ -137,10 +145,6 @@ def positional_budget(
         raw[pos] = sum(pool[:need])
         pos_leftover_pool[pos] = pool[need:]
 
-    flex_positions = {
-        pos for slot in league.roster_positions if slot in FLEX_ELIGIBILITY
-        for pos in FLEX_ELIGIBILITY[slot]
-    }
     flex_candidates = sorted(
         (price for pos in flex_positions for price in pos_leftover_pool.get(pos, [])),
         reverse=True,
@@ -151,7 +155,7 @@ def positional_budget(
     total_raw = sum(raw.values()) + raw_flex + raw_bench
     scale = your_dollars_left / total_raw if total_raw > 0 else 0.0
 
-    out: dict[str, dict[str, float] | float] = {
+    out: dict[str, dict[str, float]] = {
         pos: {
             "recommended": round(raw[pos] * scale, 1),
             "slots_open": dedicated_need[pos],

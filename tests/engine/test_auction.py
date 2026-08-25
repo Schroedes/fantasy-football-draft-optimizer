@@ -182,6 +182,61 @@ def test_extra_drafted_players_reduce_flex_not_dedicated_need():
     assert result["BENCH"]["slots_open"] == 1
 
 
+def test_non_flex_eligible_leftover_does_not_zero_out_flex():
+    """A backup QB in a standard (non-superflex) FLEX league is not
+    flex-eligible -- it must spill to BENCH, not incorrectly consume the
+    FLEX slot's budget."""
+    league = _league_multi(("QB", "RB", "FLEX", "BN"))
+    picks = (
+        DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1, picked_by="u1",
+                 player_id="qb1", amount=10),
+        DraftPick(pick_no=2, round=1, draft_slot=2, roster_id=1, picked_by="u1",
+                 player_id="qb2", amount=10),
+    )
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=4, budget=200, picks=picks)
+    valued = _valued_positions({
+        "qb1": ("QB", 50.0), "qb2": ("QB", 40.0),
+        "rb_avail": ("RB", 30.0),
+    })
+    baseline = {pid: max(1.0, vp.vor) for pid, vp in valued.items()}
+
+    result = auction.positional_budget(
+        valued, baseline, 1.0, state, league, roster_id=1,
+        your_dollars_left=180.0)
+
+    assert result["QB"]["slots_open"] == 0
+    assert result["RB"]["slots_open"] == 1
+    assert result["FLEX"]["slots_open"] == 1
+    assert result["BENCH"]["slots_open"] == 0
+
+
+def test_superflex_leftover_correctly_consumes_the_superflex_slot():
+    """Unlike a standard FLEX league, SUPER_FLEX accepts QB -- a leftover
+    QB pick there DOES correctly consume the superflex slot."""
+    league = _league_multi(("QB", "SUPER_FLEX", "BN"))
+    picks = (
+        DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1, picked_by="u1",
+                 player_id="qb1", amount=10),
+        DraftPick(pick_no=2, round=1, draft_slot=2, roster_id=1, picked_by="u1",
+                 player_id="qb2", amount=10),
+    )
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=3, budget=200, picks=picks)
+    valued = _valued_positions({
+        "qb1": ("QB", 50.0), "qb2": ("QB", 40.0),
+    })
+    baseline = {pid: max(1.0, vp.vor) for pid, vp in valued.items()}
+
+    result = auction.positional_budget(
+        valued, baseline, 1.0, state, league, roster_id=1,
+        your_dollars_left=180.0)
+
+    assert result["QB"]["slots_open"] == 0
+    assert result["FLEX"]["slots_open"] == 0
+    assert result["BENCH"]["slots_open"] == 1
+
+
 def test_flex_prices_from_leftover_pool_not_min_bid():
     """FLEX must price like a real starting slot -- from the best remaining
     flex-eligible players left after dedicated slots are filled -- not the
