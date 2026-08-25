@@ -263,11 +263,11 @@ def test_board_includes_positional_budget_recommendation():
     out = board.build_auction_board(league, state, valued, baseline, roster_id=None)
 
     by_pos = out["budget"]["by_position"]
-    assert set(by_pos) == {"QB", "RB", "WR", "TE", "flex_bench_reserve", "flex_bench_slots_open"}
+    assert set(by_pos) == {"QB", "RB", "WR", "TE", "FLEX", "BENCH"}
     assert by_pos["RB"]["slots_open"] == 2
     total = (by_pos["QB"]["recommended"] + by_pos["RB"]["recommended"]
              + by_pos["WR"]["recommended"] + by_pos["TE"]["recommended"]
-             + by_pos["flex_bench_reserve"])
+             + by_pos["FLEX"]["recommended"] + by_pos["BENCH"]["recommended"])
     assert total == pytest.approx(out["budget"]["your_dollars_left"], abs=0.5)
 
 
@@ -309,7 +309,7 @@ def test_positional_budget_slot_invariant_holds_for_a_real_roster():
     by_pos = out["budget"]["by_position"]
     slots_accounted = (
         sum(by_pos[p]["slots_open"] for p in ("QB", "RB", "WR", "TE"))
-        + by_pos["flex_bench_slots_open"])
+        + by_pos["FLEX"]["slots_open"] + by_pos["BENCH"]["slots_open"])
     assert slots_accounted == out["budget"]["your_slots_left"]
     # roster 1 already drafted 1 of 2 dedicated RB slots
     assert by_pos["RB"]["slots_open"] == 1

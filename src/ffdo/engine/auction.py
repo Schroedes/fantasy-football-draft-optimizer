@@ -85,10 +85,14 @@ def positional_budget(
     """Recommended $ per position to fill your remaining roster slots.
 
     Dedicated slots (e.g. a plain "RB" slot) only ever take that exact
-    position; FLEX-eligible and bench slots are lumped into one reserve
-    bucket because they carry no positional preference of their own.
-    `roster_id=None` (FFDO_ROSTER_ID unset) is treated as a fresh roster --
-    zero drafted -- the same fallback the board applies to max-bid elsewhere.
+    position. FLEX-eligible slots are priced from the best remaining
+    players at any flex-eligible position, after dedicated slots have
+    already claimed their share -- so FLEX (a real starting spot that
+    scores every week) gets a real market price, not a floor. Bench slots
+    carry no positional preference and score nothing, so they stay a flat
+    $1/slot reserve. `roster_id=None` (FFDO_ROSTER_ID unset) is treated as
+    a fresh roster -- zero drafted -- the same fallback the board applies
+    to max-bid elsewhere.
     """
     drafted = state.drafted_player_ids()
     your_picks = ([p for p in state.picks if p.roster_id == roster_id]
@@ -112,28 +116,39 @@ def positional_budget(
     leftover = sum(max(0, drafted_count[pos] - dedicated_count[pos])
                    for pos in OFFENSE_POSITIONS)
 
-    flex_bench_total = sum(
-        1 for slot in league.roster_positions
-        if slot in FLEX_ELIGIBILITY or slot == "BN")
-    flex_bench_remaining = max(0, flex_bench_total - leftover - undetermined)
+    flex_total = sum(1 for slot in league.roster_positions
+                     if slot in FLEX_ELIGIBILITY)
+    bench_total = league.roster_positions.count("BN")
+    flex_remaining = max(0, flex_total - leftover)
+    bench_spill = max(0, leftover - flex_total)
+    bench_remaining = max(0, bench_total - bench_spill - undetermined)
 
     available = [vp for pid, vp in valued.items() if pid not in drafted]
 
     raw: dict[str, float] = {}
+    pos_leftover_pool: dict[str, list[float]] = {}
     for pos in OFFENSE_POSITIONS:
         need = dedicated_need[pos]
-        if need == 0:
-            raw[pos] = 0.0
-            continue
         pool = sorted(
             (max(MIN_BID, baseline.get(vp.profile.player_id, 1.0) * factor)
              for vp in available if vp.profile.position == pos),
             reverse=True,
-        )[:need]
-        raw[pos] = sum(pool)
+        )
+        raw[pos] = sum(pool[:need])
+        pos_leftover_pool[pos] = pool[need:]
 
-    raw_reserve = MIN_BID * flex_bench_remaining
-    total_raw = sum(raw.values()) + raw_reserve
+    flex_positions = {
+        pos for slot in league.roster_positions if slot in FLEX_ELIGIBILITY
+        for pos in FLEX_ELIGIBILITY[slot]
+    }
+    flex_candidates = sorted(
+        (price for pos in flex_positions for price in pos_leftover_pool.get(pos, [])),
+        reverse=True,
+    )[:flex_remaining]
+    raw_flex = sum(flex_candidates)
+    raw_bench = MIN_BID * bench_remaining
+
+    total_raw = sum(raw.values()) + raw_flex + raw_bench
     scale = your_dollars_left / total_raw if total_raw > 0 else 0.0
 
     out: dict[str, dict[str, float] | float] = {
@@ -143,6 +158,12 @@ def positional_budget(
         }
         for pos in OFFENSE_POSITIONS
     }
-    out["flex_bench_reserve"] = round(raw_reserve * scale, 1)
-    out["flex_bench_slots_open"] = flex_bench_remaining
+    out["FLEX"] = {
+        "recommended": round(raw_flex * scale, 1),
+        "slots_open": flex_remaining,
+    }
+    out["BENCH"] = {
+        "recommended": round(raw_bench * scale, 1),
+        "slots_open": bench_remaining,
+    }
     return out
