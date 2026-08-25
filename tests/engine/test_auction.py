@@ -306,3 +306,75 @@ def test_none_roster_id_falls_back_to_fresh_roster():
         your_dollars_left=200.0)
 
     assert result["RB"]["slots_open"] == 1
+
+
+def test_compute_roster_needs_no_picks():
+    league = _league_multi(("QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "BN", "BN"))
+    valued = _valued_positions({"qb1": ("QB", 50.0), "rb1": ("RB", 80.0)})
+    state = draft.parse({"draft_id": "d", "type": "auction", "status": "drafting",
+                         "settings": {"teams": 12, "rounds": 9, "budget": 200}}, [])
+
+    needs = auction.compute_roster_needs(valued, state, league, roster_id=None)
+
+    assert dict(needs.dedicated_count) == {"QB": 1, "RB": 2, "WR": 2, "TE": 1}
+    assert dict(needs.drafted_count) == {"QB": 0, "RB": 0, "WR": 0, "TE": 0}
+    assert dict(needs.dedicated_need) == {"QB": 1, "RB": 2, "WR": 2, "TE": 1}
+    assert needs.flex_positions == frozenset({"RB", "WR", "TE"})
+    assert needs.flex_total == 1
+    assert needs.flex_remaining == 1
+    assert needs.bench_total == 2
+    assert needs.bench_remaining == 2
+    assert needs.undetermined == 0
+
+
+def test_compute_roster_needs_with_picks_and_leftover():
+    league = _league_multi(("RB", "FLEX", "BN"))
+    picks = (
+        DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1, picked_by="u1",
+                 player_id="rb_drafted_1", amount=10),
+        DraftPick(pick_no=2, round=1, draft_slot=2, roster_id=1, picked_by="u1",
+                 player_id="rb_drafted_2", amount=10),
+    )
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=3, budget=200, picks=picks)
+    valued = _valued_positions({
+        "rb_drafted_1": ("RB", 50.0), "rb_drafted_2": ("RB", 40.0),
+    })
+
+    needs = auction.compute_roster_needs(valued, state, league, roster_id=1)
+
+    assert dict(needs.dedicated_need) == {"QB": 0, "RB": 0, "WR": 0, "TE": 0}
+    assert needs.flex_remaining == 0
+    assert needs.bench_remaining == 1
+    assert needs.drafted_count["RB"] == 2
+
+
+def test_position_caps_matches_confirmed_examples():
+    league = _league_multi(("QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "BN", "BN"))
+    valued: dict = {}
+    state = draft.parse({"draft_id": "d", "type": "auction", "status": "drafting",
+                         "settings": {"teams": 12, "rounds": 9, "budget": 200}}, [])
+    needs = auction.compute_roster_needs(valued, state, league, roster_id=None)
+
+    caps = auction.position_caps(league, needs)
+
+    assert caps["QB"] == 2
+    assert caps["RB"] == 6
+
+
+def test_position_caps_subtracts_already_drafted():
+    league = _league_multi(("QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "BN", "BN"))
+    picks = (
+        DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1, picked_by="u1",
+                 player_id="qb1", amount=10),
+        DraftPick(pick_no=2, round=1, draft_slot=2, roster_id=1, picked_by="u1",
+                 player_id="qb2", amount=10),
+    )
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=9, budget=200, picks=picks)
+    valued = _valued_positions({"qb1": ("QB", 50.0), "qb2": ("QB", 40.0)})
+    needs = auction.compute_roster_needs(valued, state, league, roster_id=1)
+
+    caps = auction.position_caps(league, needs)
+
+    assert caps["QB"] == 0
