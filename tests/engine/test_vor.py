@@ -96,3 +96,31 @@ def test_vor_reflects_the_leagues_scoring_settings():
     assert full_ppr_vor != standard_vor
     assert full_ppr_vor == 133.0  # 204 - 71
     assert standard_vor == 73.0   # 124 - 51
+
+
+def test_def_and_k_get_position_differentiated_vor():
+    """No engine change should be needed for DEF/K -- replacement.py and
+    vor.py already derive everything from league.roster_positions and
+    whatever positions appear in the scored pool. This proves it."""
+    points = {
+        "def0": 140.0, "def1": 110.0, "def2": 90.0,
+        "k0": 130.0, "k1": 100.0, "k2": 80.0,
+    }
+    profiles = _profiles({
+        "def0": "DEF", "def1": "DEF", "def2": "DEF",
+        "k0": "K", "k1": "K", "k2": "K",
+    })
+    league = LeagueProfile(
+        league_id="x", season=2026, num_teams=2,
+        roster_positions=("DEF", "K", "BN"),
+        scoring_settings={}, budget=200,
+    )
+    valued = vor.compute(points, profiles, league)
+
+    # 2 teams x 1 DEF slot => replacement DEF is the 3rd best (90.0)
+    assert valued["def0"].vor == 140.0 - 90.0
+    # 2 teams x 1 K slot => replacement K is the 3rd best (80.0)
+    assert valued["k0"].vor == 130.0 - 80.0
+    # Replacement levels are computed independently per position -- a DEF's
+    # VOR must not be measured against the K replacement level or vice versa.
+    assert valued["def0"].vor != valued["k0"].vor - (130.0 - 90.0)
