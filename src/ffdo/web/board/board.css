@@ -16,6 +16,8 @@
   --rb: #34D399;
   --wr: #22D3EE;
   --te: #FBBF24;
+  --def: #F472B6;
+  --k: #A78BFA;
   --font-sans: 'IBM Plex Sans', -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
 }
@@ -282,6 +284,8 @@ tr.pos-QB td.pos-cell { color: var(--qb); }
 tr.pos-RB td.pos-cell { color: var(--rb); }
 tr.pos-WR td.pos-cell { color: var(--wr); }
 tr.pos-TE td.pos-cell { color: var(--te); }
+tr.pos-DEF td.pos-cell { color: var(--def); }
+tr.pos-K td.pos-cell { color: var(--k); }
 td.adj-cell { font-weight: 600; color: var(--text); }
 td.lineup-value-cell { font-weight: 600; color: var(--accent); }
 .survival-cell { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
