@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from ffdo.domain.models import DraftState, TeamProfile, ValuedPlayer
 from ffdo.engine import auction
 from ffdo.engine import grading
+from ffdo.engine import planner
 from ffdo.engine import roster as roster_engine
 
 
@@ -174,6 +175,9 @@ def build_auction_board(
     by_position = auction.positional_budget(
         valued, baseline, factor, state, league, roster_id, your_dollars_left)
 
+    plan = planner.optimal_plan(
+        valued, baseline, factor, state, league, roster_id, your_dollars_left)
+
     total_slots = league.num_teams * league.roster_size
     slots_remaining_room = max(1, total_slots - len(drafted))
     league_dollars_per_slot = (
@@ -220,6 +224,7 @@ def build_auction_board(
             "league_dollars_per_slot": round(league_dollars_per_slot, 1),
             "by_position": by_position,
         },
+        "optimal_plan": plan,
         "picks_made": len(state.picks),
         "players": rows,
         "rosters": _build_rosters_payload(league, state, valued, teams, roster_id),

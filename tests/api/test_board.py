@@ -381,3 +381,35 @@ def test_auction_history_team_name_falls_back_when_profile_missing():
     valued = _valued(["p0"])
     out = board.build_auction_board(league, state, valued, {"p0": 10.0})
     assert out["history"][0]["team_name"] == "Team 5"
+
+
+def test_board_includes_optimal_plan():
+    league = LeagueProfile(league_id="x", season=2025, num_teams=1,
+                           roster_positions=("QB", "RB", "FLEX", "BN"),
+                           scoring_settings={}, budget=200)
+    state = draft.parse({"draft_id": "d", "type": "auction", "status": "drafting",
+                         "settings": {"teams": 1, "rounds": 4, "budget": 200}}, [])
+
+    def _player(pid, pos, vor):
+        prof = PlayerProfile(player_id=pid, first_name="P", last_name=pid,
+                             position=pos, team="X", age=25, years_exp=3,
+                             injury_status=None, active=True)
+        return ValuedPlayer(profile=prof, projected_points=0.0,
+                            adjusted_points=0.0, vor=vor, tier=1,
+                            adjustments={})
+
+    valued = {
+        "qb1": _player("qb1", "QB", 50.0),
+        "rb1": _player("rb1", "RB", 60.0),
+        "rb2": _player("rb2", "RB", 40.0),
+        "wr1": _player("wr1", "WR", 45.0),
+    }
+    baseline = {pid: max(1.0, vp.vor) for pid, vp in valued.items()}
+
+    out = board.build_auction_board(league, state, valued, baseline, roster_id=None)
+
+    assert "optimal_plan" in out
+    plan = out["optimal_plan"]
+    assert len(plan["slots"]) == league.roster_size
+    assert all(s["player_id"] is not None for s in plan["slots"])
+    assert plan["total_plan_cost"] <= out["budget"]["your_dollars_left"]
