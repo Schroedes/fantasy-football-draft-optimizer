@@ -123,11 +123,12 @@ def test_positional_budget_need_and_slot_invariant():
     assert result["RB"]["slots_open"] == 2
     assert result["WR"]["slots_open"] == 2
     assert result["TE"]["slots_open"] == 1
-    assert result["flex_bench_slots_open"] == 3
+    assert result["FLEX"]["slots_open"] == 1
+    assert result["BENCH"]["slots_open"] == 2
     total_slots_accounted = (
         result["QB"]["slots_open"] + result["RB"]["slots_open"]
         + result["WR"]["slots_open"] + result["TE"]["slots_open"]
-        + result["flex_bench_slots_open"])
+        + result["FLEX"]["slots_open"] + result["BENCH"]["slots_open"])
     assert total_slots_accounted == league.roster_size
 
 
@@ -147,16 +148,16 @@ def test_positional_budget_scales_to_your_dollars_left():
 
     total = (result["QB"]["recommended"] + result["RB"]["recommended"]
              + result["WR"]["recommended"] + result["TE"]["recommended"]
-             + result["flex_bench_reserve"])
-    # Five independently-rounded (1-decimal) values can compound to ~0.1-0.25
+             + result["FLEX"]["recommended"] + result["BENCH"]["recommended"])
+    # Six independently-rounded (1-decimal) values can compound to ~0.1-0.3
     # off the true total even though the underlying scale is exact -- widen
     # accordingly rather than chase a razor-tight bound.
     assert total == pytest.approx(90.0, abs=0.5)
 
 
-def test_extra_drafted_players_reduce_flex_bench_not_dedicated_need():
-    """A 2nd RB drafted beyond the single dedicated RB slot must have used a
-    FLEX/bench slot, not created negative dedicated need."""
+def test_extra_drafted_players_reduce_flex_not_dedicated_need():
+    """A 2nd RB drafted beyond the single dedicated RB slot must have used
+    the FLEX slot, not created negative dedicated need."""
     league = _league_multi(("RB", "FLEX", "BN"))
     picks = (
         DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1, picked_by="u1",
@@ -177,7 +178,111 @@ def test_extra_drafted_players_reduce_flex_bench_not_dedicated_need():
         your_dollars_left=180.0)
 
     assert result["RB"]["slots_open"] == 0
-    assert result["flex_bench_slots_open"] == 1
+    assert result["FLEX"]["slots_open"] == 0
+    assert result["BENCH"]["slots_open"] == 1
+
+
+def test_non_flex_eligible_leftover_does_not_zero_out_flex():
+    """A backup QB in a standard (non-superflex) FLEX league is not
+    flex-eligible -- it must spill to BENCH, not incorrectly consume the
+    FLEX slot's budget."""
+    league = _league_multi(("QB", "RB", "FLEX", "BN"))
+    picks = (
+        DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1, picked_by="u1",
+                 player_id="qb1", amount=10),
+        DraftPick(pick_no=2, round=1, draft_slot=2, roster_id=1, picked_by="u1",
+                 player_id="qb2", amount=10),
+    )
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=4, budget=200, picks=picks)
+    valued = _valued_positions({
+        "qb1": ("QB", 50.0), "qb2": ("QB", 40.0),
+        "rb_avail": ("RB", 30.0),
+    })
+    baseline = {pid: max(1.0, vp.vor) for pid, vp in valued.items()}
+
+    result = auction.positional_budget(
+        valued, baseline, 1.0, state, league, roster_id=1,
+        your_dollars_left=180.0)
+
+    assert result["QB"]["slots_open"] == 0
+    assert result["RB"]["slots_open"] == 1
+    assert result["FLEX"]["slots_open"] == 1
+    assert result["BENCH"]["slots_open"] == 0
+
+
+def test_superflex_leftover_correctly_consumes_the_superflex_slot():
+    """Unlike a standard FLEX league, SUPER_FLEX accepts QB -- a leftover
+    QB pick there DOES correctly consume the superflex slot."""
+    league = _league_multi(("QB", "SUPER_FLEX", "BN"))
+    picks = (
+        DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1, picked_by="u1",
+                 player_id="qb1", amount=10),
+        DraftPick(pick_no=2, round=1, draft_slot=2, roster_id=1, picked_by="u1",
+                 player_id="qb2", amount=10),
+    )
+    state = DraftState(draft_id="d", draft_type="auction", status="drafting",
+                       num_teams=12, rounds=3, budget=200, picks=picks)
+    valued = _valued_positions({
+        "qb1": ("QB", 50.0), "qb2": ("QB", 40.0),
+    })
+    baseline = {pid: max(1.0, vp.vor) for pid, vp in valued.items()}
+
+    result = auction.positional_budget(
+        valued, baseline, 1.0, state, league, roster_id=1,
+        your_dollars_left=180.0)
+
+    assert result["QB"]["slots_open"] == 0
+    assert result["FLEX"]["slots_open"] == 0
+    assert result["BENCH"]["slots_open"] == 1
+
+
+def test_flex_prices_from_leftover_pool_not_min_bid():
+    """FLEX must price like a real starting slot -- from the best remaining
+    flex-eligible players left after dedicated slots are filled -- not the
+    $1 floor bench gets."""
+    league = _league_multi(("RB", "FLEX", "BN"))
+    valued = _valued_positions({
+        "rb1": ("RB", 50.0), "rb2": ("RB", 30.0), "rb3": ("RB", 10.0),
+    })
+    baseline = {pid: max(1.0, vp.vor) for pid, vp in valued.items()}
+    state = draft.parse({"draft_id": "d", "type": "auction", "status": "drafting",
+                         "settings": {"teams": 12, "rounds": 3, "budget": 200}}, [])
+
+    result = auction.positional_budget(
+        valued, baseline, 1.0, state, league, roster_id=None,
+        your_dollars_left=81.0)
+
+    # RB's dedicated slot claims rb1 (50); FLEX's only candidates are what's
+    # left (rb2=30, rb3=10), takes the top one; BENCH stays at the $1 floor.
+    assert result["RB"]["recommended"] == pytest.approx(50.0, abs=0.1)
+    assert result["FLEX"]["recommended"] == pytest.approx(30.0, abs=0.1)
+    assert result["BENCH"]["recommended"] == pytest.approx(1.0, abs=0.1)
+    assert result["FLEX"]["recommended"] > result["BENCH"]["recommended"]
+
+
+def test_flex_pool_excludes_players_already_claimed_by_dedicated_slots():
+    """The flex candidate pool must draw from what's left after dedicated
+    RB/WR budgets take their top picks -- never double-count the same
+    player in both a dedicated budget and the flex budget."""
+    league = _league_multi(("RB", "WR", "FLEX", "BN"))
+    valued = _valued_positions({
+        "rb1": ("RB", 50.0), "rb2": ("RB", 20.0),
+        "wr1": ("WR", 40.0), "wr2": ("WR", 15.0),
+    })
+    baseline = {pid: max(1.0, vp.vor) for pid, vp in valued.items()}
+    state = draft.parse({"draft_id": "d", "type": "auction", "status": "drafting",
+                         "settings": {"teams": 12, "rounds": 4, "budget": 200}}, [])
+
+    result = auction.positional_budget(
+        valued, baseline, 1.0, state, league, roster_id=None,
+        your_dollars_left=111.0)
+
+    # Dedicated RB/WR each claim their top player (50, 40); FLEX's only
+    # candidates are what's left (rb2=20, wr2=15) -- never rb1/wr1 again.
+    assert result["RB"]["recommended"] == pytest.approx(50.0, abs=0.1)
+    assert result["WR"]["recommended"] == pytest.approx(40.0, abs=0.1)
+    assert result["FLEX"]["recommended"] == pytest.approx(20.0, abs=0.1)
 
 
 def test_none_roster_id_falls_back_to_fresh_roster():

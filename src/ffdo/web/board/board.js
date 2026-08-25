@@ -221,9 +221,8 @@ function renderPositionBudget() {
   }
   el.hidden = false;
 
-  const positions = ["QB", "RB", "WR", "TE"];
-  const maxAmount = Math.max(1, byPos.flex_bench_reserve,
-    ...positions.map(pos => byPos[pos].recommended));
+  const positions = ["QB", "RB", "WR", "TE", "FLEX"];
+  const maxAmount = Math.max(1, ...positions.map(pos => byPos[pos].recommended));
 
   const posRows = positions.map(pos => {
     const entry = byPos[pos];
@@ -240,8 +239,8 @@ function renderPositionBudget() {
 
   document.getElementById("posbudget-rows").innerHTML = posRows + `
     <div class="posbudget-reserve">
-      <span>Flex/bench reserve</span>
-      <span>$${byPos.flex_bench_reserve} · ${byPos.flex_bench_slots_open} slot${byPos.flex_bench_slots_open === 1 ? "" : "s"} open</span>
+      <span>Bench reserve</span>
+      <span>$${byPos.BENCH.recommended} · ${byPos.BENCH.slots_open} slot${byPos.BENCH.slots_open === 1 ? "" : "s"} open</span>
     </div>`;
 }
 
