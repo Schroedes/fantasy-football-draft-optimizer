@@ -332,7 +332,7 @@ def test_parse_builds_scoring_settings_matching_the_real_scoring_items():
         "fum_lost": -2.0,
         "fgm_40_49": 4.0, "fgm_20_29": 3.0, "fgm_60p": 6.0,
         "fgmiss": -1.0, "xpm": 1.0,
-        "sack": 1.0, "int": 2.0, "fum_rec": 2.0, "blk_kick": 2.0, "safe": 1.0,
+        "sack": 1.0, "int": 2.0, "fum_rec": 2.0, "blk_kick": 2.0, "safe": 2.0,
         "def_kr_td": 6.0, "def_pr_td": 6.0, "def_td": 6.0, "def_fum_td": 6.0,
     }
 ```
