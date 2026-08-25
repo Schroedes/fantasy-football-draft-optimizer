@@ -2,7 +2,10 @@
 import dataclasses
 import pytest
 
-from ffdo.domain.constants import SEASON_LENGTH, is_offense_scoring_key
+from ffdo.domain.constants import (
+    SEASON_LENGTH, is_defense_scoring_key, is_kicking_scoring_key,
+    is_offense_scoring_key,
+)
 from ffdo.domain.models import (
     DraftPick, DraftState, LeagueProfile, MarketADP,
     PlayerProfile, SeasonProjection, SeasonStatLine, Session, TeamProfile,
@@ -40,6 +43,33 @@ def test_season_length_covers_history_and_current():
 ])
 def test_offense_scoring_key_classification(key, expected):
     assert is_offense_scoring_key(key) is expected
+
+
+@pytest.mark.parametrize("key,expected", [
+    ("sack", True), ("int", True), ("fum_rec", True), ("blk_kick", True),
+    ("safe", True), ("ff", True), ("def_td", True), ("def_st_td", True),
+    ("def_kr_td", True), ("def_pr_td", True), ("def_fum_td", True),
+    ("rec_td", False), ("pts_allow_0", False), ("pts_allow_35p", False),
+    ("yds_allow_0_100", False), ("fgm_40_49", False),
+    # Deliberately excluded even though it's a real defense-adjacent key --
+    # ESPN's equivalent category (statId 63) has no D/ST-slot override,
+    # meaning it doesn't apply to team defense; keeping it excluded from
+    # offense too (already true via `_DEFENSIVE_ONLY`) avoids crediting
+    # anyone for it. See Task 3 and constants.py's `_DEFENSIVE_ONLY` comment.
+    ("fum_rec_td", False),
+])
+def test_defense_scoring_key_classification(key, expected):
+    assert is_defense_scoring_key(key) is expected
+
+
+@pytest.mark.parametrize("key,expected", [
+    ("fgm_20_29", True), ("fgm_40_49", True), ("fgm_50p", True),
+    ("fgm_60p", True), ("fgmiss_50p", True), ("fgm", True), ("fga", True),
+    ("fgmiss", True), ("xpm", True), ("xpa", True), ("xpmiss", True),
+    ("sack", False), ("rush_yd", False), ("pts_allow_0", False),
+])
+def test_kicking_scoring_key_classification(key, expected):
+    assert is_kicking_scoring_key(key) is expected
 
 
 def test_league_profile_derives_starting_slots_and_roster_size():

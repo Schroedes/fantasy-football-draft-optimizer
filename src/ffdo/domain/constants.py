@@ -29,6 +29,48 @@ def is_offense_scoring_key(key: str) -> bool:
     return key.startswith(_OFFENSE_PREFIXES) or key in _OFFENSE_BARE
 
 
+# Points-allowed and yards-allowed brackets (`pts_allow_*`, `yds_allow_*`)
+# are deliberately NOT recognized here. Sleeper's season *projections* for
+# these brackets look like placeholder noise rather than a real weekly
+# forecast -- e.g. the top-projected 2026 DEF unit shows real turnover
+# projections (52 sacks, 15 INTs) alongside `pts_allow_0: 1.0` and `gp:
+# 1.0`, inconsistent with a genuine per-week bracket forecast for a
+# projected starter. A league's points/yards-allowed scoring weights go
+# unused for projection-based valuation as a result -- excluded rather
+# than guessed wrong, the same philosophy `vor.compute` already applies to
+# a position with no replacement level. See design doc §3.2.
+_DEFENSE_BARE: Final[frozenset[str]] = frozenset({
+    "sack", "int", "fum_rec", "blk_kick", "safe", "ff",
+    "def_td", "def_st_td", "def_kr_td", "def_pr_td", "def_fum_td",
+})
+
+
+def is_defense_scoring_key(key: str) -> bool:
+    """True if `key` scores for a team-defense (`DEF`) player."""
+    return key in _DEFENSE_BARE
+
+
+_KICKING_PREFIXES: Final[tuple[str, ...]] = ("fgm_", "fgmiss_")
+_KICKING_BARE: Final[frozenset[str]] = frozenset({
+    "fgm", "fga", "fgmiss", "xpm", "xpa", "xpmiss",
+})
+
+
+def is_kicking_scoring_key(key: str) -> bool:
+    """True if `key` scores for a kicker (`K`) player.
+
+    Prefix-matching `fgm_`/`fgmiss_` sweeps in every distance bracket
+    (`fgm_20_29`, `fgm_50p`, `fgm_60p`, ...) plus a few non-scoring
+    magnitude fields (`fgm_yds`, `fgm_lng`, `fgm_pct`) that happen to share
+    the prefix. That over-match is harmless: `score_stats` only sums keys a
+    league's `scoring_settings` actually assigns a weight to, and no real
+    league scores kicking by total FG yardage or long-FG distance rather
+    than by make/miss count -- so those extra keys are never weighted in
+    practice.
+    """
+    return key.startswith(_KICKING_PREFIXES) or key in _KICKING_BARE
+
+
 # Verified to reproduce Sleeper's 2025 `pts_half_ppr` for >=98% of players
 # scoring 50+ points. Used ONLY as a golden-test target (Task 5).
 STANDARD_HALF_PPR: Final[dict[str, float]] = {

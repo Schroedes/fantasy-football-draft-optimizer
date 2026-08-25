@@ -66,3 +66,31 @@ def test_league_scoring_diverges_from_preset_on_fumbles():
     assert deltas
     assert min(deltas) <= -8.0, "expected fumble-prone QBs to lose 8+ points"
     assert max(deltas) <= 0.0, "league scoring can only reduce QB value here"
+
+
+def test_score_stats_credits_defensive_categories():
+    """A DEF player's turnover/sack production must now score, unlike
+    today where score_stats returns 0.0 for every non-offense key."""
+    got = scoring.score_stats(
+        {"sack": 3, "int": 2, "fum_rec": 1},
+        {"sack": 1.0, "int": 2.0, "fum_rec": 2.0},
+    )
+    assert got == 3 * 1.0 + 2 * 2.0 + 1 * 2.0
+
+
+def test_score_stats_credits_kicking_categories():
+    got = scoring.score_stats(
+        {"fgm_40_49": 2, "fgm_50p": 1, "xpm": 3, "fgmiss": 1},
+        {"fgm_40_49": 4.0, "fgm_50p": 5.0, "xpm": 1.0, "fgmiss": -1.0},
+    )
+    assert got == 2 * 4.0 + 1 * 5.0 + 3 * 1.0 + 1 * -1.0
+
+
+def test_score_stats_still_excludes_points_allowed():
+    """Points-allowed weights are configured but must have no effect --
+    see design doc §3.2 and the `_DEFENSE_BARE` comment in constants.py."""
+    got = scoring.score_stats(
+        {"sack": 1, "pts_allow_0": 1},
+        {"sack": 1.0, "pts_allow_0": 5.0},
+    )
+    assert got == 1.0
