@@ -263,7 +263,7 @@ function renderOptimalPlan() {
     const posColor = `var(--${slot.eligible_position.toLowerCase()}, var(--muted))`;
     return `<div class="plan-row">
       <span class="plan-category">${slot.category}</span>
-      <span class="plan-name" style="color:${posColor}">${slot.name}</span>
+      <span class="plan-name" style="color:${posColor}">${escapeHtml(slot.name)}</span>
       <span class="plan-price">$${slot.target_price}</span>
       <span class="plan-vor-val">${slot.vor} VOR</span>
     </div>`;

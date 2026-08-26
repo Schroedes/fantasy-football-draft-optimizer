@@ -48,6 +48,12 @@ def _greedy_fill(
                         + remaining_flex + remaining_bench)
     budget_left = your_dollars_left
 
+    # Roster slots that exist (e.g. K, DEF, IR) but that `needs` doesn't
+    # model at all -- the optimizer never plans to fill them, but they
+    # still need at least $1 each reserved so the plan stays executable.
+    your_picks_count = sum(needs.drafted_count.values()) + needs.undetermined
+    non_planned_slots = max(0, league.roster_size - your_picks_count - total_slots_left)
+
     plan: list[dict] = []
     used_ids: set[str] = set()
 
@@ -59,7 +65,7 @@ def _greedy_fill(
             continue
 
         price = _price_of(vp, baseline, factor)
-        reserve_for_others = MIN_BID * (total_slots_left - 1)
+        reserve_for_others = MIN_BID * (total_slots_left - 1 + non_planned_slots)
         if price > budget_left - reserve_for_others:
             continue
 
@@ -89,10 +95,19 @@ def _greedy_fill(
 
 
 def _to_output(plan: list[dict], your_dollars_left: float) -> dict:
+    # Totals are computed from the unrounded per-slot values so they stay
+    # exact; only the output copy of each slot is rounded for display, so
+    # earlier comparisons (budget/cap/VOR-gain checks) that ran against
+    # these dicts during `_greedy_fill`/`_refine`/`_reassign_within_plan`
+    # are unaffected by display rounding introduced here.
     total_cost = sum(s["target_price"] for s in plan)
     total_vor = sum(s["vor"] for s in plan if s["type"] in ("dedicated", "flex"))
+    rounded_slots = [
+        {**s, "target_price": round(s["target_price"], 1), "vor": round(s["vor"], 1)}
+        for s in plan
+    ]
     return {
-        "slots": plan,
+        "slots": rounded_slots,
         "total_plan_vor": round(total_vor, 1),
         "total_plan_cost": round(total_cost, 1),
         "dollars_left_after_plan": round(your_dollars_left - total_cost, 1),
@@ -171,8 +186,15 @@ def _refine(
                                 if vp.profile.player_id not in used_ids
                                 and _is_legal(vp, slot_b, needs.flex_positions)][:CANDIDATES_PER_SLOT]
 
+                # Only "dedicated"/"flex" slots count toward total_plan_vor
+                # (see `_to_output`) -- weight each side's VOR contribution
+                # by whether its slot is actually counted, so a swap that
+                # raises combined raw VOR by shoving a good player onto
+                # BENCH is never mistaken for an improvement.
+                weight_a = 1.0 if slot_a["type"] in ("dedicated", "flex") else 0.0
+                weight_b = 1.0 if slot_b["type"] in ("dedicated", "flex") else 0.0
                 current_price = slot_a["target_price"] + slot_b["target_price"]
-                current_vor = slot_a["vor"] + slot_b["vor"]
+                current_vor = weight_a * slot_a["vor"] + weight_b * slot_b["vor"]
 
                 best = None  # (vor_gain, ca, cb, pa, pb)
                 for ca in candidates_a:
@@ -188,7 +210,7 @@ def _refine(
                                         slot_b["eligible_position"], cb.profile.position,
                                         caps):
                             continue
-                        vor_gain = (ca.vor + cb.vor) - current_vor
+                        vor_gain = weight_a * ca.vor + weight_b * cb.vor - current_vor
                         if vor_gain > 0 and (best is None or vor_gain > best[0]):
                             best = (vor_gain, ca, cb, pa, pb)
 
@@ -214,6 +236,68 @@ def _refine(
     return plan
 
 
+def _is_legal_position(pos: str, slot: dict, flex_positions: frozenset[str]) -> bool:
+    """Position-string counterpart to `_is_legal`, for checking whether an
+    already-planned occupant (which we only have as a position string on
+    another slot, not a `ValuedPlayer`) is legal for a *different* slot."""
+    if slot["type"] == "dedicated":
+        return pos == slot["category"]
+    if slot["type"] == "flex":
+        return pos in flex_positions
+    return True  # bench: any offense position is legal
+
+
+def _reassign_within_plan(plan: list[dict], needs: RosterNeeds) -> list[dict]:
+    """Second local-search pass: swap which slot two ALREADY-PLANNED
+    players occupy, when doing so raises the counted (dedicated + flex)
+    VOR sum.
+
+    `_refine`'s candidate pools are built from `available` players `not
+    in used_ids` -- by construction, every player already placed in the
+    plan is excluded from ever being a "candidate" for another slot. So
+    `_refine` can never fix "a high-VOR player is stuck on BENCH while a
+    much-lower-VOR player of the same/mutually-legal position sits in a
+    counted slot" -- both players are already `used_ids` members. This
+    pass is the only thing that reaches that move.
+
+    A pure reassignment swaps two players who are BOTH already in the
+    plan: same two players, same two prices, just relabeled slots -- so
+    total plan cost is unchanged (no budget check needed) and the
+    multiset of positions in the plan is unchanged (no cap check needed
+    either, unlike `_refine`'s swap loop).
+    """
+    for _ in range(MAX_SWAP_ITERATIONS):
+        improved = False
+        for i, slot_a in enumerate(plan):
+            weight_a = 1.0 if slot_a["type"] in ("dedicated", "flex") else 0.0
+            for j, slot_b in enumerate(plan):
+                if j <= i:
+                    continue
+                weight_b = 1.0 if slot_b["type"] in ("dedicated", "flex") else 0.0
+                if weight_a == weight_b:
+                    # Gain = (weight_a - weight_b) * (vor_b - vor_a); with
+                    # equal weights it's always 0, so no swap between two
+                    # counted slots (or two bench slots) can ever help.
+                    continue
+                if not (_is_legal_position(slot_a["eligible_position"], slot_b, needs.flex_positions)
+                        and _is_legal_position(slot_b["eligible_position"], slot_a, needs.flex_positions)):
+                    continue
+
+                current = weight_a * slot_a["vor"] + weight_b * slot_b["vor"]
+                swapped = weight_a * slot_b["vor"] + weight_b * slot_a["vor"]
+                if swapped > current:
+                    for key in ("player_id", "name", "target_price", "vor", "eligible_position"):
+                        slot_a[key], slot_b[key] = slot_b[key], slot_a[key]
+                    improved = True
+                    break
+            if improved:
+                break
+        if not improved:
+            break
+
+    return plan
+
+
 def optimal_plan(
     valued: Mapping[str, ValuedPlayer],
     baseline: Mapping[str, float],
@@ -228,9 +312,16 @@ def optimal_plan(
     Two phases: Phase 1 (`_greedy_fill`) builds an initial plan by walking
     every available player once, VOR descending. Phase 2 (`_refine`)
     then runs a bounded pairwise-swap local search to catch cases where
-    an early expensive pick blocked a better later combination.
+    an early expensive pick blocked a better later combination, followed
+    by `_reassign_within_plan`, which catches the narrower case of two
+    already-placed players sitting in the wrong (counted vs. bench)
+    slots relative to each other -- a move `_refine` structurally cannot
+    reach, since it only considers players outside the plan as
+    candidates. It runs last since a swap can surface a reassignable
+    pair that didn't exist before it.
     """
     plan, available, used_ids, needs, caps = _greedy_fill(
         valued, baseline, factor, state, league, roster_id, your_dollars_left)
     plan = _refine(plan, available, used_ids, baseline, factor, needs, caps)
+    plan = _reassign_within_plan(plan, needs)
     return _to_output(plan, your_dollars_left)
