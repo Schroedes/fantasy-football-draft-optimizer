@@ -48,15 +48,42 @@ def test_offense_scoring_key_classification(key, expected):
 @pytest.mark.parametrize("key,expected", [
     ("sack", True), ("int", True), ("fum_rec", True), ("blk_kick", True),
     ("safe", True), ("ff", True), ("def_td", True), ("def_st_td", True),
-    ("def_kr_td", True), ("def_pr_td", True), ("def_fum_td", True),
+    ("def_fum_td", True),
     ("rec_td", False), ("pts_allow_0", False), ("pts_allow_35p", False),
     ("yds_allow_0_100", False), ("fgm_40_49", False),
     # Deliberately excluded even though it's a real defense-adjacent key --
-    # ESPN's equivalent category (statId 63) has no D/ST-slot override,
-    # meaning it doesn't apply to team defense; keeping it excluded from
-    # offense too (already true via `_DEFENSIVE_ONLY`) avoids crediting
-    # anyone for it. See Task 3 and constants.py's `_DEFENSIVE_ONLY` comment.
+    # `fum_rec_td` never appears on a real DEF stat line at all (verified
+    # against 2025 actuals); the two rows that DO carry it are a real RB
+    # and a real WR. ESPN's model is "points applies to every slot unless
+    # pointsOverrides narrows it" (not the reverse, as an earlier version
+    # of this comment claimed), but statId 63 genuinely has no D/ST
+    # override in the real fixture either way, consistent with it not
+    # applying to team defense. Keeping it excluded from offense too
+    # (already true via `_DEFENSIVE_ONLY`) avoids crediting anyone for it.
+    # See Task 3, the fix-wave report, and constants.py's `_DEFENSIVE_ONLY`
+    # comment.
     ("fum_rec_td", False),
+    # `def_kr_td` / `def_pr_td` (kickoff/punt-return TDs) are deliberately
+    # excluded despite being in the original design's starting key set --
+    # verified against real 2026 projections: `def_kr_td` is credited to
+    # the individual returner (8 real rostered WR/RB rows carry it, e.g.
+    # Rashid Shaheed), not exclusively to team DEF, so recognizing it here
+    # would leak scoring onto those offensive players. `def_pr_td` never
+    # appears in real data at all -- Sleeper's real vocabulary for punt
+    # returns is bare `pr_td`, which leaks the same way `def_kr_td` does.
+    # See `domain.constants._DEFENSE_BARE`'s comment and the fix-wave
+    # report (Critical 1 / Important 5).
+    ("def_kr_td", False), ("def_pr_td", False), ("pr_td", False),
+    # Verified real Sleeper keys, present at nonzero weight in a real
+    # connected league and on real DEF stat lines -- deliberately NOT
+    # added. `def_st_ff`/`def_st_fum_rec` are the special-teams-play SUBSET
+    # of the already-recognized `ff`/`fum_rec` totals (verified: always
+    # <= the bare value for the same team-week, zero exceptions across
+    # 2025 actuals); adding them double-counts. `pass_int_td` appears on
+    # both real QB rows (2025 actuals) and real DEF rows (2026
+    # projections) -- the same cross-position ambiguity as `def_kr_td`.
+    ("def_st_ff", False), ("def_st_fum_rec", False),
+    ("st_ff", False), ("st_fum_rec", False), ("pass_int_td", False),
 ])
 def test_defense_scoring_key_classification(key, expected):
     assert is_defense_scoring_key(key) is expected

@@ -39,14 +39,60 @@ def is_offense_scoring_key(key: str) -> bool:
 # unused for projection-based valuation as a result -- excluded rather
 # than guessed wrong, the same philosophy `vor.compute` already applies to
 # a position with no replacement level. See design doc §3.2.
+#
+# `def_kr_td` / `def_pr_td` (kickoff/punt-return touchdown) are
+# deliberately NOT recognized, despite being real Sleeper-vocabulary keys
+# a league can weight nonzero. Verified against the real 2026 projections
+# snapshot (`data/snapshots/2026-08-22-draft-day/projections_2026.json.gz`):
+# `def_kr_td` appears on 8 real rostered WR/RB rows (e.g. Rashid Shaheed,
+# KaVontae Turpin, Jadarian Price) -- Sleeper credits kickoff/punt-return
+# touchdowns to the individual returner, not exclusively to the team-DEF
+# entity, so this key can fire for BOTH a DEF row and a real offensive
+# skill-position player. `score_stats` has no position parameter (the
+# whole point of Approach A), so there is no safe way to recognize this key
+# only for DEF -- recognizing it here would silently give a return
+# specialist +6 (or whatever a league weights it) they aren't owed. The
+# real Sleeper-vocabulary key for punt returns is bare `pr_td` (not
+# `def_pr_td`, which never appears in real data at all, in projections or
+# actuals) -- `pr_td` was independently verified to leak onto real
+# offensive WR rows the same way (e.g. Marvin Mims, 2026 projections), so
+# it is excluded for the identical reason and is not listed here either.
+# Net effect: a league's return-TD weight for team DEF goes unused, a
+# real, documented trade-off (same shape as the points-allowed exclusion
+# above), not a silent gap.
+#
+# `def_st_ff` / `def_st_fum_rec` were investigated (per design doc §6.2's
+# mandated golden test) as candidate additions -- they are real Sleeper
+# keys, appear at nonzero weight in a real connected league, and (unlike
+# `def_kr_td`) never appear on offensive rows. They are deliberately NOT
+# added, however: verified against every real 2025 DEF stat line
+# (`stats_2025.json.gz`), `def_st_ff` is always <= the bare `ff` value for
+# the same team-week, and `def_st_fum_rec` is always <= the bare `fum_rec`
+# value, with zero exceptions -- they are the special-teams-play SUBSET of
+# the already-recognized `ff`/`fum_rec` totals, not an additive category.
+# Confirmed empirically: recomputing the golden test with `def_st_ff`/
+# `def_st_fum_rec` added on top of `ff`/`fum_rec` makes the reproduction
+# of Sleeper's own `pts_half_ppr` measurably WORSE (mean unexplained
+# residual rises from ~2.9 to ~4.2 points/team after backing out the
+# points-allowed component), confirming double-counting rather than a
+# missing category.
 _DEFENSE_BARE: Final[frozenset[str]] = frozenset({
     "sack", "int", "fum_rec", "blk_kick", "safe", "ff",
-    "def_td", "def_st_td", "def_kr_td", "def_pr_td", "def_fum_td",
+    "def_td", "def_st_td", "def_fum_td",
 })
 
 
 def is_defense_scoring_key(key: str) -> bool:
-    """True if `key` scores for a team-defense (`DEF`) player."""
+    """True if `key` scores for a team-defense (`DEF`) player.
+
+    `pass_int_td` (an interception returned for a touchdown, credited
+    against the passer) is also deliberately unrecognized here and in
+    `is_offense_scoring_key`. Verified against real data: it appears on 24
+    real QB rows in the 2025 actual-stats snapshot AND on real DEF rows in
+    the 2026 projections snapshot -- the same cross-position ambiguity as
+    `def_kr_td`/`pr_td` above, just smaller in magnitude (rare, 1-2 points
+    typically). Excluded rather than guessed onto one side or the other.
+    """
     return key in _DEFENSE_BARE
 
 
