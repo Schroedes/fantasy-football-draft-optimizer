@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from ffdo.domain.constants import OFFENSE_POSITIONS
 from ffdo.domain.models import DraftState, ValuedPlayer
@@ -73,6 +74,95 @@ def max_bid(spent: int, slots_filled: int, league) -> int:
     return max(0, remaining_budget - (slots_left - 1) * MIN_BID)
 
 
+
+@dataclass(frozen=True, slots=True)
+class RosterNeeds:
+    drafted_count: Mapping[str, int]
+    dedicated_count: Mapping[str, int]
+    dedicated_need: Mapping[str, int]
+    flex_positions: frozenset[str]
+    flex_total: int
+    flex_remaining: int
+    bench_total: int
+    bench_remaining: int
+    undetermined: int
+
+
+def compute_roster_needs(
+    valued: Mapping[str, ValuedPlayer],
+    state: DraftState,
+    league,
+    roster_id: int | None,
+) -> RosterNeeds:
+    """Your remaining roster needs, broken into dedicated/FLEX/BENCH.
+
+    Shared by `positional_budget()` and `planner.optimal_plan()` so both
+    features agree, by construction, on what "your remaining needs" means.
+    """
+    your_picks = ([p for p in state.picks if p.roster_id == roster_id]
+                  if roster_id is not None else [])
+
+    dedicated_count = {pos: league.roster_positions.count(pos)
+                       for pos in OFFENSE_POSITIONS}
+    drafted_count = dict.fromkeys(OFFENSE_POSITIONS, 0)
+    undetermined = 0
+    for pick in your_picks:
+        vp = valued.get(pick.player_id)
+        if vp is None or vp.profile.position not in OFFENSE_POSITIONS:
+            undetermined += 1
+            continue
+        drafted_count[vp.profile.position] += 1
+
+    dedicated_need = {
+        pos: max(0, dedicated_count[pos] - min(dedicated_count[pos], drafted_count[pos]))
+        for pos in OFFENSE_POSITIONS
+    }
+    flex_positions = frozenset(
+        pos for slot in league.roster_positions if slot in FLEX_ELIGIBILITY
+        for pos in FLEX_ELIGIBILITY[slot]
+    )
+    flex_eligible_leftover = sum(
+        max(0, drafted_count[pos] - dedicated_count[pos])
+        for pos in OFFENSE_POSITIONS if pos in flex_positions)
+    non_flex_leftover = sum(
+        max(0, drafted_count[pos] - dedicated_count[pos])
+        for pos in OFFENSE_POSITIONS if pos not in flex_positions)
+
+    flex_total = sum(1 for slot in league.roster_positions
+                     if slot in FLEX_ELIGIBILITY)
+    bench_total = league.roster_positions.count("BN")
+    flex_remaining = max(0, flex_total - flex_eligible_leftover)
+    bench_spill = max(0, flex_eligible_leftover - flex_total) + non_flex_leftover
+    bench_remaining = max(0, bench_total - bench_spill - undetermined)
+
+    return RosterNeeds(
+        drafted_count=drafted_count, dedicated_count=dedicated_count,
+        dedicated_need=dedicated_need, flex_positions=flex_positions,
+        flex_total=flex_total, flex_remaining=flex_remaining,
+        bench_total=bench_total, bench_remaining=bench_remaining,
+        undetermined=undetermined,
+    )
+
+
+def position_caps(league, needs: RosterNeeds) -> dict[str, int]:
+    """How many MORE players of each position the plan may add.
+
+    Cap = 2 x (dedicated slots for that position + flex slot instances
+    that position is eligible for), counting what you've already drafted
+    against the cap. Dedicated and FLEX assignments can never exceed this
+    by construction -- it only ever actually constrains BENCH picks.
+    """
+    remaining: dict[str, int] = {}
+    for pos in OFFENSE_POSITIONS:
+        flex_slots_for_pos = sum(
+            1 for slot in league.roster_positions
+            if slot in FLEX_ELIGIBILITY and pos in FLEX_ELIGIBILITY[slot]
+        )
+        starting_spots = needs.dedicated_count[pos] + flex_slots_for_pos
+        cap = 2 * starting_spots
+        remaining[pos] = max(0, cap - needs.drafted_count[pos])
+    return remaining
+
 def positional_budget(
     valued: Mapping[str, ValuedPlayer],
     baseline: Mapping[str, float],
@@ -94,49 +184,14 @@ def positional_budget(
     a fresh roster -- zero drafted -- the same fallback the board applies
     to max-bid elsewhere.
     """
+    needs = compute_roster_needs(valued, state, league, roster_id)
     drafted = state.drafted_player_ids()
-    your_picks = ([p for p in state.picks if p.roster_id == roster_id]
-                  if roster_id is not None else [])
-
-    dedicated_count = {pos: league.roster_positions.count(pos)
-                       for pos in OFFENSE_POSITIONS}
-    drafted_count = dict.fromkeys(OFFENSE_POSITIONS, 0)
-    undetermined = 0
-    for pick in your_picks:
-        vp = valued.get(pick.player_id)
-        if vp is None or vp.profile.position not in OFFENSE_POSITIONS:
-            undetermined += 1
-            continue
-        drafted_count[vp.profile.position] += 1
-
-    dedicated_need = {
-        pos: max(0, dedicated_count[pos] - min(dedicated_count[pos], drafted_count[pos]))
-        for pos in OFFENSE_POSITIONS
-    }
-    flex_positions = {
-        pos for slot in league.roster_positions if slot in FLEX_ELIGIBILITY
-        for pos in FLEX_ELIGIBILITY[slot]
-    }
-    flex_eligible_leftover = sum(
-        max(0, drafted_count[pos] - dedicated_count[pos])
-        for pos in OFFENSE_POSITIONS if pos in flex_positions)
-    non_flex_leftover = sum(
-        max(0, drafted_count[pos] - dedicated_count[pos])
-        for pos in OFFENSE_POSITIONS if pos not in flex_positions)
-
-    flex_total = sum(1 for slot in league.roster_positions
-                     if slot in FLEX_ELIGIBILITY)
-    bench_total = league.roster_positions.count("BN")
-    flex_remaining = max(0, flex_total - flex_eligible_leftover)
-    bench_spill = max(0, flex_eligible_leftover - flex_total) + non_flex_leftover
-    bench_remaining = max(0, bench_total - bench_spill - undetermined)
-
     available = [vp for pid, vp in valued.items() if pid not in drafted]
 
     raw: dict[str, float] = {}
     pos_leftover_pool: dict[str, list[float]] = {}
     for pos in OFFENSE_POSITIONS:
-        need = dedicated_need[pos]
+        need = needs.dedicated_need[pos]
         pool = sorted(
             (max(MIN_BID, baseline.get(vp.profile.player_id, 1.0) * factor)
              for vp in available if vp.profile.position == pos),
@@ -146,11 +201,11 @@ def positional_budget(
         pos_leftover_pool[pos] = pool[need:]
 
     flex_candidates = sorted(
-        (price for pos in flex_positions for price in pos_leftover_pool.get(pos, [])),
+        (price for pos in needs.flex_positions for price in pos_leftover_pool.get(pos, [])),
         reverse=True,
-    )[:flex_remaining]
+    )[:needs.flex_remaining]
     raw_flex = sum(flex_candidates)
-    raw_bench = MIN_BID * bench_remaining
+    raw_bench = MIN_BID * needs.bench_remaining
 
     total_raw = sum(raw.values()) + raw_flex + raw_bench
     scale = your_dollars_left / total_raw if total_raw > 0 else 0.0
@@ -158,16 +213,16 @@ def positional_budget(
     out: dict[str, dict[str, float]] = {
         pos: {
             "recommended": round(raw[pos] * scale, 1),
-            "slots_open": dedicated_need[pos],
+            "slots_open": needs.dedicated_need[pos],
         }
         for pos in OFFENSE_POSITIONS
     }
     out["FLEX"] = {
         "recommended": round(raw_flex * scale, 1),
-        "slots_open": flex_remaining,
+        "slots_open": needs.flex_remaining,
     }
     out["BENCH"] = {
         "recommended": round(raw_bench * scale, 1),
-        "slots_open": bench_remaining,
+        "slots_open": needs.bench_remaining,
     }
     return out
