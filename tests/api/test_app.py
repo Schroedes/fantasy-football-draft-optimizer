@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from ffdo.api import app as app_mod
 from ffdo.api.app import (
     _DEFAULT_DRAFT_ID, _DEFAULT_LEAGUE_ID, _TTLCache, _active_only,
-    _draft_id, _league_id, _roster_id, create_app,
+    _draft_id, _league_id, _roster_id, _uncached, create_app,
 )
 from ffdo.api.session import SessionStore
 from ffdo.domain.models import PlayerProfile, Session
@@ -74,6 +74,27 @@ def _recording_client(responses: dict[str, object]):
             pass
 
     return _RecordingClient, calls
+
+
+def test_uncached_appends_a_query_param_to_a_plain_url():
+    url = _uncached("https://api.sleeper.app/v1/draft/D1")
+    assert url.startswith("https://api.sleeper.app/v1/draft/D1?_=")
+
+
+def test_uncached_appends_with_an_ampersand_when_the_url_already_has_a_query():
+    url = _uncached("https://api.sleeper.app/v1/players/nfl?season=2026")
+    assert url.startswith("https://api.sleeper.app/v1/players/nfl?season=2026&_=")
+
+
+def test_uncached_returns_a_different_value_on_each_call():
+    """The whole point: a repeated identical URL must produce a distinct
+    query string each time, so Sleeper's CDN (observed serving /draft/<id>
+    with `cache-control: s-maxage=30` and a steadily climbing `Age` header)
+    sees each poll as a fresh cache key rather than replaying the same
+    up-to-30s-stale snapshot."""
+    a = _uncached("https://api.sleeper.app/v1/draft/D1")
+    b = _uncached("https://api.sleeper.app/v1/draft/D1")
+    assert a != b
 
 
 def test_has_value_is_false_before_the_first_load():
@@ -413,12 +434,14 @@ def test_get_board_mock_mode_reports_is_mock_true_and_fetches_the_draft_once(
     assert res.status_code == 200
     assert res.json()["is_mock"] is True
 
-    draft_meta_calls = [c for c in calls if c == f"{V1}/draft/D999"]
+    # Cache-busted with a `?_=...` suffix (see `_uncached` in app.py), so
+    # compare on the path alone rather than exact URL equality.
+    draft_meta_calls = [c for c in calls if c.split("?", 1)[0] == f"{V1}/draft/D999"]
     assert len(draft_meta_calls) == 1, (
         f"expected exactly one fetch of /draft/D999 (single-fetch reuse "
         f"for both LeagueProfile and draft_meta), got {len(draft_meta_calls)}: "
         f"{calls}")
-    assert f"{V1}/draft/D999/picks" in calls
+    assert any(c.split("?", 1)[0] == f"{V1}/draft/D999/picks" for c in calls)
 
 
 def test_get_board_mock_mode_backfills_picks_and_resolves_roster_id_live(
