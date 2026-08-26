@@ -474,3 +474,37 @@ def test_reserve_formula_reduces_to_original_with_no_unmodeled_slots():
     assert "rb_cheap" in player_ids
     assert sum(s["target_price"] for s in plan) <= 10.0
     assert len(plan) == 2
+
+
+def test_greedy_fill_reserves_at_the_true_inflated_floor_not_a_flat_dollar():
+    """Regression test for a real bug hit mid-live-draft: `reserve_for_others`
+    used the flat MIN_BID=$1 constant as "the cheapest a slot could ever
+    cost", but in an inflated market (factor > 1.0) the true cheapest
+    price is MIN_BID * factor, not MIN_BID. Under-reserving lets the
+    algorithm overspend on an early pick, and once the remaining budget
+    window drops below the true floor, EVERY subsequent candidate --
+    including ones at the true floor price -- gets rejected for the rest
+    of the run, silently leaving slots unfilled even with money left over.
+
+    factor=1.25, so the true floor is $1.25, not $1.00.
+    """
+    league = _league_multi(("RB", "BN"))
+    valued = _valued_positions({
+        "rb_a": ("RB", 90.0), "rb_b": ("RB", 50.0), "filler": ("RB", 5.0),
+    })
+    baseline = {"rb_a": 7.12, "rb_b": 4.0, "filler": 1.0}
+    state = _empty_state()
+
+    plan, available, used_ids, needs, caps = planner._greedy_fill(
+        valued, baseline, 1.25, state, league, roster_id=None, your_dollars_left=10.0)
+
+    # rb_a ($8.90) must be rejected -- buying it would leave only $1.10,
+    # less than the $1.25 true floor the guaranteed BENCH slot needs.
+    player_ids = {s["player_id"] for s in plan}
+    assert "rb_a" not in player_ids
+    assert "rb_b" in player_ids
+    # Both slots must be filled -- this is the actual regression: the
+    # buggy version left BENCH empty here even though $1.10 remained,
+    # because $1.10 < the true $1.25 floor no real candidate could beat.
+    assert len(plan) == 2
+    assert sum(s["target_price"] for s in plan) <= 10.0

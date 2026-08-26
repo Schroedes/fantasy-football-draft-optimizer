@@ -48,6 +48,15 @@ def _greedy_fill(
                         + remaining_flex + remaining_bench)
     budget_left = your_dollars_left
 
+    # The cheapest any player can actually cost right now -- `_price_of`
+    # floors every price at `MIN_BID * factor` (never below MIN_BID
+    # itself), so in an inflated market (factor > 1) the true floor is
+    # higher than the flat $1 constant. Reserving at the flat constant
+    # under-reserves, letting an early pick overspend and silently
+    # starving every slot after it once the remaining budget window
+    # drops below what any real candidate could ever cost.
+    true_min_price = MIN_BID * max(1.0, factor)
+
     # Roster slots that exist (e.g. K, DEF, IR) but that `needs` doesn't
     # model at all -- the optimizer never plans to fill them, but they
     # still need at least $1 each reserved so the plan stays executable.
@@ -65,7 +74,7 @@ def _greedy_fill(
             continue
 
         price = _price_of(vp, baseline, factor)
-        reserve_for_others = MIN_BID * (total_slots_left - 1 + non_planned_slots)
+        reserve_for_others = true_min_price * (total_slots_left - 1 + non_planned_slots)
         if price > budget_left - reserve_for_others:
             continue
 
