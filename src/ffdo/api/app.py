@@ -347,14 +347,56 @@ def create_app() -> FastAPI:
         split-second bidding tracks live without waiting on the heavier
         endpoint's multi-second valuation recompute.
         """
-        draft_id = _draft_id()
-        sleeper = client_mod.SleeperClient()
-        try:
-            draft_meta = sleeper.get_json(_uncached(f"{client_mod.V1}/draft/{draft_id}"))
-            picks_raw = sleeper.get_json(_uncached(f"{client_mod.V1}/draft/{draft_id}/picks"))
-        finally:
-            sleeper.close()
-        state = draft_mod.parse(draft_meta, picks_raw)
+        session = _SESSION_STORE.get()
+        provider = session.provider if session is not None else "sleeper"
+
+        if provider == "espn":
+            if session is None or session.espn_s2 is None or session.swid is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No connected ESPN session -- connect from the main screen first")
+
+            # Mirrors get_board()'s ESPN branch below, minus the mTeam view
+            # (team names aren't needed here) and minus _load_projections
+            # (irrelevant to nomination/pick-count). live_nomination always
+            # comes back None for ESPN -- espn_draft_mod.parse() never sets
+            # nominated_player_id/current_bid, those are Sleeper-only
+            # concepts -- so this needs no ESPN-specific nomination logic,
+            # just a state built from the right source.
+            sleeper = client_mod.SleeperClient()
+            try:
+                profiles, espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            finally:
+                sleeper.close()
+
+            espn = espn_client_mod.EspnClient(session.espn_s2, session.swid)
+            try:
+                raw = espn.get_json(
+                    f"{espn_client_mod.BASE}/seasons/{session.season}/segments/0/"
+                    f"leagues/{session.league_id}?view=mSettings&view=mDraftDetail")
+                player_pool_raw = _espn_player_pool_cache_for(session.season).get(
+                    lambda: espn.get_json(
+                        f"{espn_client_mod.BASE}/seasons/{session.season}/players"
+                        "?view=kona_player_info",
+                        extra_headers=espn_client_mod.PLAYER_POOL_FILTER_HEADER))
+            finally:
+                espn.close()
+
+            cw = _espn_crosswalk_cache_for(session.season).get(
+                lambda: espn_crosswalk_mod.build(
+                    espn_id_index, profiles,
+                    espn_crosswalk_mod.parse_player_pool(player_pool_raw)))
+            state = espn_draft_mod.parse(raw, cw)
+        else:
+            draft_id = _draft_id()
+            sleeper = client_mod.SleeperClient()
+            try:
+                draft_meta = sleeper.get_json(_uncached(f"{client_mod.V1}/draft/{draft_id}"))
+                picks_raw = sleeper.get_json(_uncached(f"{client_mod.V1}/draft/{draft_id}/picks"))
+            finally:
+                sleeper.close()
+            state = draft_mod.parse(draft_meta, picks_raw)
+
         return {
             "live_nomination": board_mod.build_live_nomination(state),
             "picks_made": len(state.picks),

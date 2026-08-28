@@ -76,6 +76,32 @@ def _recording_client(responses: dict[str, object]):
     return _RecordingClient, calls
 
 
+def _recording_espn_client(responses: dict[str, object]):
+    """Same shape as `_recording_client` above, but for
+    `ffdo.ingest.espn.client.EspnClient` -- which takes `(espn_s2, swid)`
+    positionally in production and has a `get_json(url, extra_headers=None,
+    max_attempts=4)` signature, wider than Sleeper's plain `get_json(url)`.
+    Unmatched URLs fall back to `{}` (no projections-shaped endpoint on the
+    ESPN side, unlike Sleeper's fake)."""
+    calls: list[str] = []
+
+    class _RecordingEspnClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def get_json(self, url: str, extra_headers=None, max_attempts: int = 4):
+            calls.append(url)
+            for key, value in responses.items():
+                if key in url:
+                    return value
+            return {}
+
+        def close(self) -> None:
+            pass
+
+    return _RecordingEspnClient, calls
+
+
 def test_uncached_appends_a_query_param_to_a_plain_url():
     url = _uncached("https://api.sleeper.app/v1/draft/D1")
     assert url.startswith("https://api.sleeper.app/v1/draft/D1?_=")
@@ -373,8 +399,58 @@ def test_get_board_live_returns_nomination_without_the_heavy_fetches(
     assert res.status_code == 200
     body = res.json()
     assert body == {"live_nomination": {"player_id": "P1", "bid": 42}, "picks_made": 1}
-    assert not any("/league/" in c or "/players/" in c or "/projections/" in c
-                  for c in calls), f"must not fetch league/players/projections -- got {calls}"
+
+
+def test_get_board_live_espn_never_calls_sleepers_draft_endpoint(monkeypatch, tmp_path):
+    """Regression test for a live-production bug: get_board_live() was
+    hardcoded to always fetch from Sleeper's `/draft/<id>` using whatever
+    draft_id/league_id the session held -- for an ESPN session that's an
+    ESPN league id (e.g. "1882997948"), which 404s against Sleeper's API
+    and 500s this endpoint on every one-second poll during a live ESPN
+    draft, even though /api/board (the heavier endpoint) already had a
+    working ESPN branch right below it."""
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session(
+        provider="espn", espn_s2="s2value", swid="{SWID}",
+        league_id="1882997948", draft_id="1882997948",
+        draft_type="snake", num_teams=2,
+        roster_positions=("QB", "RB", "BN")))
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    espn_raw = {
+        "id": 1882997948,
+        "settings": {"size": 2, "draftSettings": {"type": "SNAKE", "auctionBudget": 200}},
+        "draftDetail": {"drafted": False, "inProgress": True, "picks": []},
+    }
+    FakeEspnClient, espn_calls = _recording_espn_client({
+        "players?view=kona_player_info": [],
+        "leagues/1882997948": espn_raw,
+    })
+    monkeypatch.setattr("ffdo.ingest.espn.client.EspnClient", FakeEspnClient)
+
+    sleeper_calls: list[str] = []
+
+    class _NoDraftFetchSleeperClient(_FakeSleeperClient):
+        def get_json(self, url: str):
+            sleeper_calls.append(url)
+            assert "/draft/" not in url, (
+                f"must never fetch a Sleeper /draft/ URL for an ESPN session -- "
+                f"got {url}")
+            return super().get_json(url)
+
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _NoDraftFetchSleeperClient)
+
+    client = TestClient(create_app())
+    res = client.get("/api/board/live")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body == {"live_nomination": None, "picks_made": 0}
+    assert any("leagues/1882997948" in c for c in espn_calls), (
+        "must actually fetch from ESPN's own draft-detail endpoint")
+    assert not any("/draft/" in c for c in sleeper_calls), (
+        f"must never fetch a Sleeper /draft/ URL for an ESPN session -- "
+        f"got {sleeper_calls}")
 
 
 def test_get_board_real_league_mode_reports_is_mock_false_and_scores_a_player(
