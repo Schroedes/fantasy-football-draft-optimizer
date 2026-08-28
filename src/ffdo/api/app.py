@@ -222,7 +222,8 @@ def create_app() -> FastAPI:
             sleeper.get_json(
                 f"{client_mod.PROJECTIONS}/{season}"
                 "?season_type=regular&position[]=QB&position[]=RB"
-                "&position[]=WR&position[]=TE"),
+                "&position[]=WR&position[]=TE&position[]=DEF"
+                "&position[]=K"),
             season)
 
     def _load_teams(sleeper: client_mod.SleeperClient, league_id: str):
@@ -445,14 +446,20 @@ def create_app() -> FastAPI:
         if lg.budget is None:
             lg = replace(lg, budget=state.budget)
 
-        # Sleeper's projections endpoint does not actually honor the
-        # position[] query filter server-side (confirmed against the live
-        # API) -- it returns every position it has projections for,
-        # including FB/CB/K/DEF, none of which this league rosters.
-        # `vor.compute` now structurally excludes any position without a
-        # replacement level derived from `league.roster_positions` (see
-        # ffdo.engine.vor), so no position allowlist is needed here; scoring
-        # a few extra positions that get excluded downstream is cheap.
+        # Sleeper's projections endpoint mostly honors the position[] query
+        # filter -- confirmed live: `position[]=DEF` alone returns exactly
+        # the 32 team defenses, and `_load_projections`'s QB/RB/WR/TE/DEF/K
+        # filter returns only those positions, plus a couple of unrequested
+        # leaks (FB, one CB row) that Sleeper's server includes regardless
+        # of what's asked for. `vor.compute` structurally excludes any
+        # position without a replacement level derived from
+        # `league.roster_positions` (see ffdo.engine.vor), so no position
+        # allowlist is needed here; scoring the occasional leaked FB/CB row
+        # that gets excluded downstream is cheap. What the filter does NOT
+        # do is add positions on its own -- DEF/K must be requested
+        # explicitly (`_load_projections` does) or they're silently absent
+        # from `proj` and therefore invisible to every league that rosters
+        # them, no matter what `league.roster_positions` says.
         points = {pid: scoring.score_stats(p.stats, lg.scoring_settings)
                   for pid, p in proj.items() if pid in profiles}
         points = _active_only(points, profiles)
