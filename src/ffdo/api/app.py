@@ -475,14 +475,16 @@ def create_app() -> FastAPI:
                 lg, state, valued, baseline, roster_id=roster_id, teams=teams)
         else:
             from ffdo.engine import market
+            from ffdo.engine import snake_plan as snake_plan_mod
             available = {pid for pid in valued if pid not in state.drafted_player_ids()}
             adp_means = {pid: a.adp["half_ppr"] for pid, a in adp_data.items()
                         if a.adp.get("half_ppr", 999) < 999}
             picks_until = lg.num_teams  # conservative: one full round
             survival = market.simulate_survival(adp_means, available, picks_until)
             cow = market.cost_of_waiting(valued, survival, available)
+            plan = snake_plan_mod.simulate_snake_plan(valued, adp_means, state, lg, roster_id)
             board = board_mod.build_snake_board(
-                lg, state, valued, survival, cow, roster_id=roster_id, teams=teams)
+                lg, state, valued, survival, cow, plan, roster_id=roster_id, teams=teams)
 
         board["is_mock"] = is_mock
         return board

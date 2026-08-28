@@ -238,6 +238,7 @@ def build_snake_board(
     valued: Mapping[str, ValuedPlayer],
     survival: Mapping[str, float],
     cost_of_waiting: Mapping[str, Mapping[str, float]],
+    snake_plan: dict | None = None,
     *,
     roster_id: int | None = None,
     teams: Mapping[int, TeamProfile] | None = None,
@@ -285,6 +286,7 @@ def build_snake_board(
     return {
         "format": "snake",
         "cost_of_waiting": dict(cost_of_waiting),
+        "snake_plan": snake_plan,
         "picks_made": len(state.picks),
         "players": rows,
         "rosters": _build_rosters_payload(league, state, valued, teams, roster_id),
