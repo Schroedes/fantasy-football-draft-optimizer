@@ -407,7 +407,7 @@ function renderRosters() {
   if (!d || !d.rosters) { el.innerHTML = ""; return; }
 
   el.innerHTML = d.rosters.map((r, i) => {
-    const posCells = ["QB", "RB", "WR", "TE"].map(pos => {
+    const posCells = ["QB", "RB", "WR", "TE", "DEF", "K"].map(pos => {
       const v = r.by_position[pos];
       const posColor = `var(--${pos.toLowerCase()}, var(--muted))`;
       return `<span class="roster-pos" style="color:${posColor}">${v !== undefined ? Math.round(v) : "—"}</span>`;

@@ -2,7 +2,10 @@
 import dataclasses
 import pytest
 
-from ffdo.domain.constants import SEASON_LENGTH, is_offense_scoring_key
+from ffdo.domain.constants import (
+    SEASON_LENGTH, is_defense_scoring_key, is_kicking_scoring_key,
+    is_offense_scoring_key,
+)
 from ffdo.domain.models import (
     DraftPick, DraftState, LeagueProfile, MarketADP,
     PlayerProfile, SeasonProjection, SeasonStatLine, Session, TeamProfile,
@@ -37,9 +40,69 @@ def test_season_length_covers_history_and_current():
     ("fum", True), ("fum_lost", True), ("st_td", True), ("bonus_rec_te", True),
     ("fum_rec", False), ("fum_rec_td", False),
     ("pts_allow_0", False), ("fgm_40_49", False), ("sack", False),
+    # `pass_int_td` (interception-return TD, credited against the passer)
+    # is excluded despite matching the `pass_` prefix: it also appears on
+    # real DEF rows in the 2026 projections snapshot, the same
+    # cross-position ambiguity as `def_kr_td`/`pr_td`. See
+    # `_DEFENSIVE_ONLY` and `is_defense_scoring_key`'s docstring.
+    ("pass_int_td", False),
 ])
 def test_offense_scoring_key_classification(key, expected):
     assert is_offense_scoring_key(key) is expected
+
+
+@pytest.mark.parametrize("key,expected", [
+    ("sack", True), ("int", True), ("fum_rec", True), ("blk_kick", True),
+    ("safe", True), ("ff", True), ("def_td", True), ("def_st_td", True),
+    ("def_fum_td", True),
+    ("rec_td", False), ("pts_allow_0", False), ("pts_allow_35p", False),
+    ("yds_allow_0_100", False), ("fgm_40_49", False),
+    # Deliberately excluded even though it's a real defense-adjacent key --
+    # `fum_rec_td` never appears on a real DEF stat line at all (verified
+    # against 2025 actuals); the two rows that DO carry it are a real RB
+    # and a real WR. ESPN's model is "points applies to every slot unless
+    # pointsOverrides narrows it" (not the reverse, as an earlier version
+    # of this comment claimed), but statId 63 genuinely has no D/ST
+    # override in the real fixture either way, consistent with it not
+    # applying to team defense. Keeping it excluded from offense too
+    # (already true via `_DEFENSIVE_ONLY`) avoids crediting anyone for it.
+    # See Task 3, the fix-wave report, and constants.py's `_DEFENSIVE_ONLY`
+    # comment.
+    ("fum_rec_td", False),
+    # `def_kr_td` / `def_pr_td` (kickoff/punt-return TDs) are deliberately
+    # excluded despite being in the original design's starting key set --
+    # verified against real 2026 projections: `def_kr_td` is credited to
+    # the individual returner (8 real rostered WR/RB rows carry it, e.g.
+    # Rashid Shaheed), not exclusively to team DEF, so recognizing it here
+    # would leak scoring onto those offensive players. `def_pr_td` never
+    # appears in real data at all -- Sleeper's real vocabulary for punt
+    # returns is bare `pr_td`, which leaks the same way `def_kr_td` does.
+    # See `domain.constants._DEFENSE_BARE`'s comment and the fix-wave
+    # report (Critical 1 / Important 5).
+    ("def_kr_td", False), ("def_pr_td", False), ("pr_td", False),
+    # Verified real Sleeper keys, present at nonzero weight in a real
+    # connected league and on real DEF stat lines -- deliberately NOT
+    # added. `def_st_ff`/`def_st_fum_rec` are the special-teams-play SUBSET
+    # of the already-recognized `ff`/`fum_rec` totals (verified: always
+    # <= the bare value for the same team-week, zero exceptions across
+    # 2025 actuals); adding them double-counts. `pass_int_td` appears on
+    # both real QB rows (2025 actuals) and real DEF rows (2026
+    # projections) -- the same cross-position ambiguity as `def_kr_td`.
+    ("def_st_ff", False), ("def_st_fum_rec", False),
+    ("st_ff", False), ("st_fum_rec", False), ("pass_int_td", False),
+])
+def test_defense_scoring_key_classification(key, expected):
+    assert is_defense_scoring_key(key) is expected
+
+
+@pytest.mark.parametrize("key,expected", [
+    ("fgm_20_29", True), ("fgm_40_49", True), ("fgm_50p", True),
+    ("fgm_60p", True), ("fgmiss_50p", True), ("fgm", True), ("fga", True),
+    ("fgmiss", True), ("xpm", True), ("xpa", True), ("xpmiss", True),
+    ("sack", False), ("rush_yd", False), ("pts_allow_0", False),
+])
+def test_kicking_scoring_key_classification(key, expected):
+    assert is_kicking_scoring_key(key) is expected
 
 
 def test_league_profile_derives_starting_slots_and_roster_size():
