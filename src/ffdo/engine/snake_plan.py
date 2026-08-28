@@ -17,11 +17,15 @@ from ffdo.engine.replacement import FLEX_ELIGIBILITY
 
 
 def _your_draft_slot(state: DraftState, roster_id: int | None) -> int | None:
-    """Your seat, read off any pick you've already made. None if you
-    haven't picked yet (or roster_id is unset) -- there's no other
-    signal for which seat is yours before that."""
+    """Your seat. Prefers `state.draft_order` (a provider-supplied full
+    pick order, known before anyone has picked -- ESPN populates this;
+    see ffdo.ingest.espn.draft.parse), falling back to reading it off any
+    pick you've already made. None if neither signal has your seat yet
+    (or roster_id is unset)."""
     if roster_id is None:
         return None
+    if state.draft_order is not None:
+        return state.draft_order.get(roster_id)
     return next((p.draft_slot for p in state.picks if p.roster_id == roster_id), None)
 
 

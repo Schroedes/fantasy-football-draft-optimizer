@@ -55,6 +55,51 @@ def test_your_draft_slot_is_none_before_your_first_pick():
     assert snake_plan._your_draft_slot(state, roster_id=None) is None
 
 
+def test_your_draft_slot_uses_draft_order_before_your_first_pick():
+    """ESPN (unlike Sleeper's real-league feed) knows every team's seat
+    before the draft starts -- see DraftState.draft_order and
+    ffdo.ingest.espn.draft.parse. When it's present, your seat must be
+    knowable immediately, not only after your own first pick."""
+    state = DraftState(draft_id="d", draft_type="snake", status="pre_draft",
+                       num_teams=10, rounds=15, budget=None, picks=(),
+                       draft_order={7: 3})
+    assert snake_plan._your_draft_slot(state, roster_id=7) == 3
+
+
+def test_your_draft_slot_prefers_draft_order_over_inferring_from_picks():
+    """Same value either way in this fixture, but proves draft_order is
+    consulted first rather than picks always winning -- a mismatch here
+    would mean a stale or wrong draft_order silently overrides a real
+    pick, which must never happen for any correct provider payload since
+    they're required to describe the same seat."""
+    picks = (DraftPick(pick_no=3, round=1, draft_slot=3, roster_id=7, picked_by="u",
+                       player_id="p1", amount=None),)
+    state = DraftState(draft_id="d", draft_type="snake", status="drafting",
+                       num_teams=10, rounds=15, budget=None, picks=picks,
+                       draft_order={7: 3})
+    assert snake_plan._your_draft_slot(state, roster_id=7) == 3
+
+
+def test_your_draft_slot_falls_back_to_picks_when_draft_order_is_unset():
+    """Sleeper's real-league draft feed never populates draft_order (only
+    its own separate mock-draft-only signal does) -- this is the
+    no-regression case: behavior for Sleeper must stay exactly what it was
+    before draft_order existed."""
+    picks = (DraftPick(pick_no=3, round=1, draft_slot=3, roster_id=7, picked_by="u",
+                       player_id="p1", amount=None),)
+    state = DraftState(draft_id="d", draft_type="snake", status="drafting",
+                       num_teams=10, rounds=15, budget=None, picks=picks)
+    assert state.draft_order is None
+    assert snake_plan._your_draft_slot(state, roster_id=7) == 3
+
+
+def test_your_draft_slot_is_none_when_draft_order_exists_but_omits_this_roster():
+    state = DraftState(draft_id="d", draft_type="snake", status="pre_draft",
+                       num_teams=10, rounds=15, budget=None, picks=(),
+                       draft_order={1: 1, 2: 2})
+    assert snake_plan._your_draft_slot(state, roster_id=7) is None
+
+
 def test_need_weights_full_for_open_dedicated_slot():
     league = _league_multi(("QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "BN"))
     weights = snake_plan._need_weights({}, league)

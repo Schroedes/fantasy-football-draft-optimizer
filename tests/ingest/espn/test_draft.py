@@ -42,6 +42,40 @@ def test_a_pre_draft_league_produces_correct_metadata_and_zero_picks():
     assert state.draft_id == "1882997948"
 
 
+def test_draft_order_is_populated_from_round_one_even_before_any_picks_are_made():
+    """The whole point of `draft_order`: ESPN's round-1 slots already carry
+    a real teamId even when every pick in the league is still an unplayed
+    placeholder (this is the SAME real pre-draft snapshot as the test
+    above, where `state.picks == ()`) -- so a roster's seat should be
+    knowable immediately, not only after that roster's first real pick."""
+    state = draft.parse(_combined_league_response(), Crosswalk(espn_to_sleeper={}, unmatched=()))
+    assert state.picks == ()
+    assert state.draft_order is not None
+    assert len(state.draft_order) == state.num_teams == 10
+    # Every roster gets a distinct slot 1..num_teams (a real snake order).
+    assert set(state.draft_order.values()) == set(range(1, 11))
+
+
+def test_draft_order_covers_a_team_whose_own_pick_is_still_unplayed():
+    """Direct proof this doesn't just fall back to reading picks: team 1's
+    round-1 slot is still a placeholder (playerId: -1, excluded from
+    `state.picks` per test_filters_out_unplayed_placeholder_picks above),
+    but it must still appear in `draft_order` -- that's the entire reason
+    this field exists instead of just inferring from `state.picks`."""
+    raw = _synthetic_raw([
+        {"playerId": -1, "teamId": 1, "roundId": 1, "roundPickNumber": 1,
+         "overallPickNumber": 1, "bidAmount": 0},
+        {"playerId": 4984, "teamId": 2, "roundId": 1, "roundPickNumber": 2,
+         "overallPickNumber": 2, "bidAmount": 0},
+    ])
+    cw = Crosswalk(espn_to_sleeper={"4984": "sleeper-4984"}, unmatched=())
+
+    state = draft.parse(raw, cw)
+
+    assert len(state.picks) == 1  # team 1's slot is still unplayed
+    assert state.draft_order == {1: 1, 2: 2}
+
+
 def _synthetic_raw(picks):
     return {
         "id": 1882997948,
