@@ -127,15 +127,25 @@ def _extract_draft_id(value: str) -> str:
 
 
 def _uncached(url: str) -> str:
-    """Appends a cache-busting query param so Sleeper's CDN can't serve a
-    stale snapshot. Confirmed via response headers that /draft/<id> is
-    fronted by Cloudflare with `cache-control: s-maxage=30` -- its `Age`
-    header climbs steadily (HIT every time) across normal polls, so without
-    this every fetch below can silently be reading up to ~30s-old data
-    regardless of how fast we poll. Used only on draft meta + picks, the
-    two calls that actually carry live nomination/bid -- the players/
-    projections/teams feeds are already covered by this app's own TTL
-    caches and gain nothing from busting Sleeper's on top.
+    """Appends a cache-busting query param so a provider's CDN can't serve a
+    stale snapshot. Confirmed via response headers that Sleeper's
+    /draft/<id> is fronted by Cloudflare with `cache-control: s-maxage=30`
+    -- its `Age` header climbs steadily (HIT every time) across normal
+    polls, so without this every fetch below can silently be reading up to
+    ~30s-old data regardless of how fast we poll.
+
+    Also applied to ESPN's combined mSettings/mDraftDetail fetch -- not
+    independently header-confirmed the way Sleeper's was (no saved
+    espn_s2/SWID to test against live), but applied defensively after a
+    live report of picks not appearing on the board as they happened,
+    which is exactly this symptom's signature and this fix is a no-op if
+    wrong. Revisit if a future session can confirm ESPN's actual
+    cache-control headers one way or the other.
+
+    Used only on the calls that actually carry live pick/nomination state
+    -- the players/projections/teams/player-pool feeds are already
+    covered by this app's own TTL caches and gain nothing from busting a
+    provider's CDN on top.
 
     Uses a uuid rather than a timestamp: `time.time_ns()` isn't actually
     unique call-to-call on every platform (observed colliding back-to-back
@@ -371,9 +381,9 @@ def create_app() -> FastAPI:
 
             espn = espn_client_mod.EspnClient(session.espn_s2, session.swid)
             try:
-                raw = espn.get_json(
+                raw = espn.get_json(_uncached(
                     f"{espn_client_mod.BASE}/seasons/{session.season}/segments/0/"
-                    f"leagues/{session.league_id}?view=mSettings&view=mDraftDetail")
+                    f"leagues/{session.league_id}?view=mSettings&view=mDraftDetail"))
                 player_pool_raw = _espn_player_pool_cache_for(session.season).get(
                     lambda: espn.get_json(
                         f"{espn_client_mod.BASE}/seasons/{session.season}/players"
@@ -427,9 +437,9 @@ def create_app() -> FastAPI:
 
             espn = espn_client_mod.EspnClient(session.espn_s2, session.swid)
             try:
-                raw = espn.get_json(
+                raw = espn.get_json(_uncached(
                     f"{espn_client_mod.BASE}/seasons/{session.season}/segments/0/"
-                    f"leagues/{session.league_id}?view=mSettings&view=mTeam&view=mDraftDetail")
+                    f"leagues/{session.league_id}?view=mSettings&view=mTeam&view=mDraftDetail"))
                 player_pool_raw = _espn_player_pool_cache_for(session.season).get(
                     lambda: espn.get_json(
                         f"{espn_client_mod.BASE}/seasons/{session.season}/players"
