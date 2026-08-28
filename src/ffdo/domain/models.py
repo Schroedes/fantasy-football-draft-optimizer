@@ -97,6 +97,17 @@ class DraftState:
     # an active nomination -- e.g. pre-draft, or between sales.
     nominated_player_id: str | None = None
     current_bid: int | None = None
+    # Maps roster_id -> your seat (1-indexed pick position in round 1), when
+    # the provider exposes the full pick order before anyone has picked.
+    # ESPN does (its round-1 slots carry a real teamId even pre-draft,
+    # marked unpicked via playerId: -1); Sleeper's real-league draft feed
+    # does not, so this stays None there and callers fall back to reading a
+    # roster's seat off its own first actual pick (see
+    # ffdo.engine.snake_plan._your_draft_slot). Sleeper MOCK drafts have
+    # their own separate, pre-existing signal for this
+    # (draft_raw["draft_order"] / ["slot_to_roster_id"], resolved by
+    # ffdo.ingest.mock_draft) and do not need this field either.
+    draft_order: Mapping[int, int] | None = None
 
     def drafted_player_ids(self) -> frozenset[str]:
         return frozenset(p.player_id for p in self.picks)

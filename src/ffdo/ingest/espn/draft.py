@@ -47,6 +47,17 @@ def parse(raw: dict[str, Any], crosswalk: Crosswalk) -> DraftState:
             amount=int(bid_amount) if bid_amount else None,
         ))
 
+    # Unlike Sleeper's real-league draft feed, ESPN pre-populates every
+    # round's picks -- including round 1 -- before the draft starts, each
+    # slot already carrying its real teamId (see the playerId: -1
+    # placeholder handling above). That means a team's seat is knowable
+    # from round 1 alone, whether or not that team's own pick has actually
+    # happened yet -- built from `all_picks` directly (not `parsed`), since
+    # `parsed` has already dropped the still-unplayed rows this is
+    # specifically meant to cover.
+    draft_order = {int(p["teamId"]): int(p["roundPickNumber"])
+                   for p in all_picks if p.get("roundId") == 1} or None
+
     return DraftState(
         draft_id=str(raw["id"]),
         draft_type=draft_settings.get("type", "").lower(),
@@ -55,4 +66,5 @@ def parse(raw: dict[str, Any], crosswalk: Crosswalk) -> DraftState:
         rounds=rounds,
         budget=draft_settings.get("auctionBudget"),
         picks=tuple(parsed),
+        draft_order=draft_order,
     )
