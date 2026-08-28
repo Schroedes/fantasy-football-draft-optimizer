@@ -413,6 +413,82 @@ def test_get_board_real_league_mode_reports_is_mock_false_and_scores_a_player(
         "branch unchanged")
 
 
+def test_get_board_fetches_and_scores_def_and_k_when_the_league_rosters_them(
+        monkeypatch, tmp_path):
+    """Regression test for a bug where DEF/K never appeared on the board at
+    all for leagues that roster them: `_load_projections`'s query string
+    only asked Sleeper for QB/RB/WR/TE, so `proj` (and therefore `points`,
+    and therefore `vor.compute`'s output) never contained a DEF or K entry
+    no matter what `league.roster_positions` said -- silent, not a crash."""
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session(league_id="L456", draft_id="D456", is_mock=False))
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    league_raw = {
+        "league_id": "L456",
+        "season": "2025",
+        "settings": {"num_teams": 2, "budget": 200},
+        "roster_positions": ["QB", "DEF", "K", "BN"],
+        "scoring_settings": {"pass_yd": 0.04, "sack": 1.0, "int": 2.0,
+                              "fgm": 3.0, "xpm": 1.0},
+        "name": "DEF/K Board Test League",
+        "status": "drafting",
+    }
+    draft_raw = {
+        "draft_id": "D456", "type": "auction", "status": "drafting",
+        "settings": {"teams": 2, "rounds": 3, "budget": 200},
+    }
+    players_raw = {
+        "DAL": {"first_name": "Dallas", "last_name": "Defense",
+                "position": "DEF", "team": "DAL", "age": None,
+                "years_exp": None, "active": True},
+        "K1": {"first_name": "Test", "last_name": "Kicker", "position": "K",
+               "team": "AAA", "age": 28, "years_exp": 5, "active": True},
+    }
+    projections_raw = [
+        {"player_id": "DAL",
+         "last_modified": int(datetime(2025, 8, 1, tzinfo=timezone.utc).timestamp() * 1000),
+         "stats": {"sack": 3.0, "int": 2.0}},
+        {"player_id": "K1",
+         "last_modified": int(datetime(2025, 8, 1, tzinfo=timezone.utc).timestamp() * 1000),
+         "stats": {"fgm": 2.0, "xpm": 3.0}},
+    ]
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D456/picks": [],
+        f"{V1}/draft/D456": draft_raw,
+        f"{V1}/league/L456/rosters": [],
+        f"{V1}/league/L456/users": [],
+        f"{V1}/league/L456": league_raw,
+        f"{V1}/players/nfl": players_raw,
+        f"{PROJECTIONS}/2025": projections_raw,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    client = TestClient(create_app())
+    res = client.get("/api/board")
+
+    assert res.status_code == 200
+    projections_calls = [c for c in calls if f"{PROJECTIONS}/2025" in c]
+    assert projections_calls, "must actually fetch the projections feed"
+    assert "position[]=DEF" in projections_calls[0], (
+        "the projections request must ask Sleeper for DEF -- this is the "
+        "actual fix, not just the downstream scoring/VOR plumbing")
+    assert "position[]=K" in projections_calls[0], (
+        "the projections request must ask Sleeper for K -- this is the "
+        "actual fix, not just the downstream scoring/VOR plumbing")
+
+    body = res.json()
+    player_ids = {p["player_id"] for p in body["players"]}
+    assert "DAL" in player_ids, (
+        "a rostered DEF position with real projection stats must reach "
+        "the board -- proves the projections fetch, scoring, and VOR "
+        "pipeline all now carry DEF end to end")
+    assert "K1" in player_ids, (
+        "a rostered K position with real projection stats must reach "
+        "the board -- proves the projections fetch, scoring, and VOR "
+        "pipeline all now carry K end to end")
+
+
 def test_get_board_mock_mode_reports_is_mock_true_and_fetches_the_draft_once(
         monkeypatch, tmp_path):
     """Direct proof of single-fetch reuse: get_board()'s mock branch must
