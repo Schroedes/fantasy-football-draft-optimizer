@@ -30,7 +30,10 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 14px/1.4 var(--font-sans);
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ---- top strip ---- */
@@ -87,21 +90,21 @@ body {
 .cow-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
 #cow h2 { font-size: 13px; font-weight: 600; margin: 0; }
 .cow-sub { font-size: 11.5px; color: var(--faint); }
-#cow-rows { display: flex; flex-direction: column; }
-.cow-row { display: flex; align-items: center; gap: 20px; padding: 10px 6px; border-radius: 7px; }
+#cow-rows { display: grid; grid-template-columns: repeat(2, 1fr); gap: 2px 14px; }
+.cow-row { display: flex; align-items: center; gap: 10px; padding: 7px 6px; border-radius: 7px; }
 .cow-row:hover { background: var(--surface-2); }
-.cow-pos { width: 44px; font-family: var(--font-mono); font-size: 15px; font-weight: 700; }
-.cow-stat { display: flex; flex-direction: column; gap: 2px; width: 110px; }
-.cow-stat .label { font-size: 9.5px; }
-.cow-stat b { font-family: var(--font-mono); font-size: 15px; font-weight: 600; }
+.cow-pos { width: 32px; font-family: var(--font-mono); font-size: 13px; font-weight: 700; flex-shrink: 0; }
+.cow-stat { display: flex; flex-direction: column; gap: 1px; width: 62px; flex-shrink: 0; }
+.cow-stat .label { font-size: 8.5px; }
+.cow-stat b { font-family: var(--font-mono); font-size: 12.5px; font-weight: 600; }
 .cow-stat.next b { color: var(--muted); }
-.cow-cost { flex: 1; display: flex; flex-direction: column; gap: 5px; justify-content: center; min-width: 140px; }
+.cow-cost { flex: 1; display: flex; flex-direction: column; gap: 3px; justify-content: center; min-width: 0; }
 .cow-cost-line { display: flex; align-items: baseline; gap: 6px; }
-.cow-cost-num { font-family: var(--font-mono); font-size: 19px; font-weight: 700; }
-.cow-cost-label { font-size: 11px; color: var(--faint); }
-.cow-bar-track { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.cow-cost-num { font-family: var(--font-mono); font-size: 15px; font-weight: 700; }
+.cow-cost-label { font-size: 9.5px; color: var(--faint); }
+.cow-bar-track { height: 5px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
 .cow-bar-fill { height: 100%; border-radius: 3px; }
-.cow-tag { width: 56px; text-align: right; font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; letter-spacing: .5px; }
+.cow-tag { width: 40px; text-align: right; font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; letter-spacing: .3px; flex-shrink: 0; }
 
 /* ---- position budget ---- */
 #position-budget {
@@ -111,19 +114,27 @@ body {
 .posbudget-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
 #position-budget h2 { font-size: 13px; font-weight: 600; margin: 0; }
 .posbudget-sub { font-size: 11.5px; color: var(--faint); }
-#posbudget-rows { display: flex; flex-direction: column; }
-.posbudget-row { display: flex; align-items: center; gap: 20px; padding: 10px 6px; border-radius: 7px; }
+#posbudget-rows { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px 14px; }
+.posbudget-row { display: flex; align-items: center; gap: 10px; padding: 7px 6px; border-radius: 7px; }
 .posbudget-row:hover { background: var(--surface-2); }
-.posbudget-pos { width: 44px; font-family: var(--font-mono); font-size: 15px; font-weight: 700; }
-.posbudget-amount { font-family: var(--font-mono); font-size: 19px; font-weight: 700; width: 70px; }
-.posbudget-slots { font-size: 11px; color: var(--faint); width: 110px; }
-.posbudget-bar-track { flex: 1; height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.posbudget-pos { width: 32px; font-family: var(--font-mono); font-size: 13px; font-weight: 700; flex-shrink: 0; }
+.posbudget-amount { font-family: var(--font-mono); font-size: 15px; font-weight: 700; width: 52px; flex-shrink: 0; }
+.posbudget-slots { font-size: 9.5px; color: var(--faint); width: 66px; flex-shrink: 0; }
+.posbudget-bar-track { flex: 1; min-width: 24px; height: 5px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
 .posbudget-bar-fill { height: 100%; border-radius: 3px; background: var(--accent); }
-.posbudget-reserve { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 6px; margin-top: 4px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--faint); }
+.posbudget-reserve {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 6px; margin-top: 4px; border-top: 1px solid var(--border);
+  font-size: 11.5px; color: var(--faint);
+}
 
 /* ---- layout ---- */
-#layout { display: flex; gap: 18px; align-items: flex-start; }
-#sidebar { display: flex; flex-direction: column; gap: 18px; width: 320px; flex-shrink: 0; }
+#layout { display: flex; gap: 18px; align-items: flex-start; flex: 1; min-height: 0; }
+#sidebar {
+  display: flex; flex-direction: column; gap: 12px; width: 320px; flex-shrink: 0;
+  align-self: stretch; min-height: 0; overflow-y: auto;
+}
 
 /* ---- nominated card ---- */
 #nominated {
@@ -140,7 +151,7 @@ body {
 
 /* ---- roster rankings card ---- */
 #rosters {
-  flex-shrink: 0;
+  flex: 1 1 0; min-height: 130px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -149,9 +160,10 @@ body {
   flex-direction: column;
   gap: 10px;
 }
+.rosters-head { flex-shrink: 0; }
 .rosters-head h2 { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
-.rosters-sub { font-size: 11px; color: var(--faint); }
-#rosters-rows { display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; }
+.rosters-sub { display: block; font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#rosters-rows { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
 .roster-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 4px; border-radius: 7px; cursor: pointer; }
 .roster-row:hover { background: var(--surface-2); }
 .roster-row.you { box-shadow: inset 3px 0 0 var(--accent); background: color-mix(in oklch, var(--accent) 8%, transparent); }
@@ -169,7 +181,7 @@ body {
 
 /* ---- pick history card ---- */
 #history {
-  flex-shrink: 0;
+  flex: 1 1 0; min-height: 130px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -178,9 +190,10 @@ body {
   flex-direction: column;
   gap: 10px;
 }
+.history-head { flex-shrink: 0; }
 .history-head h2 { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
-.history-sub { font-size: 11px; color: var(--faint); }
-#history-rows { display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; }
+.history-sub { display: block; font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#history-rows { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
 .history-empty { color: var(--faint); font-size: 12px; padding: 8px 4px; }
 .history-row { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-radius: 7px; }
 .history-row:hover { background: var(--surface-2); }
@@ -200,7 +213,7 @@ body {
 
 /* ---- optimal plan card ---- */
 #optimal-plan {
-  flex-shrink: 0;
+  flex: 1 1 0; min-height: 130px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -209,17 +222,45 @@ body {
   flex-direction: column;
   gap: 10px;
 }
+.plan-head { flex-shrink: 0; }
 .plan-head h2 { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
-.plan-sub { font-size: 11px; color: var(--faint); }
+.plan-sub { display: block; font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .plan-totals { display: flex; gap: 14px; padding: 6px 4px 10px; font-size: 11.5px; color: var(--faint); }
 .plan-totals b { font-family: var(--font-mono); font-size: 13px; color: var(--text); font-weight: 700; }
-#plan-rows { display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; }
+#plan-rows { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
 .plan-row { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-radius: 7px; }
 .plan-row:hover { background: var(--surface-2); }
 .plan-category { width: 44px; font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--faint); }
 .plan-name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plan-price { font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
 .plan-vor-val { font-family: var(--font-mono); font-size: 11px; color: var(--faint); width: 56px; text-align: right; }
+
+/* ---- snake plan card ---- */
+#snake-plan {
+  flex: 1 1 0; min-height: 130px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.snakeplan-head { flex-shrink: 0; }
+.snakeplan-head h2 { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
+.snakeplan-sub {
+  display: block; font-size: 11px; color: var(--faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.snakeplan-totals { flex-shrink: 0; display: flex; gap: 14px; padding: 6px 4px 10px; font-size: 11.5px; color: var(--faint); }
+.snakeplan-totals b { font-family: var(--font-mono); font-size: 13px; color: var(--text); font-weight: 700; }
+#snakeplan-rows { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
+.snakeplan-row { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-radius: 7px; }
+.snakeplan-row:hover { background: var(--surface-2); }
+.snakeplan-pickno { width: 28px; font-family: var(--font-mono); font-size: 11px; color: var(--faint); flex-shrink: 0; }
+.snakeplan-pos { width: 32px; font-family: var(--font-mono); font-size: 11px; font-weight: 700; flex-shrink: 0; }
+.snakeplan-name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snakeplan-rate { font-family: var(--font-mono); font-size: 11px; color: var(--faint); width: 40px; text-align: right; flex-shrink: 0; }
 
 #nominated.pinned { border-color: var(--accent); }
 .nom-empty-msg { color: var(--faint); font-size: 13px; line-height: 1.5; }
@@ -324,6 +365,10 @@ tr.tier-break td { border-top: 2px solid var(--border-strong); }
 #board-panel .empty-msg { padding: 2rem; text-align: center; color: var(--faint); }
 
 @media (max-width: 900px) {
-  #layout { flex-direction: column; }
-  #sidebar { width: 100%; }
+  /* Stacked layout can't fit table + sidebar in one screen -- let the
+     whole layout column scroll here instead of the desktop no-scroll
+     constraint, which would otherwise clip content below the fold. */
+  body { overflow: visible; height: auto; }
+  #layout { flex-direction: column; overflow: visible; }
+  #sidebar { width: 100%; overflow: visible; }
 }
