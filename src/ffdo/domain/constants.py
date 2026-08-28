@@ -10,9 +10,17 @@ SEASON_LENGTH: Final[dict[int, int]] = {
 
 OFFENSE_POSITIONS: Final[frozenset[str]] = frozenset({"QB", "RB", "WR", "TE"})
 
-# Scoring keys credited to defensive/special-teams units, never to an
-# offensive player, even when the key appears in a league's scoring settings.
-_DEFENSIVE_ONLY: Final[frozenset[str]] = frozenset({"fum_rec", "fum_rec_td"})
+# Scoring keys excluded from offense classification even when they match an
+# offense-vocabulary prefix or bare key. `fum_rec`/`fum_rec_td` are credited
+# to defensive/special-teams units, never to an offensive player. `pass_int_td`
+# is different in kind -- it IS a passer (offensive) stat by name, but is
+# excluded anyway because it also appears on real DEF rows (cross-position
+# ambiguity), matching the identical exclusion already applied in
+# `is_defense_scoring_key`'s docstring below. In all cases: never credited,
+# even when the key appears in a league's scoring settings.
+_DEFENSIVE_ONLY: Final[frozenset[str]] = frozenset({
+    "fum_rec", "fum_rec_td", "pass_int_td",
+})
 
 _OFFENSE_PREFIXES: Final[tuple[str, ...]] = ("pass_", "rush_", "rec_", "bonus_")
 

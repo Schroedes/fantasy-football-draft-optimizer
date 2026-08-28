@@ -40,6 +40,12 @@ def test_season_length_covers_history_and_current():
     ("fum", True), ("fum_lost", True), ("st_td", True), ("bonus_rec_te", True),
     ("fum_rec", False), ("fum_rec_td", False),
     ("pts_allow_0", False), ("fgm_40_49", False), ("sack", False),
+    # `pass_int_td` (interception-return TD, credited against the passer)
+    # is excluded despite matching the `pass_` prefix: it also appears on
+    # real DEF rows in the 2026 projections snapshot, the same
+    # cross-position ambiguity as `def_kr_td`/`pr_td`. See
+    # `_DEFENSIVE_ONLY` and `is_defense_scoring_key`'s docstring.
+    ("pass_int_td", False),
 ])
 def test_offense_scoring_key_classification(key, expected):
     assert is_offense_scoring_key(key) is expected
