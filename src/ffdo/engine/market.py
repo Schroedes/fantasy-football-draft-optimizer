@@ -8,11 +8,30 @@ phenomenon this tool exists to surface.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 
 import numpy as np
 
 from ffdo.domain.models import ValuedPlayer
+
+
+def gone_this_stretch(
+    ids: Sequence[str], adp: Mapping[str, float], take: int,
+    tau: float, rng: np.random.Generator,
+) -> frozenset[str]:
+    """One Gumbel-max draw: up to `take` ids removed from `ids`, weighted
+    by ADP (lower ADP -> more desirable -> more likely to be taken). Ids
+    absent from `adp` are never drawn as "gone" -- the same limitation
+    `simulate_survival` already has, not new here.
+    """
+    eligible = [pid for pid in ids if pid in adp]
+    if take <= 0 or not eligible:
+        return frozenset()
+    take = min(take, len(eligible))
+    logits = np.array([-adp[pid] / tau for pid in eligible])
+    gumbel = rng.gumbel(size=len(eligible))
+    gone_idx = np.argpartition(-(logits + gumbel), take - 1)[:take]
+    return frozenset(eligible[i] for i in gone_idx)
 
 
 def simulate_survival(
@@ -34,19 +53,14 @@ def simulate_survival(
     if not ids or picks_until <= 0:
         return dict.fromkeys(ids, 1.0)
 
-    values = np.array([adp[pid] for pid in ids], dtype=float)
-    # Lower ADP => more desirable => higher log-weight.
-    logits = -values / tau
     n = len(ids)
-    take = min(picks_until, n)
-
+    id_index = {pid: i for i, pid in enumerate(ids)}
     survived = np.zeros(n, dtype=np.int64)
     for _ in range(sims):
-        gumbel = rng.gumbel(size=n)
-        # Top-k by perturbed logit is an exact sample without replacement.
-        gone = np.argpartition(-(logits + gumbel), take - 1)[:take]
+        gone = gone_this_stretch(ids, adp, picks_until, tau, rng)
         mask = np.ones(n, dtype=bool)
-        mask[gone] = False
+        for pid in gone:
+            mask[id_index[pid]] = False
         survived += mask
 
     return {pid: float(survived[i]) / sims for i, pid in enumerate(ids)}

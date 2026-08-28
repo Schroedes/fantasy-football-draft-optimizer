@@ -67,3 +67,19 @@ def test_cost_of_waiting_ignores_drafted_players():
     valued = _valued({"a": ("RB", 100.0), "b": ("RB", 50.0)})
     cow = market.cost_of_waiting(valued, {"b": 0.5}, available={"b"})
     assert cow["RB"]["best_now"] == 50.0
+
+
+def test_gone_this_stretch_removes_exactly_take_players():
+    adp = {f"p{i}": float(i + 1) for i in range(20)}
+    rng = np.random.default_rng(5)
+    gone = market.gone_this_stretch(list(adp), adp, take=4, tau=8.0, rng=rng)
+    assert len(gone) == 4
+    assert gone <= set(adp)
+
+
+def test_gone_this_stretch_never_removes_players_without_adp():
+    adp = {"p0": 1.0, "p1": 2.0}
+    rng = np.random.default_rng(5)
+    gone = market.gone_this_stretch(["p0", "p1", "no_adp"], adp, take=5, tau=8.0, rng=rng)
+    assert "no_adp" not in gone
+    assert gone == {"p0", "p1"}  # take clamps to eligible count, not requested count

@@ -142,6 +142,7 @@ function render() {
   }
 
   renderCow();
+  renderSnakePlan();
   renderPositionBudget();
   renderOptimalPlan();
   renderMoneyHeader();
@@ -266,6 +267,29 @@ function renderOptimalPlan() {
       <span class="plan-name" style="color:${posColor}">${escapeHtml(slot.name)}</span>
       <span class="plan-price">$${slot.target_price}</span>
       <span class="plan-vor-val">${slot.vor} VOR</span>
+    </div>`;
+  }).join("");
+}
+
+function renderSnakePlan() {
+  const el = document.getElementById("snake-plan");
+  const d = state.data;
+  const plan = d && d.snake_plan;
+  if (d.format !== "snake" || !plan) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+
+  document.getElementById("snakeplan-vor").textContent = plan.expected_starting_vor;
+
+  document.getElementById("snakeplan-rows").innerHTML = plan.picks.map(p => {
+    const posColor = `var(--${p.most_likely_position.toLowerCase()}, var(--muted))`;
+    return `<div class="snakeplan-row">
+      <span class="snakeplan-pickno">#${p.picks_from_now}</span>
+      <span class="snakeplan-pos" style="color:${posColor}">${p.most_likely_position}</span>
+      <span class="snakeplan-name">${escapeHtml(p.most_likely_player_name)}</span>
+      <span class="snakeplan-rate">${Math.round(p.player_hit_rate * 100)}%</span>
     </div>`;
   }).join("");
 }

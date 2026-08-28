@@ -203,3 +203,20 @@ def test_snake_history_grade_is_none_when_player_is_absent_from_valued_pool():
 
     assert out["history"][0]["grade"] is None
     assert out["history"][0]["name"] == "RB99"
+
+
+def test_build_snake_board_includes_snake_plan_key():
+    valued = _valued()
+    survival = {pid: 0.5 for pid in valued}
+    plan = {
+        "picks": [{"pick_no": 15, "picks_from_now": 1, "most_likely_position": "RB",
+                   "position_hit_rate": 0.6, "most_likely_player_id": "RB0",
+                   "most_likely_player_name": "RB 0", "player_hit_rate": 0.4}],
+        "expected_starting_vor": 250.0, "sims_run": 200,
+    }
+
+    out = board.build_snake_board(_league(), _state(), valued, survival, {}, plan)
+    assert out["snake_plan"] == plan
+
+    out_none = board.build_snake_board(_league(), _state(), valued, survival, {})
+    assert out_none["snake_plan"] is None
