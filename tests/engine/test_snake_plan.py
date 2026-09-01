@@ -133,15 +133,54 @@ def test_need_weights_covers_def_and_k_not_just_offense_positions():
     assert weights["K"] == 1.0
 
 
-def test_need_weights_def_and_k_are_never_flex_eligible():
+def test_need_weights_def_and_k_are_hard_capped_once_their_slot_is_filled():
     league = _league_multi(("DEF", "K", "FLEX", "BN"))
     roster = _valued_positions({"def1": ("DEF", 50.0), "k1": ("K", 20.0)})
     weights = snake_plan._need_weights(roster, league)
-    # Both dedicated slots are now filled; DEF/K never appear in any
-    # FLEX_ELIGIBILITY value set, so the open FLEX slot must NOT grant
-    # them the 0.85 flex-eligible weight -- straight to bench-tier 0.15.
-    assert weights["DEF"] == 0.15
-    assert weights["K"] == 0.15
+    # Both dedicated slots are now filled. DEF/K never appear in any
+    # FLEX_ELIGIBILITY value set, so the open FLEX slot must NOT grant them
+    # the 0.85 flex-eligible weight; and unlike a bench-able offense
+    # position they get a hard 0.0 (not 0.15) -- you only ever roster one
+    # of each, so the rollout must never spend a pick on a second.
+    assert weights["DEF"] == 0.0
+    assert weights["K"] == 0.0
+
+
+def test_need_weights_still_soft_caps_a_filled_offense_position():
+    """The hard 0.0 cap is K/DEF-only -- a fully-staffed offense position
+    keeps the 0.15 bench-tier weight so a genuine value pick (handcuff,
+    upside backup) can still surface."""
+    league = _league_multi(("RB", "BN"))
+    roster = _valued_positions({"rb1": ("RB", 50.0)})
+    weights = snake_plan._need_weights(roster, league)
+    assert weights["RB"] == 0.15
+
+
+def test_simulate_snake_plan_never_drafts_a_second_kicker():
+    """Once your single K slot is filled, the rollout must not burn another
+    pick on a kicker even when a high-VOR one is sitting there -- you can
+    only start one. Single-team, no-gap setup keeps it deterministic."""
+    league = _league_multi(("QB", "K", "BN", "BN"), n=1)
+    picks = (
+        DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1, picked_by="u",
+                  player_id="qb1", amount=None),
+        DraftPick(pick_no=2, round=2, draft_slot=1, roster_id=1, picked_by="u",
+                  player_id="k1", amount=None),
+    )
+    state = DraftState(draft_id="d", draft_type="snake", status="drafting",
+                       num_teams=1, rounds=4, budget=None, picks=picks)
+    valued = _valued_positions({
+        "qb1": ("QB", 40.0), "k1": ("K", 18.0),
+        "k2": ("K", 17.0), "rb1": ("RB", 12.0), "wr1": ("WR", 10.0),
+    })
+    adp = {"k2": 3.0, "rb1": 5.0, "wr1": 6.0}
+
+    result = snake_plan.simulate_snake_plan(
+        valued, adp, state, league, roster_id=1, sims=25, rng=np.random.default_rng(0))
+
+    assert result is not None
+    positions = [p["most_likely_position"] for p in result["picks"]]
+    assert "K" not in positions
 
 
 def _empty_available_state(num_teams=12, rounds=15):
