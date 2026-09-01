@@ -171,8 +171,18 @@ def simulate_snake_plan(
                 break
 
             weights = _need_weights(sim_roster, league)
+            # A weight of 0.0 means "never draft this" (a filled K/DEF slot,
+            # or a position this league doesn't roster). Those must be
+            # dropped from contention, not just scored low: `vor * 0.0` is
+            # 0.0, which still beats the negative `vor * weight` of every
+            # below-replacement bench body left on the board late in a
+            # draft, so a plain `max` would happily take a second kicker.
+            # Fall back to the full pool only if nothing is draftable
+            # (every remaining slot is a forced bench filler anyway).
+            candidates = [pid for pid in sim_available
+                          if weights.get(valued[pid].profile.position, 0.0) > 0.0]
             best_id = max(
-                sim_available,
+                candidates or sim_available,
                 key=lambda pid: valued[pid].vor * weights.get(valued[pid].profile.position, 0.0),
             )
             sim_roster[best_id] = valued[best_id]

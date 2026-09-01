@@ -183,6 +183,37 @@ def test_simulate_snake_plan_never_drafts_a_second_kicker():
     assert "K" not in positions
 
 
+def test_no_second_kicker_even_when_every_remaining_player_is_below_replacement():
+    """The real-draft failure mode: late in the sim your starters are full
+    and everything left on the board is a negative-VOR bench body. A hard
+    cap that merely zeroes the weight isn't enough -- `vor * 0.0 == 0.0`
+    still beats `negative_vor * 0.15`, so `max()` picks the capped kicker.
+    The capped position must be removed from contention entirely."""
+    league = _league_multi(("QB", "K", "BN", "BN"), n=1)
+    picks = (
+        DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1, picked_by="u",
+                  player_id="qb1", amount=None),
+        DraftPick(pick_no=2, round=2, draft_slot=1, roster_id=1, picked_by="u",
+                  player_id="k1", amount=None),
+    )
+    state = DraftState(draft_id="d", draft_type="snake", status="drafting",
+                       num_teams=1, rounds=4, budget=None, picks=picks)
+    valued = _valued_positions({
+        "qb1": ("QB", 40.0), "k1": ("K", 18.0),
+        "k2": ("K", 6.0),          # positive VOR, but you already have a K
+        "rb_scrub": ("RB", -30.0),  # everything else is below replacement
+        "wr_scrub": ("WR", -25.0),
+    })
+    adp = {}  # nothing has an ADP -> nobody is removed by the opponent draw
+
+    result = snake_plan.simulate_snake_plan(
+        valued, adp, state, league, roster_id=1, sims=25, rng=np.random.default_rng(0))
+
+    assert result is not None
+    positions = [p["most_likely_position"] for p in result["picks"]]
+    assert "K" not in positions
+
+
 def _empty_available_state(num_teams=12, rounds=15):
     return DraftState(draft_id="d", draft_type="snake", status="drafting",
                       num_teams=num_teams, rounds=rounds, budget=None, picks=())
