@@ -103,15 +103,29 @@ def parse(
         # 1.0/0.0 (mirrors ffdo.ingest.stats).
         numeric = {k: float(v) for k, v in stats.items()
                    if isinstance(v, (int, float)) and not isinstance(v, bool)}
-        proj[player_id] = SeasonProjection(
-            player_id=player_id, season=season,
-            stats={k: v for k, v in numeric.items()
-                   if not k.startswith(_ADP_PREFIX)},
-            last_modified=modified,
-        )
         adp[player_id] = MarketADP(
             player_id=player_id, season=season,
             adp={k[len(_ADP_PREFIX):]: v for k, v in numeric.items()
                  if k.startswith(_ADP_PREFIX)},
+        )
+        projection_stats = {k: v for k, v in numeric.items()
+                            if not k.startswith(_ADP_PREFIX)}
+        # Sleeper returns a row for every player who carries an ADP, whether
+        # or not it actually projected them -- hundreds come back with
+        # nothing but `gp` once the adp_ keys are stripped (roughly 120 of
+        # its 153 "kickers", plus deep-bench skill players). A row with no
+        # projected stat carries no information for valuation: it would
+        # score 0 and land at a large negative VOR, cluttering the board
+        # with players nobody projected. Emit its ADP (an independent
+        # signal, fixed at draft time) but no projection. The
+        # `allow_contaminated` inspection path keeps every row -- a wiped
+        # historical projection (`gp`-only, e.g. Nick Chubb 2023) is
+        # exactly what that path exists to examine.
+        if not allow_contaminated and not (projection_stats.keys() - {"gp"}):
+            continue
+        proj[player_id] = SeasonProjection(
+            player_id=player_id, season=season,
+            stats=projection_stats,
+            last_modified=modified,
         )
     return proj, adp

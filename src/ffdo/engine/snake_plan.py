@@ -15,6 +15,10 @@ from ffdo.engine import roster as roster_engine
 from ffdo.engine.market import gone_this_stretch
 from ffdo.engine.replacement import FLEX_ELIGIBILITY
 
+# Positions you only ever roster one of, and that no FLEX slot can absorb:
+# once the dedicated slot is filled, the rollout must stop considering them.
+_HARD_CAPPED_POSITIONS = frozenset({"K", "DEF"})
+
 
 def _your_draft_slot(state: DraftState, roster_id: int | None) -> int | None:
     """Your seat. Prefers `state.draft_order` (a provider-supplied full
@@ -86,6 +90,15 @@ def _need_weights(sim_roster: Mapping[str, ValuedPlayer], league) -> dict[str, f
             weights[pos] = 1.0
         elif pos in flex_positions and flex_open > 0:
             weights[pos] = 0.85
+        elif pos in _HARD_CAPPED_POSITIONS:
+            # A real roster only ever starts one K and one DEF, and neither
+            # is FLEX-eligible, so once that single slot is filled there is
+            # no lineup reason to ever draft a second. A 0.15 bench-tier
+            # weight (what a fully-staffed offense position gets) would
+            # still let a high-VOR kicker beat a genuine bench-value
+            # offensive pick in the rollout -- 0.0 removes it from
+            # contention outright.
+            weights[pos] = 0.0
         else:
             weights[pos] = 0.15
     return weights

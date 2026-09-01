@@ -13,6 +13,37 @@ def test_parses_current_season_projections_and_adp():
     assert adp["9221"].adp["half_ppr"] < 10
 
 
+def test_drops_rows_that_carry_no_projection_only_adp():
+    """Sleeper's projections feed returns a row for every player who has an
+    ADP, including hundreds with no statistical projection at all (~120 of
+    its 153 "kickers" are pure ADP rows). Those score 0 and clutter the
+    board; a row with nothing but `gp` after the adp_ keys are stripped
+    carries no projection and must not produce a SeasonProjection -- its
+    ADP is still preserved (ADP is an independent signal)."""
+    raw = [
+        {"player_id": "real", "stats": {"gp": 17.0, "rush_yd": 900.0,
+                                        "adp_half_ppr": 12.0},
+         "last_modified": 1_600_000_000_000},
+        {"player_id": "adp_only", "stats": {"gp": 18.0, "adp_half_ppr": 300.0},
+         "last_modified": 1_600_000_000_000},
+    ]
+    proj, adp = projections.parse(raw, 2026)
+    assert "real" in proj
+    assert "adp_only" not in proj
+    assert adp["adp_only"].adp["half_ppr"] == 300.0
+
+
+def test_keeps_a_row_whose_only_projection_signal_is_a_precomputed_total():
+    """A precomputed `pts_*` total (no exploded component stats) is still a
+    real projection -- the boundary is "no projection data at all," not
+    "no component stats." """
+    raw = [{"player_id": "p", "stats": {"gp": 17.0, "pts_half_ppr": 40.0,
+                                        "adp_half_ppr": 90.0},
+            "last_modified": 1_600_000_000_000}]
+    proj, _ = projections.parse(raw, 2026)
+    assert "p" in proj
+
+
 def test_rejects_contaminated_historical_projections():
     raw = snapshot.load("projections_2023_CONTAMINATED")
     with pytest.raises(projections.ContaminatedProjectionError):
