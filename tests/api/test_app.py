@@ -453,6 +453,47 @@ def test_get_board_live_espn_never_calls_sleepers_draft_endpoint(monkeypatch, tm
         f"got {sleeper_calls}")
 
 
+def test_get_board_live_espn_cache_busts_the_draft_detail_fetch(monkeypatch, tmp_path):
+    """Regression test for a second live-production bug reported in the
+    same draft: picks weren't showing up on the board as they happened.
+    ESPN's combined mSettings/mDraftDetail fetch had no cache-busting --
+    unlike every Sleeper draft-meta/picks fetch, which _uncached() already
+    protects against Sleeper's confirmed CDN caching (see _uncached's
+    docstring). Not independently header-confirmed for ESPN, but applied
+    defensively since the symptom matches exactly and the fix is a no-op
+    if the CDN isn't actually the cause."""
+    store = SessionStore(tmp_path / "session.json")
+    store.save(_session(
+        provider="espn", espn_s2="s2value", swid="{SWID}",
+        league_id="1882997948", draft_id="1882997948",
+        draft_type="snake", num_teams=2,
+        roster_positions=("QB", "RB", "BN")))
+    monkeypatch.setattr(app_mod, "_SESSION_STORE", store)
+
+    espn_raw = {
+        "id": 1882997948,
+        "settings": {"size": 2, "draftSettings": {"type": "SNAKE", "auctionBudget": 200}},
+        "draftDetail": {"drafted": False, "inProgress": True, "picks": []},
+    }
+    FakeEspnClient, espn_calls = _recording_espn_client({
+        "players?view=kona_player_info": [],
+        "leagues/1882997948": espn_raw,
+    })
+    monkeypatch.setattr("ffdo.ingest.espn.client.EspnClient", FakeEspnClient)
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeSleeperClient)
+
+    client = TestClient(create_app())
+    res = client.get("/api/board/live")
+
+    assert res.status_code == 200
+    draft_detail_calls = [c for c in espn_calls if "leagues/1882997948" in c]
+    assert draft_detail_calls, "must actually fetch the ESPN draft-detail endpoint"
+    assert all("_=" in c for c in draft_detail_calls), (
+        f"the ESPN draft-detail fetch must be cache-busted (via _uncached()) "
+        f"the same way every Sleeper draft-meta/picks fetch already is -- "
+        f"got {draft_detail_calls}")
+
+
 def test_get_board_real_league_mode_reports_is_mock_false_and_scores_a_player(
         monkeypatch, tmp_path):
     store = SessionStore(tmp_path / "session.json")
