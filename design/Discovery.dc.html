@@ -110,11 +110,20 @@
 
 </x-dc>
 <script data-dc-script data-props='{"accent":{"editor":"color","default":"#22D3EE","options":["#22D3EE","#818CF8","#34D399","#FBBF24"]}}'>
+const LEAGUES = [
+  { id: 'a', name: 'P-Vegas Ballers',      meta: '12-team · auction · 49 scoring keys',  format: 'KEEPER',  draft: 'PRE_DRAFT', def: true },
+  { id: 'b', name: 'Dynasty Warehouse',    meta: '12-team · superflex · TE premium',     format: 'DYNASTY', draft: 'COMPLETE',  def: true },
+  { id: 'c', name: 'Sunday Scaries',       meta: '10-team · half-PPR · FAAB $100',       format: 'REDRAFT', draft: 'COMPLETE',  def: true },
+  { id: 'd', name: 'The Money League',     meta: '14-team · PPR · reverse-standings',    format: 'REDRAFT', draft: 'DRAFTING',  def: false },
+  { id: 'e', name: 'College Buddies 2016', meta: '8-team · standard · last active 2023', format: 'REDRAFT', draft: 'COMPLETE',  def: false },
+  { id: 'f', name: 'Work Bestball',        meta: '12-team · bestball · no waivers',      format: 'REDRAFT', draft: 'COMPLETE',  def: false },
+];
+const DEFAULT_PICKED = Object.fromEntries(LEAGUES.map((d) => [d.id, d.def]));
+
 class Component extends DCLogic {
   toggle(id) {
-    const picked = { ...(this.state.picked || {}) };
-    picked[id] = !picked[id];
-    this.setState({ picked });
+    const cur = this.state.picked || DEFAULT_PICKED;
+    this.setState({ picked: { ...cur, [id]: !cur[id] } });
   }
 
   renderVals() {
@@ -132,17 +141,8 @@ class Component extends DCLogic {
       COMPLETE: badge + 'color:var(--faint);background:transparent;border:1px solid var(--border);',
     };
 
-    const data = [
-      { id: 'a', name: 'P-Vegas Ballers',        meta: '12-team · auction · 49 scoring keys', format: 'KEEPER',  draft: 'PRE_DRAFT', def: true },
-      { id: 'b', name: 'Dynasty Warehouse',      meta: '12-team · superflex · TE premium',   format: 'DYNASTY',  draft: 'COMPLETE',  def: true },
-      { id: 'c', name: 'Sunday Scaries',         meta: '10-team · half-PPR · FAAB $100',      format: 'REDRAFT',  draft: 'COMPLETE',  def: true },
-      { id: 'd', name: 'The Money League',       meta: '14-team · PPR · reverse-standings',   format: 'REDRAFT',  draft: 'DRAFTING',  def: false },
-      { id: 'e', name: 'College Buddies 2016',   meta: '8-team · standard · last active 2023', format: 'REDRAFT',  draft: 'COMPLETE',  def: false },
-      { id: 'f', name: 'Work Bestball',          meta: '12-team · bestball · no waivers',      format: 'REDRAFT',  draft: 'COMPLETE',  def: false },
-    ];
-
-    const picked = this.state.picked || Object.fromEntries(data.map((d) => [d.id, d.def]));
-    const rows = data.map((d) => {
+    const picked = this.state.picked || DEFAULT_PICKED;
+    const rows = LEAGUES.map((d) => {
       const checked = !!picked[d.id];
       return {
         ...d,
