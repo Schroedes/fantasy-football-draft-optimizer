@@ -7,9 +7,50 @@ from ffdo.domain.constants import (
     is_offense_scoring_key,
 )
 from ffdo.domain.models import (
-    DraftPick, DraftState, LeagueProfile, MarketADP,
-    PlayerProfile, SeasonProjection, SeasonStatLine, Session, TeamProfile,
+    DiscoveredLeague, DraftPick, DraftState, LeagueProfile, MarketADP,
+    PlayerProfile, ProviderCredential, SeasonProjection, SeasonStatLine,
+    TeamProfile, TrackedLeague, make_league_key,
 )
+
+
+def _tracked(**overrides):
+    base = dict(
+        league_key="sleeper:L1:2026", provider="sleeper", provider_league_id="L1",
+        season=2026, name="Test League", user_id="U1", roster_id=3,
+        draft_id="D1", draft_type="auction", draft_status="pre_draft",
+        num_teams=12, budget=200, rounds=13,
+        roster_positions=("QB", "RB", "RB", "WR", "BN"),
+        scoring_settings={"rec": 0.5}, fmt="redraft", format_override=None,
+        raw_settings={"type": 0}, is_mock=False,
+        tracked_at="2026-09-02T00:00:00+00:00",
+        last_refreshed_at="2026-09-02T00:00:00+00:00",
+    )
+    return TrackedLeague(**{**base, **overrides})
+
+
+def test_make_league_key_joins_provider_id_and_season():
+    assert make_league_key("espn", "1882997948", 2026) == "espn:1882997948:2026"
+
+
+def test_resolved_format_prefers_the_override():
+    assert _tracked(fmt="redraft", format_override="dynasty").resolved_format == "dynasty"
+    assert _tracked(fmt="keeper", format_override=None).resolved_format == "keeper"
+
+
+def test_tracked_league_slot_helpers():
+    lg = _tracked(roster_positions=("QB", "RB", "FLEX", "BN", "BN"))
+    assert lg.starting_slots == ("QB", "RB", "FLEX")
+    assert lg.roster_size == 5
+
+
+def test_provider_credential_and_discovered_league_construct():
+    cred = ProviderCredential(provider="espn", user_identifier="{SWID}",
+                              espn_s2="s2", swid="{SWID}", updated_at="t")
+    assert cred.espn_s2 == "s2"
+    disc = DiscoveredLeague(provider="sleeper", provider_league_id="L1", season=2026,
+                            name="X", num_teams=12, draft_type="snake",
+                            fmt="dynasty", draft_status="complete", already_tracked=True)
+    assert disc.already_tracked is True
 
 
 def _player(**kw):
@@ -133,74 +174,6 @@ def test_league_profile_accepts_name_and_status():
     )
     assert lg.name == "P-Vegas Ballers"
     assert lg.status == "pre_draft"
-
-
-def test_session_is_frozen_and_holds_the_connected_leagues_identity():
-    session = Session(
-        username="tester", user_id="U1", league_id="L1", draft_id="D1",
-        roster_id=3, league_name="Test League", season=2026, num_teams=12,
-        budget=200,
-        roster_positions=("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX",
-                          "BN", "BN", "BN", "BN", "BN"),
-        scoring_settings={"rec": 0.5}, draft_type="auction",
-        draft_status="pre_draft", rounds=13, is_mock=False,
-        connected_at="2026-08-22T00:00:00+00:00",
-    )
-    assert session.roster_id == 3
-    assert session.scoring_settings == {"rec": 0.5}
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        session.roster_id = 4
-
-
-def test_session_defaults_provider_to_sleeper_with_no_espn_credentials():
-    session = Session(
-        username="tester", user_id="U1", league_id="L1", draft_id="D1",
-        roster_id=3, league_name="Test League", season=2026, num_teams=12,
-        budget=200,
-        roster_positions=("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX",
-                          "BN", "BN", "BN", "BN", "BN"),
-        scoring_settings={"rec": 0.5}, draft_type="auction",
-        draft_status="pre_draft", rounds=13, is_mock=False,
-        connected_at="2026-08-22T00:00:00+00:00",
-    )
-    assert session.provider == "sleeper"
-    assert session.espn_s2 is None
-    assert session.swid is None
-
-
-def test_session_accepts_espn_provider_and_cookies():
-    session = Session(
-        username="", user_id="{00000004-0000-0000-0000-000000000000}",
-        league_id="1882997948", draft_id="1882997948", roster_id=7,
-        league_name="Pigskin Pricing Experts", season=2026, num_teams=10,
-        budget=200,
-        roster_positions=("QB", "RB", "RB", "WR", "WR", "TE", "FLEX",
-                          "DEF", "K", "BN", "BN", "BN", "BN", "BN", "BN", "IR"),
-        scoring_settings={"pass_yd": 0.04}, draft_type="snake",
-        draft_status="pre_draft", rounds=15, is_mock=False,
-        connected_at="2026-08-23T00:00:00+00:00",
-        provider="espn", espn_s2="s2-value",
-        swid="{00000004-0000-0000-0000-000000000000}",
-    )
-    assert session.provider == "espn"
-    assert session.espn_s2 == "s2-value"
-    assert session.swid == "{00000004-0000-0000-0000-000000000000}"
-
-
-def test_session_is_mock_defaults_to_nothing_it_must_be_explicit():
-    """is_mock has no default -- every Session construction site must say
-    explicitly whether it's a real league or a mock draft, the same way
-    `rounds` was made required rather than guessable."""
-    with pytest.raises(TypeError):
-        Session(
-            username="tester", user_id="U1", league_id="L1", draft_id="D1",
-            roster_id=3, league_name="Test League", season=2026, num_teams=12,
-            budget=200,
-            roster_positions=("QB", "BN"),
-            scoring_settings={"rec": 0.5}, draft_type="auction",
-            draft_status="pre_draft", rounds=13,
-            connected_at="2026-08-22T00:00:00+00:00",
-        )
 
 
 def test_draft_state_reports_spend_per_roster():
