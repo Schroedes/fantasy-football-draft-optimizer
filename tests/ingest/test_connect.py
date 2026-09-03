@@ -42,34 +42,38 @@ def _happy_handler(request: httpx.Request) -> httpx.Response:
     raise AssertionError(f"unexpected URL: {url}")
 
 
-def test_resolve_returns_a_fully_populated_session():
+def test_track_returns_a_fully_populated_tracked_league():
     client = _client(_happy_handler)
-    session = connect.resolve(
+    lg = connect.track(
         client, "L1", "tester",
         now=lambda: datetime(2026, 8, 22, tzinfo=timezone.utc))
 
-    assert session.username == "tester"
-    assert session.user_id == "U1"
-    assert session.league_id == "L1"
-    assert session.draft_id == "D1"
-    assert session.roster_id == 3
-    assert session.league_name == "Test League"
-    assert session.season == 2026
-    assert session.num_teams == 12
-    assert session.budget == 200
-    assert session.roster_positions == (
+    assert lg.league_key == "sleeper:L1:2026"
+    assert lg.provider == "sleeper"
+    assert lg.provider_league_id == "L1"
+    assert lg.user_id == "U1"
+    assert lg.roster_id == 3
+    assert lg.draft_id == "D1"
+    assert lg.name == "Test League"
+    assert lg.season == 2026
+    assert lg.num_teams == 12
+    assert lg.budget == 200
+    assert lg.roster_positions == (
         "QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX",
         "BN", "BN", "BN", "BN", "BN")
-    assert session.scoring_settings == {"rec": 0.5, "pass_td": 4}
-    assert session.draft_type == "auction"
-    assert session.draft_status == "pre_draft"
-    assert session.rounds == 13
-    assert session.connected_at == "2026-08-22T00:00:00+00:00"
-    assert session.is_mock is False
+    assert lg.scoring_settings == {"rec": 0.5, "pass_td": 4.0}
+    assert lg.draft_type == "auction"
+    assert lg.draft_status == "pre_draft"
+    assert lg.rounds == 13
+    assert lg.fmt == "redraft"
+    assert lg.is_mock is False
+    assert lg.tracked_at == "2026-08-22T00:00:00+00:00"
+    assert lg.last_refreshed_at == "2026-08-22T00:00:00+00:00"
+    assert lg.raw_settings == LEAGUE_RAW["settings"]
 
 
-def test_resolve_reads_rounds_from_the_draft_metas_settings():
-    """`Session.rounds` must come from the draft's actual round count
+def test_track_reads_rounds_from_the_draft_metas_settings():
+    """`TrackedLeague.rounds` must come from the draft's actual round count
     (`draft_mod.parse(draft_meta, []).rounds`), not be derived from roster
     size -- these diverge for keeper/supplemental drafts. Bumping
     DRAFT_META's settings.rounds here (independent of LEAGUE_RAW's 13-slot
@@ -93,16 +97,16 @@ def test_resolve_reads_rounds_from_the_draft_metas_settings():
             return httpx.Response(200, json=USER_RAW)
         raise AssertionError(f"unexpected URL: {url}")
 
-    session = connect.resolve(_client(handler), "L1", "tester")
-    assert session.rounds == 16
+    lg = connect.track(_client(handler), "L1", "tester")
+    assert lg.rounds == 16
 
 
-def test_resolve_falls_back_to_the_drafts_budget_when_league_settings_omit_it():
+def test_track_falls_back_to_the_drafts_budget_when_league_settings_omit_it():
     """Mirrors the fallback already used in ffdo.api.app.get_board(): some
     leagues carry the auction budget on the draft object, not the league's
     own settings. LEAGUE_RAW normally carries settings.budget=200 (asserted
-    by test_resolve_returns_a_fully_populated_session) -- this test removes
-    it to isolate the fallback path specifically."""
+    by test_track_returns_a_fully_populated_tracked_league) -- this test
+    removes it to isolate the fallback path specifically."""
     league_no_budget = {**LEAGUE_RAW, "settings": {"num_teams": 12}}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -119,19 +123,19 @@ def test_resolve_falls_back_to_the_drafts_budget_when_league_settings_omit_it():
             return httpx.Response(200, json=USER_RAW)
         raise AssertionError(f"unexpected URL: {url}")
 
-    session = connect.resolve(_client(handler), "L1", "tester")
-    assert session.budget == 200  # from DRAFT_META.settings.budget
+    lg = connect.track(_client(handler), "L1", "tester")
+    assert lg.budget == 200  # from DRAFT_META.settings.budget
 
 
-def test_resolve_raises_when_league_is_not_found():
+def test_track_raises_when_league_is_not_found():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"error": "not found"})
 
     with pytest.raises(connect.ConnectError, match="League not found"):
-        connect.resolve(_client(handler), "bad-league", "tester")
+        connect.track(_client(handler), "bad-league", "tester")
 
 
-def test_resolve_raises_when_the_league_has_no_draft():
+def test_track_raises_when_the_league_has_no_draft():
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         if url.endswith("/league/L1/drafts"):
@@ -141,10 +145,10 @@ def test_resolve_raises_when_the_league_has_no_draft():
         raise AssertionError(f"unexpected URL: {url}")
 
     with pytest.raises(connect.ConnectError, match="No draft found"):
-        connect.resolve(_client(handler), "L1", "tester")
+        connect.track(_client(handler), "L1", "tester")
 
 
-def test_resolve_raises_when_username_is_not_found():
+def test_track_raises_when_username_is_not_found():
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         if url.endswith("/user/ghost"):
@@ -158,10 +162,10 @@ def test_resolve_raises_when_username_is_not_found():
         raise AssertionError(f"unexpected URL: {url}")
 
     with pytest.raises(connect.ConnectError, match="Username not found"):
-        connect.resolve(_client(handler), "L1", "ghost")
+        connect.track(_client(handler), "L1", "ghost")
 
 
-def test_resolve_raises_when_the_user_has_no_roster_in_this_league():
+def test_track_raises_when_the_user_has_no_roster_in_this_league():
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         if url.endswith("/league/L1/rosters"):
@@ -177,7 +181,7 @@ def test_resolve_raises_when_the_user_has_no_roster_in_this_league():
         raise AssertionError(f"unexpected URL: {url}")
 
     with pytest.raises(connect.ConnectError, match="not a member"):
-        connect.resolve(_client(handler), "L1", "tester")
+        connect.track(_client(handler), "L1", "tester")
 
 
 MOCK_DRAFT_PRE_DRAFT = {
@@ -215,7 +219,7 @@ def _mock_client(handler):
     return SleeperClient(base_delay=0, transport=httpx.MockTransport(handler))
 
 
-def test_resolve_mock_returns_a_fully_populated_session():
+def test_track_mock_returns_a_fully_populated_tracked_league():
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         if url.endswith("/draft/1397145756879605760"):
@@ -224,27 +228,30 @@ def test_resolve_mock_returns_a_fully_populated_session():
             return httpx.Response(200, json=MOCK_USER_RAW)
         raise AssertionError(f"unexpected URL: {url}")
 
-    session = connect.resolve_mock(
+    lg = connect.track_mock(
         _mock_client(handler), "1397145756879605760", "schroedes",
         now=lambda: datetime(2026, 8, 22, tzinfo=timezone.utc))
 
-    assert session.is_mock is True
-    assert session.league_id == ""
-    assert session.draft_id == "1397145756879605760"
-    assert session.username == "schroedes"
-    assert session.user_id == "461997611847512064"
-    assert session.roster_id == 1  # joined slot 1
-    assert session.season == 2026
-    assert session.num_teams == 10
-    assert session.budget is None  # snake mock
-    assert session.scoring_settings["rec"] == 0.5  # half_ppr
-    assert session.draft_type == "snake"
-    assert session.draft_status == "drafting"
-    assert session.rounds == 15
-    assert session.connected_at == "2026-08-22T00:00:00+00:00"
+    assert lg.is_mock is True
+    assert lg.provider == "sleeper-mock"
+    assert lg.league_key == "sleeper-mock:1397145756879605760:2026"
+    assert lg.provider_league_id == "1397145756879605760"
+    assert lg.draft_id == "1397145756879605760"
+    assert lg.user_id == "461997611847512064"
+    assert lg.roster_id == 1  # joined slot 1
+    assert lg.season == 2026
+    assert lg.num_teams == 10
+    assert lg.budget is None  # snake mock
+    assert lg.scoring_settings["rec"] == 0.5  # half_ppr
+    assert lg.draft_type == "snake"
+    assert lg.draft_status == "drafting"
+    assert lg.rounds == 15
+    assert lg.fmt == "redraft"
+    assert lg.tracked_at == "2026-08-22T00:00:00+00:00"
+    assert lg.last_refreshed_at == "2026-08-22T00:00:00+00:00"
 
 
-def test_resolve_mock_allows_connecting_before_the_draft_starts():
+def test_track_mock_allows_connecting_before_the_draft_starts():
     """roster_id must be None, not an error, when draft_order has no entry
     for this user yet -- connecting is allowed anytime."""
     def handler(request: httpx.Request) -> httpx.Response:
@@ -255,20 +262,20 @@ def test_resolve_mock_allows_connecting_before_the_draft_starts():
             return httpx.Response(200, json=MOCK_USER_RAW)
         raise AssertionError(f"unexpected URL: {url}")
 
-    session = connect.resolve_mock(
+    lg = connect.track_mock(
         _mock_client(handler), "1397145756879605760", "schroedes")
-    assert session.roster_id is None
+    assert lg.roster_id is None
 
 
-def test_resolve_mock_raises_when_the_draft_is_not_found():
+def test_track_mock_raises_when_the_draft_is_not_found():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"error": "not found"})
 
     with pytest.raises(connect.ConnectError, match="Mock draft not found"):
-        connect.resolve_mock(_mock_client(handler), "bad-id", "schroedes")
+        connect.track_mock(_mock_client(handler), "bad-id", "schroedes")
 
 
-def test_resolve_mock_raises_when_the_draft_fetch_returns_an_empty_response():
+def test_track_mock_raises_when_the_draft_fetch_returns_an_empty_response():
     """Sleeper answers some invalid/unknown draft IDs with `200 {}` instead
     of a 404. `is_mock_draft({})` would otherwise return True ({}.get(
     "league_id") is None, same as a real mock draft) and resolution would
@@ -279,20 +286,20 @@ def test_resolve_mock_raises_when_the_draft_fetch_returns_an_empty_response():
         return httpx.Response(200, json={})
 
     with pytest.raises(connect.ConnectError, match="Mock draft not found"):
-        connect.resolve_mock(_mock_client(handler), "bad-id", "schroedes")
+        connect.track_mock(_mock_client(handler), "bad-id", "schroedes")
 
 
-def test_resolve_mock_rejects_a_real_league_draft():
+def test_track_mock_rejects_a_real_league_draft():
     real_draft = {**MOCK_DRAFT_MID_DRAFT, "league_id": "1389375982783180800"}
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=real_draft)
 
     with pytest.raises(connect.ConnectError, match="real league draft"):
-        connect.resolve_mock(_mock_client(handler), "D1", "schroedes")
+        connect.track_mock(_mock_client(handler), "D1", "schroedes")
 
 
-def test_resolve_mock_raises_when_username_is_not_found():
+def test_track_mock_raises_when_username_is_not_found():
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         if url.endswith("/user/ghost"):
@@ -302,10 +309,10 @@ def test_resolve_mock_raises_when_username_is_not_found():
         raise AssertionError(f"unexpected URL: {url}")
 
     with pytest.raises(connect.ConnectError, match="Username not found"):
-        connect.resolve_mock(_mock_client(handler), "1397145756879605760", "ghost")
+        connect.track_mock(_mock_client(handler), "1397145756879605760", "ghost")
 
 
-def test_resolve_mock_raises_for_an_unsupported_scoring_preset():
+def test_track_mock_raises_for_an_unsupported_scoring_preset():
     dynasty_draft = {
         **MOCK_DRAFT_MID_DRAFT,
         "metadata": {**MOCK_DRAFT_MID_DRAFT["metadata"], "scoring_type": "dynasty_2qb"},
@@ -315,4 +322,4 @@ def test_resolve_mock_raises_for_an_unsupported_scoring_preset():
         return httpx.Response(200, json=dynasty_draft)
 
     with pytest.raises(connect.ConnectError, match="dynasty_2qb"):
-        connect.resolve_mock(_mock_client(handler), "D1", "schroedes")
+        connect.track_mock(_mock_client(handler), "D1", "schroedes")
