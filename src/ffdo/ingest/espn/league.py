@@ -177,6 +177,13 @@ def _scoring_settings(scoring_items: list[dict[str, Any]]) -> dict[str, float]:
     return out
 
 
+def detect_format(raw: dict[str, Any]) -> str:
+    """ESPN exposes keeper settings but no dynasty flag — `"dynasty"` is
+    override-only for ESPN leagues."""
+    draft_settings = (raw.get("settings") or {}).get("draftSettings") or {}
+    return "keeper" if (draft_settings.get("keeperCount") or 0) > 0 else "redraft"
+
+
 def draft_type(raw: dict[str, Any]) -> str:
     """'SNAKE' -> 'snake', matching DraftState.draft_type's vocabulary."""
     espn_type = (raw["settings"].get("draftSettings") or {}).get("type", "")

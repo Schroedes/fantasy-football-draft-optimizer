@@ -9,6 +9,16 @@ def _msettings():
     return snapshot.load("mSettings", snapshot_dir=ESPN_SNAPSHOT_DIR)
 
 
+def test_detect_format_keeper_when_keeper_count_positive():
+    raw = {"settings": {"draftSettings": {"keeperCount": 3}}}
+    assert league.detect_format(raw) == "keeper"
+
+
+def test_detect_format_redraft_when_no_keepers():
+    assert league.detect_format({"settings": {"draftSettings": {"keeperCount": 0}}}) == "redraft"
+    assert league.detect_format({"settings": {}}) == "redraft"
+
+
 def test_parse_reads_identity_and_size_from_the_real_league():
     lg = league.parse(_msettings())
     assert lg.league_id == "1882997948"
