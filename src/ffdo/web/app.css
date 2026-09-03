@@ -1,0 +1,270 @@
+:root {
+  color-scheme: dark;
+  --bg: oklch(0.15 0.014 258);
+  --surface: oklch(0.205 0.014 258);
+  --surface-2: oklch(0.24 0.014 258);
+  --border: oklch(0.32 0.014 258);
+  --border-strong: oklch(0.40 0.016 258);
+  --text: oklch(0.94 0.006 258);
+  --muted: oklch(0.66 0.014 258);
+  --faint: oklch(0.48 0.014 258);
+  --accent: #22D3EE;
+  --green: #34D399;
+  --red: #F87171;
+  --amber: #FBBF24;
+  --font-sans: 'IBM Plex Sans', -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 var(--font-sans);
+  min-height: 100vh;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--text); }
+
+#shell { display: flex; flex-direction: column; min-height: 100vh; }
+
+/* ---- persistent switcher bar ---- */
+#switcher-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 28px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+#switcher-bar[hidden] { display: none; }
+#switcher-bar .brand {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: 1.5px;
+}
+#league-switcher {
+  font: 13px var(--font-sans);
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+#league-switcher:focus { outline: none; border-color: var(--accent); }
+.add-leagues {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* ---- view / cards ---- */
+#view {
+  flex: 1;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 28px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 26px 28px;
+}
+.card h1 { margin: 0 0 18px; font-size: 20px; }
+.card h2 { margin: 22px 0 12px; font-size: 15px; color: var(--muted); }
+
+/* ---- connect form ---- */
+#connect-form { display: flex; flex-direction: column; gap: 14px; max-width: 420px; }
+#connect-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+#connect-form input {
+  font: 14px var(--font-mono);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px 12px;
+}
+#connect-form input:focus { outline: none; border-color: var(--accent); }
+#connect-form [data-fields] { display: flex; flex-direction: column; gap: 14px; }
+#connect-form [data-fields][hidden] { display: none; }
+#connect-form button[type="submit"] {
+  align-self: flex-start;
+  font: 600 14px var(--font-sans);
+  color: #0a0f14;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  padding: 12px 22px;
+  cursor: pointer;
+}
+
+.provider-toggle {
+  display: flex;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 2px;
+  align-self: flex-start;
+  margin-bottom: 18px;
+}
+.provider-toggle button {
+  font: 600 12.5px var(--font-sans);
+  letter-spacing: 0.5px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.provider-toggle button.on { background: var(--accent); color: #0a0f14; }
+
+/* ---- discovery checklist ---- */
+.discovered-list { list-style: none; margin: 0 0 16px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.discovered-list li {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+.discovered-list label { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.discovered-list input[type="checkbox"]:disabled { opacity: 0.5; }
+.discovered-list .lg-name { font-weight: 600; }
+#track-selected {
+  font: 600 14px var(--font-sans);
+  color: #0a0f14;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  padding: 12px 22px;
+  cursor: pointer;
+}
+
+/* ---- manual add-by-ID disclosure (spec §6.1) ---- */
+.manual-add { margin-top: 22px; border-top: 1px solid var(--border); padding-top: 16px; }
+.manual-add summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  list-style: none;
+}
+.manual-add summary::-webkit-details-marker { display: none; }
+#manual-form { display: flex; flex-direction: column; gap: 14px; max-width: 420px; margin-top: 16px; }
+#manual-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+#manual-form input, #manual-form select {
+  font: 14px var(--font-mono);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px 12px;
+}
+#manual-form input:focus, #manual-form select:focus { outline: none; border-color: var(--accent); }
+#manual-form button[type="submit"] {
+  align-self: flex-start;
+  font: 600 14px var(--font-sans);
+  color: #0a0f14;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  padding: 12px 22px;
+  cursor: pointer;
+}
+
+.badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in oklch, var(--accent) 40%, transparent);
+  padding: 3px 8px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+.badge.muted {
+  color: var(--muted);
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.error { margin: 4px 0 0; color: var(--red); font-size: 13px; }
+.error[hidden] { display: none; }
+
+#league-body { color: var(--muted); }
+
+/* ---- season mode (post-draft placeholder) ---- */
+.card.season-mode { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; }
+.card.season-mode h1 { margin: 0; }
+.card.season-mode p { margin: 0; color: var(--muted); max-width: 60ch; line-height: 1.6; }
+.season-mode .badge {
+  color: var(--green);
+  background: color-mix(in oklch, var(--green) 14%, transparent);
+  border-color: color-mix(in oklch, var(--green) 40%, transparent);
+}
+/* League stat grid + roster-slot chips (spec §6.3). Ported from the deleted
+   web/main.css connected view, re-scoped to the season-mode card. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  width: 100%;
+}
+.stat { display: flex; flex-direction: column; gap: 4px; }
+.stat .label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--faint);
+}
+.stat b {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--accent) 16%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in oklch, var(--accent) 40%, transparent);
+}
+.chip.bn {
+  background: var(--surface-2);
+  color: var(--faint);
+  border-color: var(--border);
+}
+
+.format-override { margin-top: 6px; }
+.format-override label {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 13px; color: var(--muted);
+}
+.format-override select {
+  font: 600 13px var(--font-sans);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 8px 12px;
+  text-transform: capitalize;
+}
+.format-override select:focus { outline: none; border-color: var(--accent); }
