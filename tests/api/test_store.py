@@ -1,5 +1,7 @@
 import json as _json
 
+import pytest
+
 from ffdo.api.store import LeagueStore
 from ffdo.domain.models import ProviderCredential, TrackedLeague
 
@@ -147,3 +149,26 @@ def test_migration_carries_espn_credentials(tmp_path):
 def test_no_migration_when_the_legacy_file_is_absent(tmp_path):
     store = LeagueStore(tmp_path / "ffdo.db", legacy_session_path=tmp_path / "nope.json")
     assert store.list() == []
+
+
+def test_migration_carries_a_sleeper_username_credential(tmp_path):
+    legacy = tmp_path / "session.json"
+    legacy.write_text(_json.dumps(_LEGACY_SESSION), encoding="utf-8")
+
+    store = LeagueStore(tmp_path / "ffdo.db", legacy_session_path=legacy)
+    cred = store.get_credential("sleeper")
+    assert cred is not None
+    assert cred.user_identifier == "noahdschroeder"
+    assert cred.espn_s2 is None and cred.swid is None
+
+
+@pytest.mark.parametrize("payload", ["[]", "{}", '{"season": "not-a-number"}'])
+def test_migration_never_raises_on_a_malformed_legacy_file(tmp_path, payload):
+    legacy = tmp_path / "session.json"
+    legacy.write_text(payload, encoding="utf-8")
+
+    store = LeagueStore(tmp_path / "ffdo.db", legacy_session_path=legacy)
+    assert store.list() == []
+    # Un-migratable file is left in place, un-renamed, for the user to inspect.
+    assert legacy.exists()
+    assert not (tmp_path / "session.json.migrated").exists()

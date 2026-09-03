@@ -13,7 +13,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ffdo.domain.models import ProviderCredential, TrackedLeague
+from ffdo.domain.models import ProviderCredential, TrackedLeague, make_league_key
 
 _LEAGUE_COLUMNS = (
     "league_key", "provider", "provider_league_id", "season", "name", "user_id",
@@ -109,46 +109,54 @@ class LeagueStore:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return
+        if not isinstance(raw, dict):
+            return
 
-        provider = raw.get("provider", "sleeper")
-        is_mock = bool(raw.get("is_mock"))
-        provider_key = "sleeper-mock" if is_mock else provider
-        league_id = raw.get("league_id") or raw.get("draft_id", "")
-        provider_league_id = raw["draft_id"] if is_mock else league_id
-        season = int(raw["season"])
-        from ffdo.domain.models import make_league_key
-        league_key = make_league_key(provider_key, provider_league_id, season)
-        now = _now()
-        tracked = TrackedLeague(
-            league_key=league_key, provider=provider_key,
-            provider_league_id=provider_league_id, season=season,
-            name=raw.get("league_name", ""), user_id=raw.get("user_id", ""),
-            roster_id=raw.get("roster_id"), draft_id=raw.get("draft_id", ""),
-            draft_type=raw.get("draft_type", "snake"),
-            draft_status=raw.get("draft_status", ""),
-            num_teams=int(raw.get("num_teams", 0)), budget=raw.get("budget"),
-            rounds=int(raw.get("rounds", 0)),
-            roster_positions=tuple(raw.get("roster_positions", ())),
-            scoring_settings={k: float(v) for k, v
-                              in (raw.get("scoring_settings") or {}).items()},
-            fmt="redraft", format_override=None, raw_settings={}, is_mock=is_mock,
-            tracked_at=now, last_refreshed_at=now,
-        )
-        self._write_league_row(conn, tracked, tracked.format_override, tracked.tracked_at)
+        # The Global Constraint wins over the brief's pseudocode: a legacy file
+        # that parses but is missing/garbage in its fields must skip migration
+        # (leaving session.json un-renamed), never crash the app on startup.
+        try:
+            provider = raw.get("provider", "sleeper")
+            is_mock = bool(raw.get("is_mock"))
+            provider_key = "sleeper-mock" if is_mock else provider
+            league_id = raw.get("league_id") or raw.get("draft_id", "")
+            provider_league_id = raw["draft_id"] if is_mock else league_id
+            season = int(raw["season"])
+            league_key = make_league_key(provider_key, provider_league_id, season)
+            now = _now()
+            tracked = TrackedLeague(
+                league_key=league_key, provider=provider_key,
+                provider_league_id=provider_league_id, season=season,
+                name=raw.get("league_name", ""), user_id=raw.get("user_id", ""),
+                roster_id=raw.get("roster_id"), draft_id=raw.get("draft_id", ""),
+                draft_type=raw.get("draft_type", "snake"),
+                draft_status=raw.get("draft_status", ""),
+                num_teams=int(raw.get("num_teams", 0)), budget=raw.get("budget"),
+                rounds=int(raw.get("rounds", 0)),
+                roster_positions=tuple(raw.get("roster_positions", ())),
+                scoring_settings={k: float(v) for k, v
+                                  in (raw.get("scoring_settings") or {}).items()},
+                fmt="redraft", format_override=None, raw_settings={}, is_mock=is_mock,
+                tracked_at=now, last_refreshed_at=now,
+            )
+            self._write_league_row(conn, tracked, tracked.format_override, tracked.tracked_at)
 
-        espn_s2, swid = raw.get("espn_s2"), raw.get("swid")
-        if espn_s2 or swid:
-            conn.execute(
-                "INSERT OR REPLACE INTO provider_credential "
-                "(provider, user_identifier, espn_s2, swid, updated_at) VALUES (?, ?, ?, ?, ?)",
-                ("espn", swid or "", espn_s2, swid, now),
-            )
-        elif provider == "sleeper" and raw.get("username"):
-            conn.execute(
-                "INSERT OR REPLACE INTO provider_credential "
-                "(provider, user_identifier, espn_s2, swid, updated_at) VALUES (?, ?, ?, ?, ?)",
-                ("sleeper", raw["username"], None, None, now),
-            )
+            espn_s2, swid = raw.get("espn_s2"), raw.get("swid")
+            if espn_s2 or swid:
+                conn.execute(
+                    "INSERT OR REPLACE INTO provider_credential "
+                    "(provider, user_identifier, espn_s2, swid, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    ("espn", swid or "", espn_s2, swid, now),
+                )
+            elif provider == "sleeper" and raw.get("username"):
+                conn.execute(
+                    "INSERT OR REPLACE INTO provider_credential "
+                    "(provider, user_identifier, espn_s2, swid, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    ("sleeper", raw["username"], None, None, now),
+                )
+        except (AttributeError, KeyError, TypeError, ValueError):
+            conn.rollback()  # drop any half-written row; caller's commit must not persist it
+            return
         conn.commit()
         path.rename(path.with_name(path.name + ".migrated"))
 
