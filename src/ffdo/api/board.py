@@ -210,6 +210,7 @@ def build_auction_board(
 
     return {
         "format": "auction",
+        "draft_status": state.status,
         "live_nomination": build_live_nomination(state),
         "inflation": round(factor, 3),
         "budget": {
@@ -285,6 +286,7 @@ def build_snake_board(
     rows.sort(key=lambda r: r["vor"], reverse=True)
     return {
         "format": "snake",
+        "draft_status": state.status,
         "cost_of_waiting": dict(cost_of_waiting),
         "snake_plan": snake_plan,
         "picks_made": len(state.picks),

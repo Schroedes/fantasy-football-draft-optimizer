@@ -160,6 +160,22 @@ def test_build_live_nomination_returns_none_when_nothing_is_on_the_block():
     assert board.build_live_nomination(state) is None
 
 
+def test_auction_board_includes_the_live_draft_status():
+    league = _league()
+    state = draft.parse({"draft_id": "d", "type": "auction", "status": "complete",
+                         "settings": {"teams": 12, "rounds": 14, "budget": 200}}, [])
+    out = board.build_auction_board(league, state, {}, {})
+    assert out["draft_status"] == "complete"
+
+
+def test_snake_board_includes_the_live_draft_status():
+    league = _league()
+    state = draft.parse({"draft_id": "d", "type": "snake", "status": "drafting",
+                         "settings": {"teams": 12, "rounds": 14}}, [])
+    out = board.build_snake_board(league, state, {}, {}, {})
+    assert out["draft_status"] == "drafting"
+
+
 def test_healthz_returns_ok():
     from fastapi.testclient import TestClient
     from ffdo.api.app import create_app
