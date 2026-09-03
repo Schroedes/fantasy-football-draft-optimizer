@@ -289,10 +289,20 @@ def create_app() -> FastAPI:
                 sleeper, user_id, season, tracked_keys=_tracked_keys())
         except connect_mod.ConnectError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, RuntimeError) as exc:
             # A provider outage is not the user's mistake and not this app's
             # bug: 502 says "the upstream failed", where a bare 500 would
             # point the user at their own input.
+            #
+            # `RuntimeError` is not defensive over-catching -- it is THE shape
+            # a real outage takes. `ffdo.ingest.http.get_json_with_retry`
+            # re-raises `RuntimeError(f"GET {url} failed after N attempts")`
+            # once retries are exhausted, with the underlying httpx error only
+            # as `__cause__`, so an httpx-only arm catches nothing on the exact
+            # failure it was written for. Only a permanent status (404/401/...)
+            # escapes as a real `httpx.HTTPStatusError` via `raise_for_status`,
+            # which is why both are needed. Same pairing
+            # `ffdo.ingest.espn.connect` already uses at its own call sites.
             raise HTTPException(
                 status_code=502, detail="Sleeper is not responding right now") from exc
         finally:
@@ -317,7 +327,10 @@ def create_app() -> FastAPI:
         sleeper = client_mod.SleeperClient()
         try:
             profiles, espn_id_index = players_cache.get(lambda: _load_players(sleeper))
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, RuntimeError) as exc:
+            # See `_sleeper_discover` for why `RuntimeError` belongs here: an
+            # exhausted retry loop in ffdo.ingest.http raises it, not an httpx
+            # error.
             raise HTTPException(
                 status_code=502,
                 detail="Couldn't reach Sleeper, try again") from exc
@@ -329,10 +342,13 @@ def create_app() -> FastAPI:
                 profiles, espn_id_index)
         except espn_connect_mod.ConnectError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, RuntimeError) as exc:
             # Same reasoning as `_sleeper_discover`'s 502 arm: an ESPN outage
             # is neither the user's mistake nor this app's bug, and a bare 500
-            # would point them at their own input.
+            # would point them at their own input. `RuntimeError` for the same
+            # exhausted-retry reason -- note espn_connect_mod.track already
+            # maps RuntimeError to ConnectError for its *player-pool* fetch
+            # only, so the league fetch's exhausted retries still land here.
             raise HTTPException(
                 status_code=502, detail="Couldn't reach ESPN, try again") from exc
 
@@ -459,10 +475,11 @@ def create_app() -> FastAPI:
                         lg = connect_mod.track(sleeper, pid, cred.user_identifier)
                 except connect_mod.ConnectError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
-                except httpx.HTTPError as exc:
-                    # Same arm `_sleeper_discover` already has: a provider
-                    # outage is not the user's mistake, and a bare 500 would
-                    # point them at their own input.
+                except (httpx.HTTPError, RuntimeError) as exc:
+                    # Same arm `_sleeper_discover` already has, including the
+                    # `RuntimeError` half: a provider outage is not the user's
+                    # mistake, and a bare 500 would point them at their own
+                    # input.
                     raise HTTPException(
                         status_code=502,
                         detail="Couldn't reach Sleeper, try again") from exc
@@ -560,7 +577,9 @@ def create_app() -> FastAPI:
                         sleeper, lg.provider_league_id, cred.user_identifier)
             except connect_mod.ConnectError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            except httpx.HTTPError as exc:
+            except (httpx.HTTPError, RuntimeError) as exc:
+                # `RuntimeError` for the same exhausted-retry reason as
+                # `_sleeper_discover`'s arm.
                 raise HTTPException(
                     status_code=502,
                     detail="Couldn't reach Sleeper, try again") from exc

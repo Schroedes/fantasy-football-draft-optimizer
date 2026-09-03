@@ -361,17 +361,29 @@ def test_track_endpoint_maps_a_connect_error_to_400(monkeypatch):
 
 
 def _unreachable_client():
-    """A provider client whose every `get_json` fails at the transport layer,
-    the way an outage (or a dropped connection) actually presents. Signature is
-    wide enough to stand in for both `SleeperClient.get_json(url)` and
-    `EspnClient.get_json(url, extra_headers=None, max_attempts=4)`."""
+    """A provider client whose every `get_json` fails the way a real outage
+    actually presents.
+
+    That is a bare `RuntimeError`, NOT an httpx exception: both
+    `SleeperClient.get_json` and `EspnClient.get_json` route through
+    `ffdo.ingest.http.get_json_with_retry`, which swallows the underlying
+    `httpx.TransportError` across its retry loop and re-raises
+    `RuntimeError(f"GET {url} failed after {max_attempts} attempts")` with the
+    httpx error only as `__cause__` (see src/ffdo/ingest/http.py). A fake that
+    raises `httpx.ConnectError` directly skips the retry wrapper entirely and
+    would pass against handlers that only catch `httpx.HTTPError` -- exactly
+    the false-green this fake was rewritten to remove.
+
+    Signature is wide enough to stand in for both `SleeperClient.get_json(url)`
+    and `EspnClient.get_json(url, extra_headers=None, max_attempts=4)`.
+    """
 
     class _UnreachableClient:
         def __init__(self, *args, **kwargs) -> None:
             pass
 
         def get_json(self, url: str, *args, **kwargs):
-            raise httpx.ConnectError("boom")
+            raise RuntimeError(f"GET {url} failed after 4 attempts")
 
         def close(self) -> None:
             pass
@@ -423,8 +435,68 @@ def test_track_endpoint_502s_when_espn_is_unreachable(monkeypatch):
         "provider": "espn", "provider_league_id": "9", "season": 2026})
 
     assert res.status_code == 502
-    assert "try again" in res.json()["detail"]
+    # Names ESPN specifically: the Sleeper arm's message also contains "try
+    # again", so a substring check on that alone would pass even if the
+    # player-profile fetch (a Sleeper call) had been what failed.
+    assert "ESPN" in res.json()["detail"]
     assert app_mod._STORE.list() == []
+
+
+def _real_sleeper_client_that_cannot_connect(monkeypatch):
+    """Swaps in a REAL `SleeperClient` -- retry loop and all -- wired to an
+    httpx `MockTransport` whose every request raises `httpx.ConnectError`.
+
+    This is the airtight version of `_unreachable_client()`: nothing about the
+    error shape is faked, so it proves what the handler sees on a genuine
+    outage rather than asserting against a hand-written stand-in. `time.sleep`
+    is stubbed because `get_json_with_retry` backs off `base_delay + 2**attempt`
+    -- a real run would burn ~7 seconds per call even at `base_delay=0`.
+    """
+    from ffdo.ingest import client as client_mod
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("simulated outage", request=request)
+
+    class _MockTransportClient(client_mod.SleeperClient):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(base_delay=0.0, transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _MockTransportClient)
+
+
+def test_track_502s_on_a_real_outage_through_the_real_retry_loop(monkeypatch):
+    """End-to-end proof of the 502 arm: a real `SleeperClient` over a transport
+    that genuinely cannot connect. Exhausted retries surface as `RuntimeError`
+    from `ffdo.ingest.http`, which is why the handler cannot catch
+    `httpx.HTTPError` alone."""
+    app_mod._STORE.put_credential(
+        ProviderCredential("sleeper", "noah", None, None, "t"))
+    _real_sleeper_client_that_cannot_connect(monkeypatch)
+
+    client = TestClient(create_app())
+    res = client.post("/api/leagues/track", json={
+        "provider": "sleeper", "provider_league_id": "L9", "season": 2026})
+
+    assert res.status_code == 502
+    assert "Sleeper" in res.json()["detail"]
+    assert app_mod._STORE.list() == []
+
+
+def test_providers_connect_502s_on_a_real_outage_through_the_real_retry_loop(
+    monkeypatch,
+):
+    """`_sleeper_discover` had the only pre-existing 502 arm on the branch, and
+    it had the same hole -- it caught `httpx.HTTPError`, which an exhausted
+    retry loop never raises."""
+    _real_sleeper_client_that_cannot_connect(monkeypatch)
+
+    client = TestClient(create_app())
+    res = client.post("/api/providers/connect", json={
+        "provider": "sleeper", "username": "noah", "season": 2026})
+
+    assert res.status_code == 502
+    assert "Sleeper" in res.json()["detail"]
 
 
 def test_refresh_502s_when_sleeper_is_unreachable(monkeypatch, tmp_path):
