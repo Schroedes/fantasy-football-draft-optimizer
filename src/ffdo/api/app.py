@@ -2,76 +2,71 @@
 
 from __future__ import annotations
 
-import os
 import re
 import time
 import uuid
 from dataclasses import asdict, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
-from ffdo.api.session import SessionStore
+from ffdo.api.store import LeagueStore
+from ffdo.domain.models import DiscoveredLeague, TrackedLeague
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
-# Defaults pin this user's real 2026 auction league/draft, so the app works
-# out of the box with zero config. `FFDO_LEAGUE_ID` / `FFDO_DRAFT_ID` let it
-# point at a different league (e.g. a snake league) without a settings UI --
-# read fresh on every request rather than frozen as module constants at
-# import time, so an env var set after the process starts (or changed by a
-# test via monkeypatch) actually takes effect. A connected `Session` (see
-# `_SESSION_STORE` below) takes precedence over both when one exists -- these
-# env vars are the zero-config fallback for when the main screen's connect
-# flow has never been used.
-_DEFAULT_LEAGUE_ID = "1315881559957458944"
-_DEFAULT_DRAFT_ID = "1315881559965835264"
+# Module-level, not created inside `create_app()`, because `_load_league()` is
+# a free function with no app instance in hand -- called from every
+# league-scoped endpoint and directly from tests. Tests that need an isolated
+# store monkeypatch this attribute rather than constructing their own
+# `create_app()` wiring (see tests/api/conftest.py):
+#   monkeypatch.setattr(app_mod, "_STORE", LeagueStore(tmp_path / "ffdo.db"))
+#
+# `legacy_session_path` is what makes an existing single-league install carry
+# its connected league across this refactor: the first `_connect()` imports
+# `data/session.json` and renames it aside. Deliberately absent from the test
+# fixture -- production startup is the only place that migration belongs.
+_STORE = LeagueStore(Path("data") / "ffdo.db",
+                     legacy_session_path=Path("data") / "session.json")
 
-# Module-level, not created inside `create_app()`, because `_league_id()` /
-# `_draft_id()` / `_roster_id()` are free functions with no app instance in
-# hand -- called both from `get_board()` and directly from tests. Tests that
-# need an isolated store monkeypatch this attribute rather than constructing
-# their own `create_app()` wiring:
-#   monkeypatch.setattr(app_mod, "_SESSION_STORE", SessionStore(tmp_path / "session.json"))
-_SESSION_STORE = SessionStore(Path("data") / "session.json")
+_FORMATS = ("redraft", "keeper", "dynasty")
 
 
-def _league_id() -> str:
-    session = _SESSION_STORE.get()
-    if session is not None:
-        return session.league_id
-    return os.environ.get("FFDO_LEAGUE_ID", _DEFAULT_LEAGUE_ID)
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-def _draft_id() -> str:
-    session = _SESSION_STORE.get()
-    if session is not None:
-        return session.draft_id
-    return os.environ.get("FFDO_DRAFT_ID", _DEFAULT_DRAFT_ID)
+def _load_league(league_key: str) -> TrackedLeague:
+    """The single gate every league-scoped endpoint goes through. Handlers
+    above `ffdo.ingest` never see raw provider JSON or credentials -- they
+    get a `TrackedLeague` from here and a `ProviderCredential` from
+    `_STORE.get_credential()`."""
+    lg = _STORE.get(league_key)
+    if lg is None:
+        raise HTTPException(status_code=404, detail="League not tracked")
+    return lg
 
 
-def _roster_id() -> int | None:
-    session = _SESSION_STORE.get()
-    if session is not None:
-        return session.roster_id
-    raw = os.environ.get("FFDO_ROSTER_ID")
-    if raw is None:
-        return None
-    try:
-        return int(raw)
-    except ValueError:
-        return None
+def _league_public_dict(lg: TrackedLeague) -> dict:
+    """`TrackedLeague.fmt` avoids shadowing the builtin in Python; `format`
+    is the wire name the frontend reads. `resolved_format` is a property, so
+    `asdict` misses it -- it is what the UI should actually display."""
+    data = asdict(lg)
+    data["format"] = data.pop("fmt")
+    data["resolved_format"] = lg.resolved_format
+    return data
 
 
-def _session_public_dict(session) -> dict:
-    """Never echo ESPN cookie credentials back over HTTP -- nothing in the
-    frontend reads them, and there's no reason to hand a browser-side
-    script (or a curious devtools user) a live copy of a session cookie."""
-    data = asdict(session)
-    data.pop("espn_s2", None)
-    data.pop("swid", None)
+def _discovered_public(d: DiscoveredLeague) -> dict:
+    """Same `fmt` -> `format` wire rename as `_league_public_dict`. Carries
+    no credentials by construction -- `DiscoveredLeague` has no field for
+    them."""
+    data = asdict(d)
+    data["format"] = data.pop("fmt")
     return data
 
 
@@ -154,9 +149,11 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     from ffdo.api import board as board_mod
+    from ffdo.domain import models as models_mod
     from ffdo.engine import auction, scoring, vor
     from ffdo.ingest import client as client_mod
     from ffdo.ingest import connect as connect_mod
+    from ffdo.ingest import discover as discover_mod
     from ffdo.ingest import draft as draft_mod
     from ffdo.ingest import league as league_mod
     from ffdo.ingest import mock_draft as mock_draft_mod
@@ -165,6 +162,7 @@ def create_app() -> FastAPI:
     from ffdo.ingest import teams as teams_mod
     from ffdo.ingest.espn import connect as espn_connect_mod
     from ffdo.ingest.espn import client as espn_client_mod
+    from ffdo.ingest.espn import discover as espn_discover_mod
     from ffdo.ingest.espn import crosswalk as espn_crosswalk_mod
     from ffdo.ingest.espn import draft as espn_draft_mod
     from ffdo.ingest.espn import league as espn_league_mod
@@ -236,8 +234,9 @@ def create_app() -> FastAPI:
         espn_s2: str | None, swid: str | None,
     ) -> None:
         """Pre-populates the players/projections/(teams or ESPN player pool)
-        TTL caches in the background after a successful /api/connect, so the
-        draft room's first load doesn't pay for these fetches synchronously.
+        TTL caches in the background after a successful
+        `POST /api/leagues/track`, so the draft room's first load doesn't pay
+        for these fetches synchronously.
         Branches on provider: Sleeper's team-name cache and ESPN's
         player-pool cache are different, non-overlapping resources, and
         warming the wrong one for a given provider is worse than useless --
@@ -264,97 +263,287 @@ def create_app() -> FastAPI:
             finally:
                 espn.close()
 
-    @app.post("/api/connect")
-    def connect_league(payload: dict, background_tasks: BackgroundTasks) -> dict:
-        provider = str(payload.get("provider") or "sleeper").strip().lower()
+    def _season_from(payload: dict) -> int:
+        try:
+            return int(payload["season"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Season must be a year") from exc
 
-        if provider == "espn":
-            league_id = str(payload.get("league_id", "")).strip()
-            espn_s2 = str(payload.get("espn_s2", "")).strip()
-            swid = str(payload.get("swid", "")).strip()
-            if not league_id or not payload.get("season") or not espn_s2 or not swid:
-                raise HTTPException(
-                    status_code=400,
-                    detail="League ID, season, espn_s2, and SWID are required")
-            try:
-                season = int(payload["season"])
-            except (TypeError, ValueError):
-                raise HTTPException(status_code=400, detail="Season must be a year")
+    def _tracked_keys() -> frozenset[str]:
+        return frozenset(lg.league_key for lg in _STORE.list())
 
-            sleeper = client_mod.SleeperClient()
-            try:
-                profiles, espn_id_index = players_cache.get(lambda: _load_players(sleeper))
-            finally:
-                sleeper.close()
+    def _sleeper_discover(username: str, season: int) -> list:
+        """Sleeper discovery needs a username -> user_id hop first. Both calls
+        share one client so the connection is opened and closed once."""
+        sleeper = client_mod.SleeperClient()
+        try:
+            user_id = discover_mod.resolve_user_id(sleeper, username)
+            return discover_mod.list_leagues(
+                sleeper, user_id, season, tracked_keys=_tracked_keys())
+        except connect_mod.ConnectError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except httpx.HTTPError as exc:
+            # A provider outage is not the user's mistake and not this app's
+            # bug: 502 says "the upstream failed", where a bare 500 would
+            # point the user at their own input.
+            raise HTTPException(
+                status_code=502, detail="Sleeper is not responding right now") from exc
+        finally:
+            sleeper.close()
 
-            try:
-                session = espn_connect_mod.resolve(
-                    league_id, season, espn_s2, swid, profiles, espn_id_index)
-            except espn_connect_mod.ConnectError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-        else:
-            league_id = str(payload.get("league_id", "")).strip()
-            draft_id_input = str(payload.get("draft_id", "")).strip()
+    def _espn_discover(espn_s2: str, swid: str, season: int) -> list:
+        try:
+            return espn_discover_mod.list_leagues(
+                espn_s2, swid, season, tracked_keys=_tracked_keys())
+        except espn_connect_mod.ConnectError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=502, detail="ESPN is not responding right now") from exc
+
+    def _espn_track(provider_league_id: str, season: int, cred) -> TrackedLeague:
+        """Shared by `POST /api/leagues/track` and `.../refresh`. ESPN's
+        connect needs the Sleeper player profiles + espn_id index to build its
+        crosswalk, which `players_cache` already holds."""
+        sleeper = client_mod.SleeperClient()
+        try:
+            profiles, espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+        finally:
+            sleeper.close()
+        try:
+            return espn_connect_mod.track(
+                provider_league_id, season, cred.espn_s2, cred.swid,
+                profiles, espn_id_index)
+        except espn_connect_mod.ConnectError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def _require_espn_credential():
+        cred = _STORE.get_credential("espn")
+        if cred is None or cred.espn_s2 is None or cred.swid is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Your ESPN cookies look expired -- reconnect ESPN")
+        return cred
+
+    @app.post("/api/providers/connect")
+    def providers_connect(payload: dict) -> dict:
+        """Stores one provider's credentials and immediately answers with
+        everything that credential can see for the season, so the onboarding
+        screen is a single round trip: paste once, pick leagues from a list.
+
+        The credentials are persisted but never echoed back -- nothing in the
+        frontend reads them, and handing a browser-side script a live copy of
+        a session cookie is a needless leak. `DiscoveredLeague` has no field
+        for them, so the response body cannot carry them by construction."""
+        provider = str(payload.get("provider") or "").strip().lower()
+        season = _season_from(payload)
+
+        if provider == "sleeper":
             username = str(payload.get("username", "")).strip()
-
-            if bool(league_id) == bool(draft_id_input):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Provide exactly one of league_id or draft_id")
             if not username:
                 raise HTTPException(status_code=400, detail="Username is required")
+            leagues = _sleeper_discover(username, season)
+            _STORE.put_credential(models_mod.ProviderCredential(
+                provider="sleeper", user_identifier=username,
+                espn_s2=None, swid=None, updated_at=_now_iso()))
+        elif provider == "espn":
+            espn_s2 = str(payload.get("espn_s2", "")).strip()
+            swid = str(payload.get("swid", "")).strip()
+            if not espn_s2 or not swid:
+                raise HTTPException(
+                    status_code=400, detail="espn_s2 and SWID are required")
+            leagues = _espn_discover(espn_s2, swid, season)
+            # The SWID doubles as ESPN's user identifier -- it is what
+            # `teams.find_roster_id` matches a league member against.
+            _STORE.put_credential(models_mod.ProviderCredential(
+                provider="espn", user_identifier=swid,
+                espn_s2=espn_s2, swid=swid, updated_at=_now_iso()))
+        else:
+            raise HTTPException(status_code=400, detail="Unknown provider")
 
+        return {"leagues": [_discovered_public(d) for d in leagues]}
+
+    # Declared BEFORE `/api/leagues/{league_key}`: FastAPI matches routes in
+    # declaration order, so a literal path registered after a parameterized
+    # sibling is unreachable -- "discovered" would be captured as a
+    # league_key and 404 as an untracked league.
+    @app.get("/api/leagues/discovered")
+    def leagues_discovered(provider: str, season: int) -> dict:
+        """Re-runs discovery for an already-connected provider, e.g. to pick
+        up a league joined after onboarding, or to browse a different season.
+        Reads the stored credential rather than asking for it again."""
+        cred = _STORE.get_credential(provider)
+        if cred is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No stored {provider} credentials -- connect first")
+        if provider == "sleeper":
+            leagues = _sleeper_discover(cred.user_identifier, season)
+        elif provider == "espn":
+            if cred.espn_s2 is None or cred.swid is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Your ESPN cookies look expired -- reconnect ESPN")
+            leagues = _espn_discover(cred.espn_s2, cred.swid, season)
+        else:
+            raise HTTPException(status_code=400, detail="Unknown provider")
+        return {"leagues": [_discovered_public(d) for d in leagues]}
+
+    @app.post("/api/leagues/track")
+    def track_leagues(payload: dict, background_tasks: BackgroundTasks) -> dict:
+        """Accepts either a single league object or `{"leagues": [...]}`, so
+        the discovery screen can track a whole multi-select in one call.
+
+        Credentials are never taken from the request body -- the username /
+        cookies come from what `POST /api/providers/connect` already stored,
+        which is what keeps request payloads credential-free.
+        """
+        items = payload.get("leagues") or [payload]
+        results: list[dict] = []
+        cred = None
+        lg: TrackedLeague | None = None
+
+        for item in items:
+            provider = str(item.get("provider") or "").strip().lower()
+            pid = str(item.get("provider_league_id", "")).strip()
+            season = _season_from(item)
+
+            if provider in ("sleeper", "sleeper-mock"):
+                cred = _STORE.get_credential("sleeper")
+                if cred is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Connect Sleeper before tracking a league")
+                sleeper = client_mod.SleeperClient()
+                try:
+                    if provider == "sleeper-mock":
+                        # Preserves the removed /api/connect's affordance:
+                        # a user pastes the whole share URL, not the bare ID.
+                        lg = connect_mod.track_mock(
+                            sleeper, _extract_draft_id(pid), cred.user_identifier)
+                    else:
+                        lg = connect_mod.track(sleeper, pid, cred.user_identifier)
+                except connect_mod.ConnectError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                finally:
+                    sleeper.close()
+            elif provider == "espn":
+                cred = _require_espn_credential()
+                lg = _espn_track(pid, season, cred)
+            else:
+                raise HTTPException(status_code=400, detail="Unknown provider")
+
+            _STORE.upsert(lg)
+            results.append(_league_public_dict(lg))
+
+        # One warm per dispatch, for the last league tracked. `_warm_caches`
+        # populates the players cache (shared) plus the season- and
+        # league-scoped ones; warming every league in a batch would multiply
+        # the fetches for a cache the draft room only needs for whichever
+        # league the user opens first. `items` is never empty (an empty
+        # "leagues" list falls back to `[payload]`), so `lg`/`cred` are set.
+        background_tasks.add_task(
+            _warm_caches, lg.season, lg.provider_league_id, lg.provider,
+            cred.espn_s2, cred.swid)
+        return {"leagues": results}
+
+    @app.get("/api/leagues")
+    def list_leagues_endpoint() -> list[dict]:
+        """The switcher's payload: one compact row per tracked league. The
+        full record is a separate `GET /api/leagues/{league_key}`, so the
+        switcher doesn't ship every league's scoring settings on page load."""
+        return [
+            {
+                "league_key": lg.league_key, "name": lg.name,
+                "provider": lg.provider, "season": lg.season,
+                "format": lg.fmt, "resolved_format": lg.resolved_format,
+                "draft_status": lg.draft_status, "is_mock": lg.is_mock,
+                "needs_attention": False,
+            }
+            for lg in _STORE.list()
+        ]
+
+    @app.get("/api/leagues/{league_key}")
+    def get_league(league_key: str) -> dict:
+        return _league_public_dict(_load_league(league_key))
+
+    @app.delete("/api/leagues/{league_key}", status_code=204)
+    def untrack_league(league_key: str) -> None:
+        # _load_league first so untracking something that was never tracked
+        # is a 404, not a silently-successful no-op.
+        _load_league(league_key)
+        _STORE.delete(league_key)
+
+    @app.patch("/api/leagues/{league_key}")
+    def patch_league(league_key: str, payload: dict) -> dict:
+        """The one league field a user can set by hand: keeper/dynasty
+        detection is a heuristic over provider settings, so an explicit
+        override has to be able to win. `None` clears it."""
+        _load_league(league_key)
+        value = payload.get("format_override")
+        if value is not None and value not in _FORMATS:
+            raise HTTPException(status_code=422, detail="Invalid format_override")
+        _STORE.set_format_override(league_key, value)
+        return _league_public_dict(_load_league(league_key))
+
+    @app.post("/api/leagues/{league_key}/refresh")
+    def refresh_league(league_key: str) -> dict:
+        """Re-resolves a tracked league against its provider -- draft status,
+        roster slot, scoring changes. Returns the re-read row rather than the
+        freshly-resolved one, because `LeagueStore.upsert` deliberately
+        preserves an existing `format_override` that the provider knows
+        nothing about."""
+        lg = _load_league(league_key)
+        if lg.provider in ("sleeper", "sleeper-mock"):
+            cred = _STORE.get_credential("sleeper")
+            if cred is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Connect Sleeper before refreshing a league")
             sleeper = client_mod.SleeperClient()
             try:
-                if league_id:
-                    session = connect_mod.resolve(sleeper, league_id, username)
+                if lg.provider == "sleeper-mock":
+                    fresh = connect_mod.track_mock(
+                        sleeper, lg.provider_league_id, cred.user_identifier)
                 else:
-                    session = connect_mod.resolve_mock(
-                        sleeper, _extract_draft_id(draft_id_input), username)
+                    fresh = connect_mod.track(
+                        sleeper, lg.provider_league_id, cred.user_identifier)
             except connect_mod.ConnectError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             finally:
                 sleeper.close()
+        else:
+            cred = _require_espn_credential()
+            fresh = _espn_track(lg.provider_league_id, lg.season, cred)
+        _STORE.upsert(fresh)
+        return _league_public_dict(_load_league(league_key))
 
-        _SESSION_STORE.save(session)
-        background_tasks.add_task(
-            _warm_caches, session.season, session.league_id, session.provider,
-            session.espn_s2, session.swid)
-        return _session_public_dict(session)
-
-    @app.get("/api/session")
-    def get_session() -> dict | None:
-        session = _SESSION_STORE.get()
-        return _session_public_dict(session) if session is not None else None
-
-    @app.get("/api/readiness")
-    def get_readiness() -> dict:
-        session = _SESSION_STORE.get()
-        projections_synced = (
-            session is not None and _projections_cache_for(session.season).has_value())
+    @app.get("/api/leagues/{league_key}/readiness")
+    def get_readiness(league_key: str) -> dict:
+        lg = _load_league(league_key)
+        # `league_draft` is unconditionally synced: the league IS tracked, or
+        # _load_league would have 404'd above.
         return {
-            "league_draft": "synced" if session is not None else "pending",
+            "league_draft": "synced",
             "players": "synced" if players_cache.has_value() else "pending",
-            "projections": "synced" if projections_synced else "pending",
+            "projections": ("synced" if _projections_cache_for(lg.season).has_value()
+                            else "pending"),
         }
 
-    @app.get("/api/board/live")
-    def get_board_live() -> dict:
+    @app.get("/api/leagues/{league_key}/board/live")
+    def get_board_live(league_key: str) -> dict:
         """Just the nomination/bid, at the cost of the two Sleeper calls that
         actually carry them -- draft meta and picks -- skipping the league
         fetch and the full scoring/VOR/baseline/roster rebuild that
-        `/api/board` does. Polled every second (see board.js) so an auction's
-        split-second bidding tracks live without waiting on the heavier
-        endpoint's multi-second valuation recompute.
+        `/api/leagues/{key}/board` does. Polled every second (see board.js) so
+        an auction's split-second bidding tracks live without waiting on the
+        heavier endpoint's multi-second valuation recompute.
         """
-        session = _SESSION_STORE.get()
-        provider = session.provider if session is not None else "sleeper"
+        session = _load_league(league_key)
+        provider = session.provider
 
         if provider == "espn":
-            if session is None or session.espn_s2 is None or session.swid is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail="No connected ESPN session -- connect from the main screen first")
+            cred = _require_espn_credential()
 
             # Mirrors get_board()'s ESPN branch below, minus the mTeam view
             # (team names aren't needed here) and minus _load_projections
@@ -369,11 +558,12 @@ def create_app() -> FastAPI:
             finally:
                 sleeper.close()
 
-            espn = espn_client_mod.EspnClient(session.espn_s2, session.swid)
+            espn = espn_client_mod.EspnClient(cred.espn_s2, cred.swid)
             try:
                 raw = espn.get_json(
                     f"{espn_client_mod.BASE}/seasons/{session.season}/segments/0/"
-                    f"leagues/{session.league_id}?view=mSettings&view=mDraftDetail")
+                    f"leagues/{session.provider_league_id}"
+                    "?view=mSettings&view=mDraftDetail")
                 player_pool_raw = _espn_player_pool_cache_for(session.season).get(
                     lambda: espn.get_json(
                         f"{espn_client_mod.BASE}/seasons/{session.season}/players"
@@ -388,7 +578,7 @@ def create_app() -> FastAPI:
                     espn_crosswalk_mod.parse_player_pool(player_pool_raw)))
             state = espn_draft_mod.parse(raw, cw)
         else:
-            draft_id = _draft_id()
+            draft_id = session.draft_id
             sleeper = client_mod.SleeperClient()
             try:
                 draft_meta = sleeper.get_json(_uncached(f"{client_mod.V1}/draft/{draft_id}"))
@@ -397,21 +587,24 @@ def create_app() -> FastAPI:
                 sleeper.close()
             state = draft_mod.parse(draft_meta, picks_raw)
 
+        # Every poll of a live draft is also the freshest signal this app has
+        # about whether that draft is still running -- cheaper and more
+        # accurate than asking the user to hit refresh for the switcher's
+        # status badge to catch up.
+        _STORE.touch_status(league_key, state.status)
+
         return {
             "live_nomination": board_mod.build_live_nomination(state),
             "picks_made": len(state.picks),
         }
 
-    @app.get("/api/board")
-    def get_board() -> dict:
-        session = _SESSION_STORE.get()
-        provider = session.provider if session is not None else "sleeper"
+    @app.get("/api/leagues/{league_key}/board")
+    def get_board(league_key: str) -> dict:
+        session = _load_league(league_key)
+        provider = session.provider
 
         if provider == "espn":
-            if session is None or session.espn_s2 is None or session.swid is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail="No connected ESPN session -- connect from the main screen first")
+            cred = _require_espn_credential()
 
             # ESPN's snake-only MVP has no mock-draft equivalent, so this
             # branch is never a mock draft.
@@ -425,11 +618,12 @@ def create_app() -> FastAPI:
             finally:
                 sleeper.close()
 
-            espn = espn_client_mod.EspnClient(session.espn_s2, session.swid)
+            espn = espn_client_mod.EspnClient(cred.espn_s2, cred.swid)
             try:
                 raw = espn.get_json(
                     f"{espn_client_mod.BASE}/seasons/{session.season}/segments/0/"
-                    f"leagues/{session.league_id}?view=mSettings&view=mTeam&view=mDraftDetail")
+                    f"leagues/{session.provider_league_id}"
+                    "?view=mSettings&view=mTeam&view=mDraftDetail")
                 player_pool_raw = _espn_player_pool_cache_for(session.season).get(
                     lambda: espn.get_json(
                         f"{espn_client_mod.BASE}/seasons/{session.season}/players"
@@ -446,9 +640,13 @@ def create_app() -> FastAPI:
             state = espn_draft_mod.parse(raw, cw)
             teams = espn_teams_mod.parse(raw)
         else:
-            league_id = _league_id()
-            draft_id = _draft_id()
-            is_mock = not league_id
+            # A Sleeper mock draft has no league behind it at all -- its
+            # `provider_league_id` IS its draft id, and `is_mock` (set at
+            # track time, from the provider) is what selects the
+            # mock-specific league-profile/backfill path below.
+            is_mock = session.is_mock
+            league_id = session.provider_league_id
+            draft_id = session.draft_id
             sleeper = client_mod.SleeperClient()
             try:
                 if is_mock:
@@ -480,6 +678,11 @@ def create_app() -> FastAPI:
             finally:
                 sleeper.close()
 
+        # Every poll of a live draft is also the freshest signal this app has
+        # about whether that draft is still running -- keeps the switcher's
+        # status badge current without a separate refresh.
+        _STORE.touch_status(league_key, state.status)
+
         # Sleeper's /league/<id> settings carry no auction budget field for
         # this league -- the budget lives on the draft object instead (see
         # ffdo.ingest.draft.parse). Fall back to the draft's budget so the
@@ -509,14 +712,12 @@ def create_app() -> FastAPI:
 
         if is_mock:
             # draft_order (and therefore roster_id) can only appear AFTER
-            # connecting, so it must be re-resolved live from the same
+            # tracking, so it must be re-resolved live from the same
             # draft_meta fetched above every poll -- never trusted from the
-            # persisted session's static roster_id.
-            session = _SESSION_STORE.get()
-            roster_id = (mock_draft_mod.resolve_roster_id(draft_meta, session.user_id)
-                        if session is not None else None)
+            # tracked league's static roster_id.
+            roster_id = mock_draft_mod.resolve_roster_id(draft_meta, session.user_id)
         else:
-            roster_id = _roster_id()
+            roster_id = session.roster_id
 
         if state.draft_type == "auction":
             baseline = auction.baseline_prices(valued, lg)
