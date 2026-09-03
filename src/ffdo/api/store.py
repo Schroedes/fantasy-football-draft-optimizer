@@ -28,8 +28,9 @@ def _now() -> str:
 
 
 class LeagueStore:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, legacy_session_path: Path | None = None) -> None:
         self._path = path
+        self._legacy_session_path = legacy_session_path
         self._ready = False
 
     # -- schema ------------------------------------------------------------
@@ -38,9 +39,11 @@ class LeagueStore:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self._path)
         conn.row_factory = sqlite3.Row
-        if not self._ready:
+        first_open = not self._ready
+        if first_open:
             self._init_schema(conn)
             self._ready = True
+            self._migrate_legacy_session(conn)
         return conn
 
     def _init_schema(self, conn: sqlite3.Connection) -> None:
@@ -85,8 +88,75 @@ class LeagueStore:
             # rather than crashing the app on startup.
             pass
 
+    def _migrate_legacy_session(self, conn: sqlite3.Connection) -> None:
+        """One-shot import of a pre-multi-league ``data/session.json``.
+
+        Runs once, on the first ``_connect()``. Guarded by the empty-table
+        check plus the rename to ``<name>.migrated``, so it is idempotent
+        and never touches a store that already has leagues. A missing or
+        malformed legacy file is a no-op, not an error.
+        """
+        path = self._legacy_session_path
+        if path is None or not path.exists():
+            return
+        try:
+            already = conn.execute("SELECT COUNT(*) FROM tracked_league").fetchone()[0]
+        except sqlite3.DatabaseError:
+            return
+        if already:
+            return
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+
+        provider = raw.get("provider", "sleeper")
+        is_mock = bool(raw.get("is_mock"))
+        provider_key = "sleeper-mock" if is_mock else provider
+        league_id = raw.get("league_id") or raw.get("draft_id", "")
+        provider_league_id = raw["draft_id"] if is_mock else league_id
+        season = int(raw["season"])
+        from ffdo.domain.models import make_league_key
+        league_key = make_league_key(provider_key, provider_league_id, season)
+        now = _now()
+        tracked = TrackedLeague(
+            league_key=league_key, provider=provider_key,
+            provider_league_id=provider_league_id, season=season,
+            name=raw.get("league_name", ""), user_id=raw.get("user_id", ""),
+            roster_id=raw.get("roster_id"), draft_id=raw.get("draft_id", ""),
+            draft_type=raw.get("draft_type", "snake"),
+            draft_status=raw.get("draft_status", ""),
+            num_teams=int(raw.get("num_teams", 0)), budget=raw.get("budget"),
+            rounds=int(raw.get("rounds", 0)),
+            roster_positions=tuple(raw.get("roster_positions", ())),
+            scoring_settings={k: float(v) for k, v
+                              in (raw.get("scoring_settings") or {}).items()},
+            fmt="redraft", format_override=None, raw_settings={}, is_mock=is_mock,
+            tracked_at=now, last_refreshed_at=now,
+        )
+        self._write_league_row(conn, tracked, tracked.format_override, tracked.tracked_at)
+
+        espn_s2, swid = raw.get("espn_s2"), raw.get("swid")
+        if espn_s2 or swid:
+            conn.execute(
+                "INSERT OR REPLACE INTO provider_credential "
+                "(provider, user_identifier, espn_s2, swid, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("espn", swid or "", espn_s2, swid, now),
+            )
+        elif provider == "sleeper" and raw.get("username"):
+            conn.execute(
+                "INSERT OR REPLACE INTO provider_credential "
+                "(provider, user_identifier, espn_s2, swid, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("sleeper", raw["username"], None, None, now),
+            )
+        conn.commit()
+        path.rename(path.with_name(path.name + ".migrated"))
+
     # -- tracked leagues -------------------------------------------------
 
+    # Read ops (list/get/get_credential) deliberately swallow a corrupt-file
+    # DatabaseError and report "empty" so the app still starts; write ops let it
+    # surface, since silently dropping a write would be the worse failure.
     def list(self) -> list[TrackedLeague]:
         try:
             with self._connect() as conn:
@@ -107,6 +177,31 @@ class LeagueStore:
             return None
         return self._row_to_league(row) if row is not None else None
 
+    @staticmethod
+    def _write_league_row(
+        conn: sqlite3.Connection,
+        tracked: TrackedLeague,
+        format_override: str | None,
+        tracked_at: str,
+    ) -> None:
+        values = (
+            tracked.league_key, tracked.provider, tracked.provider_league_id,
+            tracked.season, tracked.name, tracked.user_id, tracked.roster_id,
+            tracked.draft_id, tracked.draft_type, tracked.draft_status,
+            tracked.num_teams, tracked.budget, tracked.rounds,
+            json.dumps(list(tracked.roster_positions)),
+            json.dumps(dict(tracked.scoring_settings)),
+            tracked.fmt, format_override,
+            json.dumps(dict(tracked.raw_settings)),
+            int(tracked.is_mock), tracked_at, tracked.last_refreshed_at,
+        )
+        placeholders = ", ".join("?" for _ in _LEAGUE_COLUMNS)
+        conn.execute(
+            f"INSERT OR REPLACE INTO tracked_league "
+            f"({', '.join(_LEAGUE_COLUMNS)}) VALUES ({placeholders})",
+            values,
+        )
+
     def upsert(self, tracked: TrackedLeague) -> None:
         with self._connect() as conn:
             existing = conn.execute(
@@ -115,23 +210,7 @@ class LeagueStore:
             ).fetchone()
             format_override = existing["format_override"] if existing else tracked.format_override
             tracked_at = existing["tracked_at"] if existing else tracked.tracked_at
-            values = (
-                tracked.league_key, tracked.provider, tracked.provider_league_id,
-                tracked.season, tracked.name, tracked.user_id, tracked.roster_id,
-                tracked.draft_id, tracked.draft_type, tracked.draft_status,
-                tracked.num_teams, tracked.budget, tracked.rounds,
-                json.dumps(list(tracked.roster_positions)),
-                json.dumps(dict(tracked.scoring_settings)),
-                tracked.fmt, format_override,
-                json.dumps(dict(tracked.raw_settings)),
-                int(tracked.is_mock), tracked_at, tracked.last_refreshed_at,
-            )
-            placeholders = ", ".join("?" for _ in _LEAGUE_COLUMNS)
-            conn.execute(
-                f"INSERT OR REPLACE INTO tracked_league "
-                f"({', '.join(_LEAGUE_COLUMNS)}) VALUES ({placeholders})",
-                values,
-            )
+            self._write_league_row(conn, tracked, format_override, tracked_at)
             conn.commit()
 
     def delete(self, league_key: str) -> None:

@@ -1,3 +1,5 @@
+import json as _json
+
 from ffdo.api.store import LeagueStore
 from ffdo.domain.models import ProviderCredential, TrackedLeague
 
@@ -84,3 +86,64 @@ def test_a_corrupt_db_file_reads_as_empty_not_an_exception(tmp_path):
     store = LeagueStore(p)
     assert store.list() == []
     assert store.get("sleeper:L1:2026") is None
+
+
+_LEGACY_SESSION = {
+    "username": "noahdschroeder", "user_id": "U1", "league_id": "1315881559957458944",
+    "draft_id": "1315881559965835264", "roster_id": 7, "league_name": "P-Vegas Ballers",
+    "season": 2026, "num_teams": 12, "budget": 200,
+    "roster_positions": ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX",
+                         "BN", "BN", "BN", "BN", "BN"],
+    "scoring_settings": {"rec": 0.5}, "draft_type": "auction",
+    "draft_status": "pre_draft", "rounds": 13,
+    "connected_at": "2026-08-24T00:00:00+00:00", "is_mock": False,
+    "provider": "sleeper", "espn_s2": None, "swid": None,
+}
+
+
+def test_migration_imports_a_legacy_session_once(tmp_path):
+    legacy = tmp_path / "session.json"
+    legacy.write_text(_json.dumps(_LEGACY_SESSION), encoding="utf-8")
+
+    store = LeagueStore(tmp_path / "ffdo.db", legacy_session_path=legacy)
+    leagues = store.list()
+
+    assert len(leagues) == 1
+    lg = leagues[0]
+    assert lg.league_key == "sleeper:1315881559957458944:2026"
+    assert lg.name == "P-Vegas Ballers"
+    assert lg.roster_id == 7
+    assert lg.draft_type == "auction"
+    assert lg.fmt == "redraft"
+    assert not legacy.exists()
+    assert (tmp_path / "session.json.migrated").exists()
+
+
+def test_migration_is_idempotent_and_skipped_when_leagues_exist(tmp_path):
+    legacy = tmp_path / "session.json"
+    legacy.write_text(_json.dumps(_LEGACY_SESSION), encoding="utf-8")
+    db = tmp_path / "ffdo.db"
+
+    LeagueStore(db, legacy_session_path=legacy).list()
+    # Second construction: legacy file is gone, nothing re-imported, no crash.
+    store2 = LeagueStore(db, legacy_session_path=legacy)
+    assert len(store2.list()) == 1
+
+
+def test_migration_carries_espn_credentials(tmp_path):
+    legacy = tmp_path / "session.json"
+    espn_session = {**_LEGACY_SESSION, "provider": "espn",
+                    "league_id": "1882997948", "draft_id": "1882997948",
+                    "draft_type": "snake", "espn_s2": "s2val", "swid": "{SWID}",
+                    "username": ""}
+    legacy.write_text(_json.dumps(espn_session), encoding="utf-8")
+
+    store = LeagueStore(tmp_path / "ffdo.db", legacy_session_path=legacy)
+    cred = store.get_credential("espn")
+    assert cred is not None and cred.espn_s2 == "s2val" and cred.swid == "{SWID}"
+    assert store.list()[0].league_key == "espn:1882997948:2026"
+
+
+def test_no_migration_when_the_legacy_file_is_absent(tmp_path):
+    store = LeagueStore(tmp_path / "ffdo.db", legacy_session_path=tmp_path / "nope.json")
+    assert store.list() == []
