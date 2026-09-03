@@ -14,7 +14,6 @@ import logging
 import httpx
 
 from ffdo.domain.models import DiscoveredLeague, make_league_key
-from ffdo.ingest.espn import league as league_mod
 from ffdo.ingest.espn.client import _USER_AGENT
 from ffdo.ingest.espn.connect import ConnectError, normalize_swid
 
@@ -59,30 +58,39 @@ def list_leagues(
         log.warning("ESPN fan API call failed (%s); falling back to manual add", exc)
         return []
 
+    if not isinstance(raw, dict):
+        log.warning("ESPN fan API returned a non-object body; falling back to manual add")
+        return []
+
     out: list[DiscoveredLeague] = []
     for pref in raw.get("preferences") or []:
-        if ((pref.get("type") or {}).get("code")) != "fantasy":
+        try:
+            if ((pref.get("type") or {}).get("code")) != "fantasy":
+                continue
+            entry = (pref.get("metaData") or {}).get("entry") or {}
+            if entry.get("gameId") not in _FOOTBALL_GAME_IDS:
+                continue
+            if int(entry.get("seasonId") or 0) != season:
+                continue
+            groups = entry.get("groups") or []
+            if not groups:
+                continue
+            group = groups[0]
+            league_id = group.get("groupId")
+            if league_id is None:
+                continue
+            league_id = str(league_id)
+            draft_complete = bool(group.get("draftComplete"))
+            num_teams = int(group.get("groupSize") or 0)
+        except (AttributeError, TypeError, ValueError, KeyError):
+            log.warning("ESPN fan API entry could not be parsed; skipping it")
             continue
-        entry = (pref.get("metaData") or {}).get("entry") or {}
-        if entry.get("gameId") not in _FOOTBALL_GAME_IDS:
-            continue
-        if int(entry.get("seasonId") or 0) != season:
-            continue
-        groups = entry.get("groups") or []
-        if not groups:
-            continue
-        group = groups[0]
-        league_id = group.get("groupId")
-        if league_id is None:
-            continue
-        league_id = str(league_id)
-        draft_complete = bool(group.get("draftComplete"))
         out.append(DiscoveredLeague(
             provider="espn",
             provider_league_id=league_id,
             season=season,
             name=group.get("groupName") or "",
-            num_teams=int(group.get("groupSize") or 0),
+            num_teams=num_teams,
             draft_type="",  # resolved at track time
             fmt="redraft",  # detect_format needs mSettings, not in the fan payload
             draft_status="complete" if draft_complete else "pre_draft",

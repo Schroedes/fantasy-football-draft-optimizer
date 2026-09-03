@@ -66,3 +66,31 @@ def test_list_leagues_returns_empty_on_an_unexpected_error():
 
     assert discover.list_leagues("s2", "{SWID}", 2026,
                                  transport=_transport(handler)) == []
+
+
+def test_list_leagues_returns_empty_on_a_non_object_body():
+    def handler(request):
+        return httpx.Response(200, json=[])
+
+    assert discover.list_leagues("s2", "{SWID}", 2026,
+                                 transport=_transport(handler)) == []
+
+
+def test_list_leagues_skips_a_malformed_entry_and_keeps_the_rest():
+    raw = {
+        "preferences": [
+            {"type": {"code": "fantasy"}, "metaData": {"entry": {
+                "entryId": 5, "gameId": 1, "seasonId": "not-a-year",
+                "groups": [{"groupId": 111, "groupName": "Broken", "groupSize": "twelve"}]}}},
+            {"type": {"code": "fantasy"}, "metaData": {"entry": {
+                "entryId": 7, "gameId": 1, "seasonId": 2026,
+                "groups": [{"groupId": 1882997948, "groupName": "Dynasty Warehouse",
+                            "groupSize": 12, "draftComplete": True}]}}},
+        ]
+    }
+
+    def handler(request):
+        return httpx.Response(200, json=raw)
+
+    out = discover.list_leagues("s2", "{SWID}", 2026, transport=_transport(handler))
+    assert [d.provider_league_id for d in out] == ["1882997948"]
