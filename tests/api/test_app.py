@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -6,6 +8,7 @@ from ffdo.api import app as app_mod
 from ffdo.api.app import _TTLCache, _active_only, _load_league, _uncached, create_app
 from ffdo.api.store import LeagueStore
 from ffdo.domain.models import DiscoveredLeague, PlayerProfile, ProviderCredential, TrackedLeague
+from ffdo.ingest.client import PROJECTIONS, V1
 
 
 def _tracked(**overrides):
@@ -845,3 +848,540 @@ def test_active_only_drops_inactive_players():
                 "retired_p": _profile("retired_p", active=False)}
     out = _active_only(points, profiles)
     assert out == {"active_p": 150.0}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/leagues/{league_key}/board and /board/live -- integration tests
+# through TestClient + a real LeagueStore + a recording client at the network
+# seam. Ported from the old unscoped `GET /api/board` / `/api/board/live`
+# suite (git: f2f030e:tests/api/test_app.py), which Task 10's rewrite deleted
+# wholesale. Each old `_session(...)` becomes a `_tracked(...)` row in
+# `_STORE` (the autouse `_isolated_store` fixture gives every test a fresh
+# tmp_path store) plus a GET of the league-scoped URL.
+
+_PROJ_TS_2025 = int(datetime(2025, 8, 1, tzinfo=timezone.utc).timestamp() * 1000)
+
+_BOARD_REAL_LEAGUE_RAW = {
+    "league_id": "L123", "season": "2025",
+    "settings": {"num_teams": 2, "budget": 200},
+    "roster_positions": ["QB", "RB", "BN"],
+    "scoring_settings": {"rush_yd": 0.1, "rush_td": 6.0},
+    "name": "Board Test League", "status": "drafting",
+}
+_BOARD_DRAFT_RAW = {
+    "draft_id": "D123", "type": "auction", "status": "drafting",
+    "settings": {"teams": 2, "rounds": 3, "budget": 200},
+}
+_BOARD_PLAYERS_RAW = {
+    "P1": {"first_name": "Test", "last_name": "Runner", "position": "RB",
+           "team": "AAA", "age": 25, "years_exp": 3, "active": True},
+}
+_BOARD_PROJECTIONS_RAW = [
+    {"player_id": "P1", "last_modified": _PROJ_TS_2025,
+     "stats": {"rush_yd": 1000.0, "rush_td": 10.0}},
+]
+
+# Real captured /v1/draft/<id> shape (see MOCK_DRAFT_PRE_DRAFT /
+# MOCK_DRAFT_MID_DRAFT in tests/ingest/test_mock_draft.py), an auction-type
+# mock so the response carries a `budget` section with a `your_roster_id`
+# to assert on.
+_BOARD_MOCK_DRAFT_RAW = {
+    "created": 1787468015451, "creators": ["U1"], "draft_id": "D999",
+    "draft_order": None, "league_id": None,
+    "metadata": {"description": "", "name": "", "scoring_type": "half_ppr"},
+    "season": "2026", "season_type": "regular",
+    "settings": {
+        "autostart": 0, "cpu_autopick": 1, "pick_timer": 120, "rounds": 3,
+        "slots_qb": 1, "slots_rb": 1, "slots_bn": 1, "teams": 2, "budget": 200,
+    },
+    "slot_to_roster_id": {"1": 1, "2": 2},
+    "sport": "nfl", "start_time": None, "status": "drafting", "type": "auction",
+}
+
+
+def _mock_tracked(**overrides):
+    base = dict(
+        league_key="sleeper-mock:D999:2026", provider="sleeper-mock",
+        provider_league_id="D999", draft_id="D999", season=2026,
+        is_mock=True, user_id="U1", roster_id=None, draft_type="auction",
+        roster_positions=("QB", "RB", "BN"),
+    )
+    return _tracked(**{**base, **overrides})
+
+
+# -- happy paths ------------------------------------------------------------
+
+
+def test_board_endpoint_scores_a_player_for_a_tracked_sleeper_league(monkeypatch):
+    app_mod._STORE.upsert(_tracked())  # sleeper:L123:2025
+
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D123/picks": [],
+        f"{V1}/draft/D123": _BOARD_DRAFT_RAW,
+        f"{V1}/league/L123/rosters": [],
+        f"{V1}/league/L123/users": [],
+        f"{V1}/league/L123": _BOARD_REAL_LEAGUE_RAW,
+        f"{V1}/players/nfl": _BOARD_PLAYERS_RAW,
+        f"{PROJECTIONS}/2025": _BOARD_PROJECTIONS_RAW,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    res = TestClient(create_app()).get("/api/leagues/sleeper:L123:2025/board")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["is_mock"] is False
+    assert f"{V1}/league/L123" in calls
+    assert "P1" in {p["player_id"] for p in body["players"]}, (
+        "the one scoreable player in the fixture must reach the response -- "
+        "proves players/projections still flow through the real-league branch")
+
+
+def test_board_endpoint_404s_for_an_untracked_league():
+    assert TestClient(create_app()).get(
+        "/api/leagues/sleeper:ghost:2025/board").status_code == 404
+
+
+def test_board_live_404s_for_an_untracked_league():
+    assert TestClient(create_app()).get(
+        "/api/leagues/sleeper:ghost:2025/board/live").status_code == 404
+
+
+def test_board_live_returns_nomination_without_the_heavy_fetches(monkeypatch):
+    """The point of this endpoint: answer using only the two Sleeper calls
+    that carry nomination/bid (draft meta + picks), never touching
+    /league/<id>, /players/nfl, or the projections feed."""
+    app_mod._STORE.upsert(_tracked())
+
+    draft_meta = {**_BOARD_DRAFT_RAW,
+                  "metadata": {"nominated_player_id": "P1", "highest_offer": "42"}}
+    picks_raw = [{
+        "draft_id": "D123", "draft_slot": 1, "pick_no": 1, "picked_by": "U1",
+        "player_id": "P2", "roster_id": 1, "round": 1, "metadata": {"amount": "10"},
+    }]
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D123/picks": picks_raw,
+        f"{V1}/draft/D123": draft_meta,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    res = TestClient(create_app()).get("/api/leagues/sleeper:L123:2025/board/live")
+
+    assert res.status_code == 200
+    assert res.json() == {"live_nomination": {"player_id": "P1", "bid": 42},
+                          "picks_made": 1}
+    assert not any("/league/" in c or "/players/" in c or "/projections/" in c
+                   for c in calls), f"only draft meta + picks may be fetched: {calls}"
+
+
+# -- (c) mock single-fetch -----------------------------------------------------
+
+
+def test_board_mock_mode_reports_is_mock_true_and_fetches_the_draft_once(monkeypatch):
+    """get_board()'s mock branch must fetch /draft/<id> exactly once and
+    reuse that payload for both build_league_profile() and draft_meta."""
+    app_mod._STORE.upsert(_mock_tracked())
+
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D999/picks": [],
+        f"{V1}/draft/D999": _BOARD_MOCK_DRAFT_RAW,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    res = TestClient(create_app()).get("/api/leagues/sleeper-mock:D999:2026/board")
+
+    assert res.status_code == 200
+    assert res.json()["is_mock"] is True
+    draft_meta_calls = [c for c in calls if c.split("?", 1)[0] == f"{V1}/draft/D999"]
+    assert len(draft_meta_calls) == 1, (
+        f"expected exactly one fetch of /draft/D999 (single-fetch reuse for "
+        f"both LeagueProfile and draft_meta), got {len(draft_meta_calls)}: {calls}")
+    assert any(c.split("?", 1)[0] == f"{V1}/draft/D999/picks" for c in calls)
+
+
+# -- (d) mock backfill + live roster_id --------------------------------------
+
+
+def test_board_mock_mode_backfills_picks_and_resolves_roster_id_live(monkeypatch):
+    """Two guards together:
+
+    1. Live roster_id: the tracked league's roster_id is None, but THIS
+       poll's draft object has draft_order[user_id] = 2. get_board() must
+       re-resolve roster_id from that live draft_meta, never trust the
+       stored None.
+    2. backfill_roster_ids() runs BEFORE draft.parse() sees the picks:
+       Sleeper never populates roster_id on a mock pick (arrives null even
+       for the human's own). The pick below has roster_id: null,
+       draft_slot: 2 -> roster_id 2 via slot_to_roster_id. Without backfill
+       (or run after parsing) spent_by_roster() skips it and your_spent is 0.
+    """
+    app_mod._STORE.upsert(_mock_tracked(roster_id=None))
+
+    draft_meta = {**_BOARD_MOCK_DRAFT_RAW, "draft_order": {"U1": 2}}
+    picks_raw = [{
+        "draft_id": "D999", "draft_slot": 2, "pick_no": 1, "picked_by": "U1",
+        "player_id": "P1", "roster_id": None, "round": 1,
+        "metadata": {"amount": "50"},
+    }]
+    FakeClient, _ = _recording_client({
+        f"{V1}/draft/D999/picks": picks_raw,
+        f"{V1}/draft/D999": draft_meta,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    res = TestClient(create_app()).get("/api/leagues/sleeper-mock:D999:2026/board")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["budget"]["your_roster_id"] == 2, (
+        "must reflect the LIVE roster_id resolved from this poll's draft_order, "
+        "not the stale stored roster_id (None)")
+    assert body["budget"]["your_spent"] == 50, (
+        "the pick's null roster_id must have been backfilled to 2 before "
+        "draft.parse() ran, so spent_by_roster() counts its $50 toward roster 2")
+
+
+# -- (e) mock scoring_type drift -> clean 400 -------------------------------
+
+
+def test_board_mock_mode_returns_a_clean_400_when_scoring_type_becomes_unsupported(
+        monkeypatch):
+    """build_league_profile() runs on every 3s poll. A mock draft's
+    scoring_type can drift to an unsupported value after the user has
+    connected -- that must surface as a clean 400 with the bad value in
+    `detail`, not a bare 500."""
+    app_mod._STORE.upsert(_mock_tracked())
+
+    drifted = {**_BOARD_MOCK_DRAFT_RAW,
+               "metadata": {**_BOARD_MOCK_DRAFT_RAW["metadata"],
+                            "scoring_type": "dynasty_2qb"}}
+    FakeClient, _ = _recording_client({
+        f"{V1}/draft/D999/picks": [],
+        f"{V1}/draft/D999": drifted,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    res = TestClient(create_app()).get("/api/leagues/sleeper-mock:D999:2026/board")
+
+    assert res.status_code == 400
+    assert "dynasty_2qb" in res.json()["detail"]
+
+
+def test_board_mock_mode_handles_a_snake_draft_without_crashing(monkeypatch):
+    """The auction fixtures never exercise the snake mock path end to end
+    through the real endpoint (a snake mock's budget is legitimately None)."""
+    app_mod._STORE.upsert(_mock_tracked(draft_type="snake"))
+
+    snake_draft = {**_BOARD_MOCK_DRAFT_RAW, "type": "snake"}
+    FakeClient, _ = _recording_client({
+        f"{V1}/draft/D999/picks": [],
+        f"{V1}/draft/D999": snake_draft,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    res = TestClient(create_app()).get("/api/leagues/sleeper-mock:D999:2026/board")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["format"] == "snake"
+    assert body["is_mock"] is True
+
+
+# -- (b) DEF/K in the projections request -----------------------------------
+
+
+def test_board_fetches_and_scores_def_and_k_when_the_league_rosters_them(monkeypatch):
+    """Regression (commit 89c8f56): `_load_projections`'s query only asked
+    Sleeper for QB/RB/WR/TE, so DEF/K never reached `proj` -- silently
+    invisible on the board for leagues that roster them, no crash."""
+    app_mod._STORE.upsert(_tracked(
+        league_key="sleeper:L456:2025", provider_league_id="L456",
+        draft_id="D456", roster_positions=("QB", "DEF", "K", "BN")))
+
+    league_raw = {
+        "league_id": "L456", "season": "2025",
+        "settings": {"num_teams": 2, "budget": 200},
+        "roster_positions": ["QB", "DEF", "K", "BN"],
+        "scoring_settings": {"pass_yd": 0.04, "sack": 1.0, "int": 2.0,
+                             "fgm": 3.0, "xpm": 1.0},
+        "name": "DEF/K Board Test League", "status": "drafting",
+    }
+    draft_raw = {"draft_id": "D456", "type": "auction", "status": "drafting",
+                 "settings": {"teams": 2, "rounds": 3, "budget": 200}}
+    players_raw = {
+        "DAL": {"first_name": "Dallas", "last_name": "Defense", "position": "DEF",
+                "team": "DAL", "age": None, "years_exp": None, "active": True},
+        "K1": {"first_name": "Test", "last_name": "Kicker", "position": "K",
+               "team": "AAA", "age": 28, "years_exp": 5, "active": True},
+    }
+    projections_raw = [
+        {"player_id": "DAL", "last_modified": _PROJ_TS_2025,
+         "stats": {"sack": 3.0, "int": 2.0}},
+        {"player_id": "K1", "last_modified": _PROJ_TS_2025,
+         "stats": {"fgm": 2.0, "xpm": 3.0}},
+    ]
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D456/picks": [],
+        f"{V1}/draft/D456": draft_raw,
+        f"{V1}/league/L456/rosters": [],
+        f"{V1}/league/L456/users": [],
+        f"{V1}/league/L456": league_raw,
+        f"{V1}/players/nfl": players_raw,
+        f"{PROJECTIONS}/2025": projections_raw,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    res = TestClient(create_app()).get("/api/leagues/sleeper:L456:2025/board")
+
+    assert res.status_code == 200
+    projections_calls = [c for c in calls if f"{PROJECTIONS}/2025" in c]
+    assert projections_calls, "must actually fetch the projections feed"
+    assert "position[]=DEF" in projections_calls[0], (
+        "the projections request must ask Sleeper for DEF explicitly")
+    assert "position[]=K" in projections_calls[0], (
+        "the projections request must ask Sleeper for K explicitly")
+
+    player_ids = {p["player_id"] for p in res.json()["players"]}
+    assert "DAL" in player_ids, "a rostered DEF with real projections must reach the board"
+    assert "K1" in player_ids, "a rostered K with real projections must reach the board"
+
+
+# -- (a) ESPN board never calls Sleeper's /draft/ endpoint ------------------
+
+
+_ESPN_CRED = ProviderCredential("espn", "{SWID}", "s2value", "{SWID}", "t")
+
+_ESPN_BOARD_LIVE_RAW = {
+    "id": 1882997948,
+    "settings": {"size": 2, "draftSettings": {"type": "SNAKE"}},
+    "draftDetail": {"drafted": False, "inProgress": True, "picks": []},
+}
+
+_ESPN_BOARD_RAW = {
+    "id": 1882997948, "seasonId": 2026,
+    "settings": {
+        "size": 2, "name": "ESPN Board Test",
+        "draftSettings": {"type": "SNAKE"},
+        "rosterSettings": {"lineupSlotCounts": {"0": 1, "2": 1, "4": 1, "20": 3}},
+        "scoringSettings": {"scoringItems": [
+            {"statId": 24, "points": 0.1}, {"statId": 25, "points": 6.0},
+            {"statId": 53, "points": 1.0},
+        ]},
+    },
+    "draftDetail": {"drafted": False, "inProgress": True, "picks": []},
+}
+
+
+def _espn_tracked():
+    return _tracked(
+        league_key="espn:1882997948:2026", provider="espn",
+        provider_league_id="1882997948", season=2026, draft_id="1882997948",
+        draft_type="snake", roster_positions=("QB", "RB", "WR", "BN", "BN", "BN"))
+
+
+class _NoDraftFetchSleeperClient(_FakeSleeperClient):
+    """Fails loudly if any Sleeper `/draft/` URL is fetched -- the exact
+    live-production 500 (commit 328ace4): an ESPN league id sent to
+    Sleeper's /draft/<id> 404s and 500s the endpoint on every poll."""
+
+    calls: list[str] = []
+
+    def get_json(self, url: str):
+        _NoDraftFetchSleeperClient.calls.append(url)
+        assert "/draft/" not in url, (
+            f"must never fetch a Sleeper /draft/ URL for an ESPN league -- got {url}")
+        return super().get_json(url)
+
+
+def test_board_live_espn_never_calls_sleepers_draft_endpoint(monkeypatch):
+    app_mod._STORE.upsert(_espn_tracked())
+    app_mod._STORE.put_credential(_ESPN_CRED)
+
+    FakeEspn, espn_calls = _recording_espn_client({
+        "players?view=kona_player_info": [],
+        "leagues/1882997948": _ESPN_BOARD_LIVE_RAW,
+    })
+    monkeypatch.setattr("ffdo.ingest.espn.client.EspnClient", FakeEspn)
+    _NoDraftFetchSleeperClient.calls = []
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _NoDraftFetchSleeperClient)
+
+    res = TestClient(create_app()).get("/api/leagues/espn:1882997948:2026/board/live")
+
+    assert res.status_code == 200
+    assert res.json() == {"live_nomination": None, "picks_made": 0}
+    assert any("leagues/1882997948" in c for c in espn_calls), (
+        "must actually fetch ESPN's own draft-detail endpoint")
+    assert not any("/draft/" in c for c in _NoDraftFetchSleeperClient.calls)
+
+
+def test_board_espn_never_calls_sleepers_draft_endpoint(monkeypatch):
+    """Same guard for the heavier /board endpoint -- its ESPN branch must
+    likewise never route an ESPN league id to Sleeper's /draft/<id>."""
+    app_mod._STORE.upsert(_espn_tracked())
+    app_mod._STORE.put_credential(_ESPN_CRED)
+
+    FakeEspn, espn_calls = _recording_espn_client({
+        "players?view=kona_player_info": [],
+        "leagues/1882997948": _ESPN_BOARD_RAW,
+    })
+    monkeypatch.setattr("ffdo.ingest.espn.client.EspnClient", FakeEspn)
+    _NoDraftFetchSleeperClient.calls = []
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _NoDraftFetchSleeperClient)
+
+    res = TestClient(create_app()).get("/api/leagues/espn:1882997948:2026/board")
+
+    assert res.status_code == 200
+    assert res.json()["is_mock"] is False
+    assert any("leagues/1882997948" in c for c in espn_calls)
+    assert not any("/draft/" in c for c in _NoDraftFetchSleeperClient.calls)
+
+
+def test_board_live_espn_reads_credentials_from_the_store(monkeypatch):
+    """The ESPN branch reads espn_s2/swid from `_STORE.get_credential`, not
+    from the request or a session object."""
+    app_mod._STORE.upsert(_espn_tracked())
+    app_mod._STORE.put_credential(_ESPN_CRED)
+
+    captured_creds: list[tuple] = []
+
+    FakeEspn, espn_calls = _recording_espn_client({
+        "players?view=kona_player_info": [],
+        "leagues/1882997948": _ESPN_BOARD_LIVE_RAW,
+    })
+
+    class _CredCapturingEspnClient(FakeEspn):
+        def __init__(self, *args, **kwargs):
+            captured_creds.append(args)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr("ffdo.ingest.espn.client.EspnClient", _CredCapturingEspnClient)
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeSleeperClient)
+
+    res = TestClient(create_app()).get("/api/leagues/espn:1882997948:2026/board/live")
+
+    assert res.status_code == 200
+    assert res.json() == {"live_nomination": None, "picks_made": 0}
+    assert ("s2value", "{SWID}") in captured_creds, (
+        f"EspnClient must be constructed with the stored cookies -- got {captured_creds}")
+
+
+def test_board_live_espn_400s_when_no_credential_is_stored(monkeypatch):
+    app_mod._STORE.upsert(_espn_tracked())  # no put_credential
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeSleeperClient)
+
+    res = TestClient(create_app()).get("/api/leagues/espn:1882997948:2026/board/live")
+    assert res.status_code == 400
+    assert "Connect ESPN" in res.json()["detail"]
+
+
+# -- (f) touch_status through an endpoint ----------------------------------
+
+
+def test_board_poll_updates_the_stored_draft_status(monkeypatch):
+    """After a /board poll returns a draft state with status "complete",
+    the stored TrackedLeague.draft_status for that league_key is "complete"
+    (get_board() calls `_STORE.touch_status(league_key, state.status)`)."""
+    app_mod._STORE.upsert(_tracked(draft_status="drafting"))
+
+    complete_draft = {**_BOARD_DRAFT_RAW, "status": "complete"}
+    FakeClient, _ = _recording_client({
+        f"{V1}/draft/D123/picks": [],
+        f"{V1}/draft/D123": complete_draft,
+        f"{V1}/league/L123/rosters": [],
+        f"{V1}/league/L123/users": [],
+        f"{V1}/league/L123": {**_BOARD_REAL_LEAGUE_RAW, "status": "complete"},
+        f"{V1}/players/nfl": _BOARD_PLAYERS_RAW,
+        f"{PROJECTIONS}/2025": _BOARD_PROJECTIONS_RAW,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    TestClient(create_app()).get("/api/leagues/sleeper:L123:2025/board")
+
+    assert app_mod._STORE.get("sleeper:L123:2025").draft_status == "complete"
+
+
+def test_board_live_poll_updates_the_stored_draft_status(monkeypatch):
+    """get_board_live() calls touch_status too -- every 1s poll is also the
+    freshest signal about whether the draft is still running."""
+    app_mod._STORE.upsert(_tracked(draft_status="drafting"))
+
+    complete_draft = {**_BOARD_DRAFT_RAW, "status": "complete"}
+    FakeClient, _ = _recording_client({
+        f"{V1}/draft/D123/picks": [],
+        f"{V1}/draft/D123": complete_draft,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    TestClient(create_app()).get("/api/leagues/sleeper:L123:2025/board/live")
+
+    assert app_mod._STORE.get("sleeper:L123:2025").draft_status == "complete"
+
+
+# -- (g) cross-league scoring regression guard ----------------------------
+
+
+def test_two_leagues_with_different_scoring_produce_different_vor(monkeypatch):
+    """The single most important property of the multi-league foundation:
+    two tracked leagues with different scoring_settings must produce
+    DIFFERENT vor for the same player's stat line -- no scoring bleed
+    between leagues served by the same process."""
+    app_mod._STORE.upsert(_tracked(
+        league_key="sleeper:PPR:2025", provider_league_id="PPR", draft_id="DPPR",
+        scoring_settings={"rush_yd": 0.1, "rec": 1.0}))
+    app_mod._STORE.upsert(_tracked(
+        league_key="sleeper:STD:2025", provider_league_id="STD", draft_id="DSTD",
+        scoring_settings={"rush_yd": 0.1, "rec": 0.0}))
+
+    players_raw = {
+        "P1": {"first_name": "Top", "last_name": "Back", "position": "RB",
+               "team": "AAA", "age": 25, "years_exp": 3, "active": True},
+        "P2": {"first_name": "Mid", "last_name": "Back", "position": "RB",
+               "team": "BBB", "age": 26, "years_exp": 4, "active": True},
+        "P3": {"first_name": "Repl", "last_name": "Back", "position": "RB",
+               "team": "CCC", "age": 27, "years_exp": 5, "active": True},
+    }
+    projections_raw = [
+        {"player_id": "P1", "last_modified": _PROJ_TS_2025,
+         "stats": {"rush_yd": 1000.0, "rec": 80.0}},
+        {"player_id": "P2", "last_modified": _PROJ_TS_2025,
+         "stats": {"rush_yd": 500.0, "rec": 40.0}},
+        {"player_id": "P3", "last_modified": _PROJ_TS_2025,
+         "stats": {"rush_yd": 100.0, "rec": 10.0}},
+    ]
+
+    def _league_raw(lid, scoring):
+        return {"league_id": lid, "season": "2025",
+                "settings": {"num_teams": 2, "budget": 200},
+                "roster_positions": ["QB", "RB", "BN"],
+                "scoring_settings": scoring, "name": lid, "status": "drafting"}
+
+    def _draft_raw(did):
+        return {"draft_id": did, "type": "auction", "status": "drafting",
+                "settings": {"teams": 2, "rounds": 3, "budget": 200}}
+
+    FakeClient, _ = _recording_client({
+        f"{V1}/draft/DPPR/picks": [], f"{V1}/draft/DPPR": _draft_raw("DPPR"),
+        f"{V1}/draft/DSTD/picks": [], f"{V1}/draft/DSTD": _draft_raw("DSTD"),
+        f"{V1}/league/PPR/rosters": [], f"{V1}/league/PPR/users": [],
+        f"{V1}/league/PPR": _league_raw("PPR", {"rush_yd": 0.1, "rec": 1.0}),
+        f"{V1}/league/STD/rosters": [], f"{V1}/league/STD/users": [],
+        f"{V1}/league/STD": _league_raw("STD", {"rush_yd": 0.1, "rec": 0.0}),
+        f"{V1}/players/nfl": players_raw,
+        f"{PROJECTIONS}/2025": projections_raw,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    client = TestClient(create_app())
+    ppr = client.get("/api/leagues/sleeper:PPR:2025/board").json()
+    std = client.get("/api/leagues/sleeper:STD:2025/board").json()
+
+    def _vor(body, pid):
+        return next(p["vor"] for p in body["players"] if p["player_id"] == pid)
+
+    # Full-PPR: P1 = 100 + 80 = 180, replacement (P3) = 10 + 10 = 20 -> vor 160.
+    # Standard: P1 = 100, replacement (P3) = 10 -> vor 90.
+    assert _vor(ppr, "P1") == 160.0
+    assert _vor(std, "P1") == 90.0
+    assert _vor(ppr, "P1") != _vor(std, "P1"), (
+        "same player, same stat line, different league scoring -> different VOR")
+    assert _vor(ppr, "P2") != _vor(std, "P2")
