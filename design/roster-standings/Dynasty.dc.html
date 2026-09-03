@@ -1,0 +1,300 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --bg: oklch(0.15 0.014 258);
+      --surface: oklch(0.205 0.014 258);
+      --surface-2: oklch(0.24 0.014 258);
+      --border: oklch(0.32 0.014 258);
+      --border-strong: oklch(0.40 0.016 258);
+      --text: oklch(0.94 0.006 258);
+      --muted: oklch(0.66 0.014 258);
+      --faint: oklch(0.48 0.014 258);
+      --green: #34D399;
+      --red: #F87171;
+      --amber: #FBBF24;
+      --violet: #A78BFA;
+      --font-sans: 'IBM Plex Sans', -apple-system, Segoe UI, sans-serif;
+      --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    a { color: var(--accent, #22D3EE); }
+    a:hover { color: var(--text); }
+    ::selection { background: var(--accent, #22D3EE); color: #0a0f14; }
+  </style>
+</helmet>
+
+<div style="width:1440px;height:900px;background:var(--bg);color:var(--text);font-family:var(--font-sans);display:flex;flex-direction:column;position:relative;overflow:hidden;">
+
+  <div style="position:absolute;inset:0;background-image:linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px);background-size:64px 64px;opacity:0.06;pointer-events:none;"></div>
+
+  <!-- switcher header -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 40px;border-bottom:1px solid var(--border);background:var(--surface);position:relative;z-index:2;">
+    <div style="display:flex;align-items:center;gap:18px;">
+      <span style="font-family:var(--font-mono);font-weight:600;font-size:16px;letter-spacing:1.5px;">FFDO</span>
+      <span style="width:1px;height:22px;background:var(--border-strong);"></span>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:8px;cursor:pointer;">
+        <span style="font-size:14px;font-weight:600;">Dynasty Warehouse</span>
+        <span style="font-family:var(--font-mono);font-size:10px;font-weight:600;letter-spacing:0.8px;color:var(--violet);background:color-mix(in oklch, var(--violet) 14%, transparent);border:1px solid color-mix(in oklch, var(--violet) 40%, transparent);padding:3px 7px;border-radius:5px;">DYNASTY</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </div>
+      <span style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--faint);cursor:pointer;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>Add leagues
+      </span>
+    </div>
+    <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">NFL Week 10 &middot; 2026 &middot; rest-of-season values</span>
+  </div>
+
+  <!-- body -->
+  <div style="flex:1;display:flex;gap:22px;padding:24px 40px;position:relative;z-index:1;min-height:0;">
+
+    <!-- LEFT: your roster (condensed) -->
+    <div style="width:400px;flex-shrink:0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px 24px;display:flex;flex-direction:column;gap:16px;overflow:hidden;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;">
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          <span style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--faint);font-weight:600;">Your team</span>
+          <span style="font-size:18px;font-weight:700;">Team Schroeder</span>
+          <span style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);">7&ndash;2 &middot; 2nd of 12</span>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;">
+          <span style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:1px;">Roster / Capital</span>
+          <span style="font-family:var(--font-mono);font-size:16px;font-weight:600;"><b style="color:{{accent}};">3rd</b> <span style="color:var(--faint);">/</span> <b style="color:var(--violet);">1st</b></span>
+        </div>
+      </div>
+
+      <div style="height:1px;background:var(--border);"></div>
+
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <span style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:1px;">Positional strength</span>
+        <sc-for list="{{posBars}}" as="p" hint-placeholder-count="4">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--muted);width:24px;">{{p.pos}}</span>
+            <div style="flex:1;height:7px;background:var(--surface-2);border-radius:4px;overflow:hidden;"><div style="{{p.fillStyle}}"></div></div>
+            <span style="font-family:var(--font-mono);font-size:10.5px;color:{{p.rankColor}};width:48px;text-align:right;">{{p.rankLabel}}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="height:1px;background:var(--border);"></div>
+
+      <div style="display:flex;flex-direction:column;gap:1px;overflow:hidden;flex:1;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:5px;">
+          <span style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:1px;">Roster</span>
+          <span style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:1px;">ROS &middot; age</span>
+        </div>
+        <sc-for list="{{rosterRows}}" as="r" hint-placeholder-count="10">
+          <div style="display:flex;align-items:center;gap:9px;padding:6px 2px;border-bottom:1px solid var(--border);">
+            <span style="{{r.slotStyle}}">{{r.slot}}</span>
+            <span style="font-size:12.5px;font-weight:500;color:{{r.nameColor}};flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{r.name}}</span>
+            <span style="font-family:var(--font-mono);font-size:12px;font-weight:600;color:{{r.vorColor}};">{{r.vor}}</span>
+            <span style="font-family:var(--font-mono);font-size:11px;color:var(--faint);width:26px;text-align:right;">{{r.age}}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="display:flex;gap:9px;padding:11px 13px;background:var(--surface-2);border-radius:8px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--violet)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px;"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+        <span style="font-size:11.5px;color:var(--muted);line-height:1.5;">Oldest starting core in the league (avg 27.4). Draft capital is your hedge &mdash; you own a projected <b style="color:var(--violet);">1.02</b>.</span>
+      </div>
+    </div>
+
+    <!-- RIGHT: two stacked rankings -->
+    <div style="flex:1;display:flex;flex-direction:column;gap:18px;min-width:0;">
+
+      <!-- power ranking (players) -->
+      <div style="flex:1;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 26px 0;display:flex;flex-direction:column;min-height:0;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:12px;">
+          <div style="display:flex;align-items:center;gap:12px;">
+            <span style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--faint);font-weight:600;">Power ranking &middot; players</span>
+            <div style="display:flex;background:var(--surface-2);border:1px solid var(--border);border-radius:7px;padding:3px;gap:2px;">
+              <sc-for list="{{posTabs}}" as="t" hint-placeholder-count="5">
+                <button onClick="{{t.pick}}" style="{{t.style}}">{{t.label}}</button>
+              </sc-for>
+            </div>
+          </div>
+          <div style="display:flex;background:var(--surface-2);border:1px solid var(--border);border-radius:7px;padding:3px;gap:2px;">
+            <sc-for list="{{scopeTabs}}" as="s" hint-placeholder-count="2">
+              <button onClick="{{s.pick}}" style="{{s.style}}">{{s.label}}</button>
+            </sc-for>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:40px 1fr 90px 66px 64px;gap:12px;padding:0 8px 8px;font-size:9.5px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);border-bottom:1px solid var(--border);">
+          <span>#</span><span>Team</span><span style="text-align:right;">{{vorColLabel}}</span><span style="text-align:right;">Rec</span><span style="text-align:right;">&Delta;</span>
+        </div>
+        <div style="display:flex;flex-direction:column;overflow:hidden;">
+          <sc-for list="{{teamRows}}" as="t" hint-placeholder-count="12">
+            <div style="display:grid;grid-template-columns:40px 1fr 90px 66px 64px;gap:12px;align-items:center;padding:9px 8px;border-bottom:1px solid var(--border);{{t.rowStyle}}">
+              <span style="font-family:var(--font-mono);font-size:12px;font-weight:600;color:var(--muted);">{{t.rank}}</span>
+              <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+                <span style="font-size:12.5px;font-weight:{{t.nameWeight}};color:{{t.nameColor}};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{t.name}}</span>
+                <sc-if value="{{t.isYou}}" hint-placeholder-val="{{false}}"><span style="font-family:var(--font-mono);font-size:8.5px;font-weight:700;color:{{accent}};border:1px solid color-mix(in oklch, {{accent}} 45%, transparent);padding:1px 4px;border-radius:4px;">YOU</span></sc-if>
+              </div>
+              <span style="font-family:var(--font-mono);font-size:12.5px;font-weight:600;text-align:right;">{{t.vor}}</span>
+              <span style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);text-align:right;">{{t.rec}}</span>
+              <span style="font-family:var(--font-mono);font-size:11.5px;font-weight:600;text-align:right;color:{{t.deltaColor}};">{{t.delta}}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- draft capital -->
+      <div style="height:308px;flex-shrink:0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 26px 0;display:flex;flex-direction:column;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:12px;">
+          <span style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--faint);font-weight:600;">Draft capital</span>
+          <span style="display:flex;align-items:center;gap:7px;font-family:var(--font-mono);font-size:10.5px;color:var(--faint);border:1px dashed var(--border-strong);border-radius:6px;padding:5px 10px;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+            blended score &mdash; coming
+          </span>
+        </div>
+        <div style="display:grid;grid-template-columns:40px 1fr 132px 132px;gap:12px;padding:0 8px 8px;font-size:9.5px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);border-bottom:1px solid var(--border);">
+          <span>#</span><span>Team</span><span>2026 picks</span><span>2027 picks</span>
+        </div>
+        <div style="display:flex;flex-direction:column;overflow:hidden;">
+          <sc-for list="{{capRows}}" as="c" hint-placeholder-count="6">
+            <div style="display:grid;grid-template-columns:40px 1fr 132px 132px;gap:12px;align-items:center;padding:8px;border-bottom:1px solid var(--border);{{c.rowStyle}}">
+              <span style="font-family:var(--font-mono);font-size:12px;font-weight:600;color:var(--muted);">{{c.rank}}</span>
+              <span style="font-size:12.5px;font-weight:{{c.nameWeight}};color:{{c.nameColor}};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{c.name}}</span>
+              <div style="display:flex;flex-wrap:wrap;gap:4px;">
+                <sc-for list="{{c.picks26}}" as="p" hint-placeholder-count="2"><span style="{{p.style}}">{{p.label}}</span></sc-for>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:4px;">
+                <sc-for list="{{c.picks27}}" as="p" hint-placeholder-count="2"><span style="{{p.style}}">{{p.label}}</span></sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="margin-top:auto;padding:10px 8px;">
+          <span style="font-size:11px;color:var(--faint);line-height:1.5;">Slots follow the <b style="color:var(--muted);">original</b> team's projected finish (reverse standings). <b style="color:var(--muted);">1.02</b> = round 1, pick 2. Traded picks show <span style="font-family:var(--font-mono);">via &lt;team&gt;</span>.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</x-dc>
+<script data-dc-script data-props='{"accent":{"editor":"color","default":"#22D3EE","options":["#22D3EE","#818CF8","#34D399","#FBBF24"]}}'>
+class Component extends DCLogic {
+  pickPos(id){ this.setState({ pos: id }); }
+  pickScope(id){ this.setState({ scope: id }); }
+
+  renderVals(){
+    const accent = this.props.accent || '#22D3EE';
+    const pos = this.state.pos || 'OVR';
+    const scope = this.state.scope || 'starters';
+
+    const tabBase = 'font-family:var(--font-mono);font-size:11px;font-weight:600;padding:5px 11px;border-radius:5px;border:none;cursor:pointer;';
+    const posTabs = [
+      {id:'OVR',label:'Overall'},{id:'QB',label:'QB'},{id:'RB',label:'RB'},{id:'WR',label:'WR'},{id:'TE',label:'TE'},
+    ].map(t=>({...t, pick:()=>this.pickPos(t.id),
+      style: tabBase + (t.id===pos ? `background:${accent};color:#0a0f14;` : 'background:transparent;color:var(--muted);')}));
+    const scopeTabs = [
+      {id:'starters',label:'Starters'},{id:'full',label:'Full roster'},
+    ].map(s=>({...s, pick:()=>this.pickScope(s.id),
+      style: tabBase + (s.id===scope ? `background:${accent};color:#0a0f14;` : 'background:transparent;color:var(--muted);')}));
+    const vorColLabel = pos === 'OVR' ? 'ROS VOR' : pos + ' VOR';
+
+    const barFill = (pct, color) => `width:${pct}%;height:100%;background:${color};border-radius:4px;`;
+    const posBars = [
+      {pos:'QB', pct:70, rankLabel:'4th', color:'var(--green)'},
+      {pos:'RB', pct:55, rankLabel:'6th', color:'var(--muted)'},
+      {pos:'WR', pct:83, rankLabel:'2nd', color:accent},
+      {pos:'TE', pct:44, rankLabel:'8th', color:'var(--muted)'},
+    ].map(p=>({pos:p.pos, rankLabel:p.rankLabel + ' /12',
+      fillStyle: barFill(p.pct, p.color),
+      rankColor: p.pct >= 80 ? 'var(--green)' : (p.pct <= 35 ? 'var(--red)' : 'var(--muted)')}));
+
+    const slot = (s) => {
+      const base = 'font-family:var(--font-mono);font-size:9.5px;font-weight:600;padding:3px 5px;border-radius:4px;width:36px;text-align:center;flex-shrink:0;';
+      if (s === 'BN') return base + 'background:var(--surface-2);color:var(--faint);border:1px solid var(--border);';
+      return base + `background:color-mix(in oklch, ${accent} 15%, transparent);color:${accent};border:1px solid color-mix(in oklch, ${accent} 38%, transparent);`;
+    };
+    const roster = [
+      {slot:'QB', name:'Jayden Daniels', vor:'68.1', age:'25', bench:false},
+      {slot:'RB', name:'Jahmyr Gibbs', vor:'79.4', age:'23', bench:false},
+      {slot:'RB', name:'James Cook', vor:'44.0', age:'26', bench:false},
+      {slot:'WR', name:'Ja’Marr Chase', vor:'91.2', age:'25', bench:false},
+      {slot:'WR', name:'Nico Collins', vor:'53.8', age:'26', bench:false},
+      {slot:'TE', name:'Trey McBride', vor:'31.5', age:'25', bench:false},
+      {slot:'FLEX', name:'Chris Godwin', vor:'22.7', age:'30', bench:false},
+      {slot:'BN', name:'Jaylen Wright', vor:'9.4', age:'22', bench:true},
+      {slot:'BN', name:'Keon Coleman', vor:'11.1', age:'22', bench:true},
+      {slot:'BN', name:'Cooper Kupp', vor:'6.0', age:'32', bench:true},
+    ];
+    const rosterRows = roster.map(r=>({
+      slot:r.slot, name:r.name, age:r.age,
+      slotStyle: slot(r.slot),
+      nameColor: r.bench ? 'var(--muted)' : 'var(--text)',
+      vor: r.vor,
+      vorColor: r.bench ? 'var(--faint)' : (parseFloat(r.vor) < 15 ? 'var(--red)' : 'var(--text)'),
+    }));
+
+    const raw = [
+      {name:'Bell Cow Club',     vorS:361.0, vorF:412.2, rec:'8-1', standRank:1},
+      {name:'Zero RB Truthers',  vorS:344.5, vorF:379.9, rec:'6-3', standRank:4},
+      {name:'Team Schroeder',    vorS:332.8, vorF:401.0, rec:'7-2', standRank:2, you:true},
+      {name:'Dynasty or Bust',   vorS:321.7, vorF:355.1, rec:'6-3', standRank:3},
+      {name:'The Rebuild',       vorS:250.2, vorF:333.4, rec:'3-6', standRank:9},
+      {name:'Championship Window',vorS:305.9, vorF:340.0, rec:'5-4', standRank:5},
+      {name:'Taxi Squad',        vorS:281.4, vorF:349.7, rec:'5-4', standRank:6},
+      {name:'Sell High',         vorS:268.0, vorF:291.2, rec:'4-5', standRank:7},
+      {name:'Rings & Things',    vorS:255.6, vorF:300.8, rec:'4-5', standRank:8},
+      {name:'Full Rebuild Mode', vorS:229.9, vorF:318.0, rec:'2-7', standRank:11},
+      {name:'Bench Depth',       vorS:238.1, vorF:270.4, rec:'3-6', standRank:10},
+      {name:'Draft Picks R Us',  vorS:205.3, vorF:281.6, rec:'1-8', standRank:12},
+    ];
+    const sorted = raw.map(t=>({...t, v: scope === 'full' ? t.vorF : t.vorS})).sort((a,b)=> b.v - a.v);
+    const teamRows = sorted.map((t,i)=>{
+      const powerRank = i + 1;
+      const d = t.standRank - powerRank;
+      return {
+        rank: powerRank, name: t.name, isYou: !!t.you,
+        nameWeight: t.you ? 700 : 500,
+        nameColor: t.you ? accent : 'var(--text)',
+        vor: t.v.toFixed(1), rec: t.rec,
+        delta: d === 0 ? '—' : (d > 0 ? '+' + d : String(d)),
+        deltaColor: d > 0 ? 'var(--green)' : (d < 0 ? 'var(--red)' : 'var(--faint)'),
+        rowStyle: t.you ? `background:color-mix(in oklch, ${accent} 8%, transparent);` : '',
+      };
+    });
+
+    // draft capital
+    const chip = (label, traded) => ({
+      label,
+      style: 'font-family:var(--font-mono);font-size:9.5px;font-weight:600;padding:2px 6px;border-radius:4px;white-space:nowrap;' +
+        (traded
+          ? 'background:color-mix(in oklch, var(--amber) 12%, transparent);color:var(--amber);border:1px solid color-mix(in oklch, var(--amber) 35%, transparent);'
+          : 'background:color-mix(in oklch, var(--violet) 12%, transparent);color:var(--violet);border:1px solid color-mix(in oklch, var(--violet) 35%, transparent);'),
+    });
+    const capital = [
+      {name:'Team Schroeder', you:true, p26:[chip('1.02 via Picks R Us',true), chip('2.01',false)], p27:[chip('1.xx',false), chip('2.xx',false)]},
+      {name:'Full Rebuild Mode', p26:[chip('1.01',false), chip('1.05 via Sell High',true), chip('2.03',false)], p27:[chip('1.xx',false)]},
+      {name:'The Rebuild', p26:[chip('1.04',false), chip('2.04',false), chip('2.08 via Taxi Squad',true)], p27:[chip('1.xx',false), chip('2.xx',false)]},
+      {name:'Draft Picks R Us', p26:[chip('2.02',false)], p27:[chip('1.xx',false), chip('2.xx',false)]},
+      {name:'Bell Cow Club', p26:[chip('1.12',false), chip('2.12',false)], p27:[chip('1.xx',false)]},
+      {name:'Championship Window', p26:[chip('1.08',false)], p27:[]},
+    ];
+    const capRows = capital.map((c,i)=>({
+      rank: i + 1, name: c.name, isYou: !!c.you,
+      nameWeight: c.you ? 700 : 500,
+      nameColor: c.you ? accent : 'var(--text)',
+      picks26: c.p26, picks27: c.p27,
+      rowStyle: c.you ? `background:color-mix(in oklch, ${accent} 8%, transparent);` : '',
+    }));
+
+    return { accent, posTabs, scopeTabs, vorColLabel, posBars, rosterRows, teamRows, capRows };
+  }
+}
+</script>
+</body>
+</html>
