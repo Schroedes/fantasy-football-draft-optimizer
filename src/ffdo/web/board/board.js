@@ -173,34 +173,44 @@ let _leagueKey = null;
 let _container = null;
 let _meta = null;
 
-let state = {
-  pos: "ALL",
-  hideDrafted: true,
-  search: "",
-  sortKey: "vor",
-  sortDir: "desc",
-  // True until the user manually clicks a sort header. While true, the
-  // snake board's default sort follows lineup_value instead of raw vor --
-  // the nudge toward whatever position you're actually thin at -- without
-  // permanently overriding a sort the user picked for themselves.
-  sortKeyIsDefault: true,
-  nominatedId: null,
-  bid: 0,
-  // The player_id of the last live nomination we auto-applied from Sleeper
-  // (distinct from `nominatedId`, which also changes on a manual row click).
-  // Lets us tell "a new nomination just happened" from "still the same one".
-  liveNominatedId: null,
-  // True while `bid` should keep following Sleeper's live high offer on
-  // every poll. A manual bid nudge (or inspecting a different player) sets
-  // this false; it resumes once the next real nomination comes in.
-  bidIsLive: true,
-  expandedRoster: null,
-  data: null,
-  // setInterval handles, owned by mount(); cleared when the draft completes
-  // and the screen switches to season mode.
-  pollId: null,
-  livePollId: null,
-};
+// Every mutable bit of board UI state, rebuilt from scratch on each mount() so
+// a league switch in the shell (which re-imports this cached module and calls
+// mount again) never inherits the previous league's filter/sort/nomination/
+// data -- `data: null` in particular closes a stale-render flash where
+// refreshLive's `if (!state.data) return` guard would pass on the old
+// league's payload before the new league's first refresh() resolves.
+function freshState() {
+  return {
+    pos: "ALL",
+    hideDrafted: true,
+    search: "",
+    sortKey: "vor",
+    sortDir: "desc",
+    // True until the user manually clicks a sort header. While true, the
+    // snake board's default sort follows lineup_value instead of raw vor --
+    // the nudge toward whatever position you're actually thin at -- without
+    // permanently overriding a sort the user picked for themselves.
+    sortKeyIsDefault: true,
+    nominatedId: null,
+    bid: 0,
+    // The player_id of the last live nomination we auto-applied from Sleeper
+    // (distinct from `nominatedId`, which also changes on a manual row click).
+    // Lets us tell "a new nomination just happened" from "still the same one".
+    liveNominatedId: null,
+    // True while `bid` should keep following Sleeper's live high offer on
+    // every poll. A manual bid nudge (or inspecting a different player) sets
+    // this false; it resumes once the next real nomination comes in.
+    bidIsLive: true,
+    expandedRoster: null,
+    data: null,
+    // setInterval handles, owned by mount(); cleared when the draft completes
+    // and the screen switches to season mode.
+    pollId: null,
+    livePollId: null,
+  };
+}
+
+let state = freshState();
 
 async function refresh() {
   try {
@@ -729,10 +739,14 @@ function renderSeasonMode(container, meta) {
       </div>
     </section>`;
   container.querySelector("#fmt-override").onchange = (e) => {
+    // Fire-and-forget by design -- the switcher label is app.js's concern, not
+    // this placeholder's -- but a failure shouldn't vanish silently.
     fetch(`/api/leagues/${encodeURIComponent(meta.league_key)}`, {
       method: "PATCH", headers: { "content-type": "application/json" },
       body: JSON.stringify({ format_override: e.target.value }),
-    });
+    })
+      .then(r => { if (!r.ok) console.warn("format override failed", r.status); })
+      .catch(err => console.warn("format override failed", err));
   };
 }
 
@@ -831,11 +845,12 @@ export function mount(container, leagueKey, meta) {
     link.href = "/board/board.css";
     document.head.appendChild(link);
   }
-  // Defensive: if a previous board is still mounted (e.g. the shell swapped
-  // leagues without a full reload), stop its pollers before starting ours so
-  // they don't run in parallel against the module-level `state`.
+  // If a previous board is still mounted (the shell swapped leagues without a
+  // full reload), stop its pollers, then wipe every carried-over bit of UI
+  // state so league B never opens wearing league A's filter/sort/nomination.
   clearInterval(state.pollId);
   clearInterval(state.livePollId);
+  state = freshState();
   _leagueKey = leagueKey;
   _container = container;
   _meta = meta;

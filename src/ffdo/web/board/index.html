@@ -16,8 +16,12 @@ import { mount } from "./board.js";
 const key = new URLSearchParams(location.search).get("league");
 if (!key) { document.getElementById("board-root").textContent = "No league specified — open this board from the app."; }
 else {
-  const meta = await (await fetch(`/api/leagues/${encodeURIComponent(key)}`)).json();
-  mount(document.getElementById("board-root"), key, meta);
+  const res = await fetch(`/api/leagues/${encodeURIComponent(key)}`);
+  if (!res.ok) { document.getElementById("board-root").textContent = "League not found."; }
+  else {
+    const meta = await res.json();
+    mount(document.getElementById("board-root"), key, meta);
+  }
 }
 </script>
 </body>
