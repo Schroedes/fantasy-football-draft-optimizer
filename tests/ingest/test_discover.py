@@ -55,3 +55,18 @@ def test_resolve_user_id_raises_connect_error_on_404():
 
     with pytest.raises(ConnectError, match="Username not found"):
         discover.resolve_user_id(_client(handler), "ghost")
+
+
+def test_resolve_user_id_raises_connect_error_on_a_200_null_body():
+    """Sleeper answers an unknown username with `200 null`, not a 404 -- so
+    the status-error arm never fires and `user_mod.parse(None)` would raise a
+    bare TypeError, surfacing on the discovery screen as a 500 instead of
+    "Username not found"."""
+    def handler(request):
+        # A literal `null` body, which is what Sleeper actually sends --
+        # httpx's `json=None` kwarg means "no json", not "the value null".
+        return httpx.Response(200, content=b"null",
+                              headers={"content-type": "application/json"})
+
+    with pytest.raises(ConnectError, match="Username not found"):
+        discover.resolve_user_id(_client(handler), "ghost")

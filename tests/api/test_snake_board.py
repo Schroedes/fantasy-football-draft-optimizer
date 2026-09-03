@@ -109,10 +109,11 @@ def test_snake_board_exposes_lineup_value_favoring_unfilled_positions():
 
 
 def test_snake_board_lineup_value_falls_back_to_fresh_roster_when_unset():
-    """FFDO_ROSTER_ID unset must show 'as if starting fresh' lineup value,
-    not silently attach to whichever roster_id happens to be None on a
-    commissioner/keeper pick -- same fallback the rest of the board applies
-    elsewhere (auction's positional_budget, max_bid, etc.)."""
+    """`roster_id=None` (unresolved on the tracked league) must show 'as if
+    starting fresh' lineup value, not silently attach to whichever roster_id
+    happens to be None on a commissioner/keeper pick -- same fallback the rest
+    of the board applies elsewhere (auction's positional_budget, max_bid,
+    etc.)."""
     league = _league()
     valued = _valued()
     out = board.build_snake_board(league, _state(), valued,

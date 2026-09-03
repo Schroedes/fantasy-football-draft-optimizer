@@ -84,9 +84,10 @@ def test_max_bid_reflects_the_users_roster_state():
 
 
 def test_max_bid_falls_back_to_a_fresh_roster_when_roster_id_is_unknown():
-    """FFDO_ROSTER_ID is optional. Without it, `roster_id` is None and the
-    board must show an honestly-labeled 'starting fresh' max bid rather
-    than silently attributing another roster's spend to the user.
+    """`roster_id` is optional on a tracked league (a mock the user hasn't
+    taken a slot in yet, a league whose roster couldn't be resolved). When it
+    is None, the board must show an honestly-labeled 'starting fresh' max bid
+    rather than silently attributing another roster's spend to the user.
     """
     league = _league()
     state = draft.parse({"draft_id": "d", "type": "auction", "status": "drafting",

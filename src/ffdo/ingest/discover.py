@@ -19,6 +19,12 @@ def resolve_user_id(sleeper: SleeperClient, username: str) -> str:
         raw = sleeper.get_json(f"{V1}/user/{username}")
     except httpx.HTTPStatusError as exc:
         raise ConnectError("Username not found") from exc
+    # Sleeper answers an unknown username with `200 null` rather than a 404,
+    # so the except arm above never fires -- without this guard
+    # `user_mod.parse(None)` raises a bare TypeError and the discovery screen
+    # gets a 500 where it should get "Username not found".
+    if not raw:
+        raise ConnectError("Username not found")
     return user_mod.parse(raw)[0]
 
 

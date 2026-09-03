@@ -132,6 +132,26 @@ def test_migration_is_idempotent_and_skipped_when_leagues_exist(tmp_path):
     assert len(store2.list()) == 1
 
 
+def test_migration_does_not_crash_when_a_migrated_file_already_exists(tmp_path):
+    """`Path.rename` raises FileExistsError on Windows when the target is
+    already there -- so a user who migrated once, then restored a
+    `session.json` (or pointed a fresh store at the same data dir), crashed
+    the app on startup. `os.replace` overwrites instead."""
+    legacy = tmp_path / "session.json"
+    legacy.write_text(_json.dumps(_LEGACY_SESSION), encoding="utf-8")
+    LeagueStore(tmp_path / "ffdo.db", legacy_session_path=legacy).list()
+    assert (tmp_path / "session.json.migrated").exists()
+
+    # Same legacy path again, but a fresh DB so the empty-table guard does not
+    # short-circuit before the rename -- this is the call that used to raise.
+    legacy.write_text(_json.dumps(_LEGACY_SESSION), encoding="utf-8")
+    store2 = LeagueStore(tmp_path / "ffdo2.db", legacy_session_path=legacy)
+
+    assert len(store2.list()) == 1
+    assert not legacy.exists()
+    assert (tmp_path / "session.json.migrated").exists()
+
+
 def test_migration_carries_espn_credentials(tmp_path):
     legacy = tmp_path / "session.json"
     espn_session = {**_LEGACY_SESSION, "provider": "espn",

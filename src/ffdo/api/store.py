@@ -9,6 +9,7 @@ local process for one user, so there is no concurrency model beyond
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -158,7 +159,12 @@ class LeagueStore:
             conn.rollback()  # drop any half-written row; caller's commit must not persist it
             return
         conn.commit()
-        path.rename(path.with_name(path.name + ".migrated"))
+        # `os.replace`, not `Path.rename`: on Windows a rename onto an
+        # existing target raises FileExistsError, so a user who had already
+        # migrated once and then restored a `session.json` (or pointed a
+        # second store at the same data dir) would crash the app on startup.
+        # `os.replace` overwrites atomically on both POSIX and Windows.
+        os.replace(path, path.with_name(path.name + ".migrated"))
 
     # -- tracked leagues -------------------------------------------------
 

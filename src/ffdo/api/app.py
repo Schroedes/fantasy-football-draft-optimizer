@@ -317,6 +317,10 @@ def create_app() -> FastAPI:
         sleeper = client_mod.SleeperClient()
         try:
             profiles, espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="Couldn't reach Sleeper, try again") from exc
         finally:
             sleeper.close()
         try:
@@ -325,6 +329,12 @@ def create_app() -> FastAPI:
                 profiles, espn_id_index)
         except espn_connect_mod.ConnectError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except httpx.HTTPError as exc:
+            # Same reasoning as `_sleeper_discover`'s 502 arm: an ESPN outage
+            # is neither the user's mistake nor this app's bug, and a bare 500
+            # would point them at their own input.
+            raise HTTPException(
+                status_code=502, detail="Couldn't reach ESPN, try again") from exc
 
     def _require_espn_credential(action: str = "using this league"):
         """Two genuinely different failures, two different instructions: no
@@ -415,9 +425,15 @@ def create_app() -> FastAPI:
         Credentials are never taken from the request body -- the username /
         cookies come from what `POST /api/providers/connect` already stored,
         which is what keeps request payloads credential-free.
+
+        All-or-nothing: every item is resolved against its provider FIRST and
+        only the fully-resolved batch is persisted. Upserting inside the
+        resolve loop meant a batch that failed on item 2 left item 1 tracked
+        while the caller got a 400 and no `leagues` body -- a half-written
+        state the discovery screen has no way to see or reconcile.
         """
         items = payload.get("leagues") or [payload]
-        results: list[dict] = []
+        resolved: list[TrackedLeague] = []
         cred = None
         lg: TrackedLeague | None = None
 
@@ -443,6 +459,13 @@ def create_app() -> FastAPI:
                         lg = connect_mod.track(sleeper, pid, cred.user_identifier)
                 except connect_mod.ConnectError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
+                except httpx.HTTPError as exc:
+                    # Same arm `_sleeper_discover` already has: a provider
+                    # outage is not the user's mistake, and a bare 500 would
+                    # point them at their own input.
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Couldn't reach Sleeper, try again") from exc
                 finally:
                     sleeper.close()
             elif provider == "espn":
@@ -451,8 +474,10 @@ def create_app() -> FastAPI:
             else:
                 raise HTTPException(status_code=400, detail="Unknown provider")
 
-            _STORE.upsert(lg)
-            results.append(_league_public_dict(lg))
+            resolved.append(lg)
+
+        for tracked in resolved:
+            _STORE.upsert(tracked)
 
         # One warm per dispatch, for the last league tracked. `_warm_caches`
         # populates the players cache (shared) plus the season- and
@@ -463,7 +488,7 @@ def create_app() -> FastAPI:
         background_tasks.add_task(
             _warm_caches, lg.season, lg.provider_league_id, lg.provider,
             cred.espn_s2, cred.swid)
-        return {"leagues": results}
+        return {"leagues": [_league_public_dict(t) for t in resolved]}
 
     @app.get("/api/leagues")
     def list_leagues_endpoint() -> list[dict]:
@@ -535,6 +560,10 @@ def create_app() -> FastAPI:
                         sleeper, lg.provider_league_id, cred.user_identifier)
             except connect_mod.ConnectError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except httpx.HTTPError as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Couldn't reach Sleeper, try again") from exc
             finally:
                 sleeper.close()
         else:

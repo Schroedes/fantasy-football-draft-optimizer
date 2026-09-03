@@ -150,6 +150,38 @@ a:hover { color: var(--text); }
   cursor: pointer;
 }
 
+/* ---- manual add-by-ID disclosure (spec §6.1) ---- */
+.manual-add { margin-top: 22px; border-top: 1px solid var(--border); padding-top: 16px; }
+.manual-add summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  list-style: none;
+}
+.manual-add summary::-webkit-details-marker { display: none; }
+#manual-form { display: flex; flex-direction: column; gap: 14px; max-width: 420px; margin-top: 16px; }
+#manual-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+#manual-form input, #manual-form select {
+  font: 14px var(--font-mono);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px 12px;
+}
+#manual-form input:focus, #manual-form select:focus { outline: none; border-color: var(--accent); }
+#manual-form button[type="submit"] {
+  align-self: flex-start;
+  font: 600 14px var(--font-sans);
+  color: #0a0f14;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  padding: 12px 22px;
+  cursor: pointer;
+}
+
 .badge {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -181,6 +213,46 @@ a:hover { color: var(--text); }
   background: color-mix(in oklch, var(--green) 14%, transparent);
   border-color: color-mix(in oklch, var(--green) 40%, transparent);
 }
+/* League stat grid + roster-slot chips (spec §6.3). Ported from the deleted
+   web/main.css connected view, re-scoped to the season-mode card. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  width: 100%;
+}
+.stat { display: flex; flex-direction: column; gap: 4px; }
+.stat .label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--faint);
+}
+.stat b {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--accent) 16%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in oklch, var(--accent) 40%, transparent);
+}
+.chip.bn {
+  background: var(--surface-2);
+  color: var(--faint);
+  border-color: var(--border);
+}
+
 .format-override { margin-top: 6px; }
 .format-override label {
   display: flex; align-items: center; gap: 10px;

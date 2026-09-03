@@ -165,6 +165,30 @@ def test_track_raises_when_username_is_not_found():
         connect.track(_client(handler), "L1", "ghost")
 
 
+def test_track_raises_when_sleeper_answers_an_unknown_username_with_200_null():
+    """Sleeper does not 404 an unknown username -- it answers `200 null`. The
+    404 arm above therefore never fires, and without an explicit falsy guard
+    `user_mod.parse(None)` raises a bare TypeError that surfaces as a 500."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url.endswith("/user/ghost"):
+            # A literal `null` body, which is what Sleeper actually sends --
+            # httpx's `json=None` kwarg means "no json", not "the value null".
+            return httpx.Response(
+                200, content=b"null",
+                headers={"content-type": "application/json"})
+        if url.endswith("/league/L1/drafts"):
+            return httpx.Response(200, json=DRAFTS_RAW)
+        if url.endswith("/league/L1"):
+            return httpx.Response(200, json=LEAGUE_RAW)
+        if url.endswith("/draft/D1"):
+            return httpx.Response(200, json=DRAFT_META)
+        raise AssertionError(f"unexpected URL: {url}")
+
+    with pytest.raises(connect.ConnectError, match="Username not found"):
+        connect.track(_client(handler), "L1", "ghost")
+
+
 def test_track_raises_when_the_user_has_no_roster_in_this_league():
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -304,6 +328,24 @@ def test_track_mock_raises_when_username_is_not_found():
         url = str(request.url)
         if url.endswith("/user/ghost"):
             return httpx.Response(404, json={"error": "not found"})
+        if url.endswith("/draft/1397145756879605760"):
+            return httpx.Response(200, json=MOCK_DRAFT_MID_DRAFT)
+        raise AssertionError(f"unexpected URL: {url}")
+
+    with pytest.raises(connect.ConnectError, match="Username not found"):
+        connect.track_mock(_mock_client(handler), "1397145756879605760", "ghost")
+
+
+def test_track_mock_raises_when_sleeper_answers_the_username_with_200_null():
+    """Same `200 null` unknown-username shape `track()` guards against."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url.endswith("/user/ghost"):
+            # A literal `null` body, which is what Sleeper actually sends --
+            # httpx's `json=None` kwarg means "no json", not "the value null".
+            return httpx.Response(
+                200, content=b"null",
+                headers={"content-type": "application/json"})
         if url.endswith("/draft/1397145756879605760"):
             return httpx.Response(200, json=MOCK_DRAFT_MID_DRAFT)
         raise AssertionError(f"unexpected URL: {url}")

@@ -82,6 +82,24 @@ function renderConnect(tracked) {
         <button type="submit">Find my leagues</button>
       </form>
       <div id="discovered"></div>
+      <details class="manual-add">
+        <summary>+ add by league ID / draft link</summary>
+        <form id="manual-form">
+          <label>Provider
+            <select name="provider">
+              <option value="sleeper">Sleeper</option>
+              <option value="sleeper-mock">Sleeper mock draft</option>
+              <option value="espn">ESPN</option>
+            </select>
+          </label>
+          <label>League ID, or a Sleeper draft link/ID for a mock
+            <input name="provider_league_id" autocomplete="off">
+          </label>
+          <label>Season <input name="season" value="${new Date().getFullYear()}"></label>
+          <p class="error" id="manual-error" hidden></p>
+          <button type="submit">Add</button>
+        </form>
+      </details>
     </section>`;
 
   let provider = "sleeper";
@@ -113,6 +131,32 @@ function renderConnect(tracked) {
       renderDiscovered(leagues, payload.season);
     } catch (ex) { err.textContent = ex.message; err.hidden = false; }
   };
+
+  // Spec §6.1's manual add-by-ID path: discovery misses private / orphaned
+  // leagues entirely, and a Sleeper mock draft has no league behind it to
+  // discover at all, so this is the only way to track either. Posts the
+  // single-object body `POST /api/leagues/track` accepts alongside
+  // `{leagues: [...]}`. A pasted https://sleeper.app/draft/nfl/<id> link is
+  // fine as-is for `sleeper-mock` -- the backend runs `_extract_draft_id`
+  // over the value, so there is nothing to strip client-side.
+  view.querySelector("#manual-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const err = view.querySelector("#manual-error");
+    err.hidden = true;
+    try {
+      const resp = await getJSON("/api/leagues/track",
+        { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            provider: fd.get("provider"),
+            provider_league_id: fd.get("provider_league_id"),
+            season: Number(fd.get("season")),
+          }) });
+      const added = resp.leagues && resp.leagues[0];
+      if (!added) throw new Error("That league could not be added.");
+      location.hash = `#/league/${added.league_key}`;
+    } catch (ex) { err.textContent = ex.message; err.hidden = false; }
+  };
 }
 
 function renderDiscovered(leagues, season) {
@@ -131,17 +175,26 @@ function renderDiscovered(leagues, season) {
           </label>
         </li>`).join("")}
     </ul>
-    <button id="track-selected">Track selected leagues</button>`;
+    <button id="track-selected">Track selected leagues</button>
+    <p class="error" id="track-error" hidden></p>`;
   box.querySelector("#track-selected").onclick = async () => {
     const picks = [...box.querySelectorAll("input[type=checkbox]:checked:not(:disabled)")]
       .map(cb => leagues[Number(cb.dataset.i)])
       .map(l => ({ provider: l.provider, provider_league_id: l.provider_league_id,
                    season: l.season }));
+    const err = box.querySelector("#track-error");
+    err.hidden = true;
     if (!picks.length) return;
-    const { leagues: tracked } = await getJSON("/api/leagues/track",
-      { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ leagues: picks }) });
-    location.hash = `#/league/${tracked[0].league_key}`;
+    // Without this arm the whole click handler rejected silently -- a 400/502
+    // from /api/leagues/track left the user staring at an unchanged checklist
+    // with no indication anything had happened.
+    try {
+      const { leagues: tracked } = await getJSON("/api/leagues/track",
+        { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ leagues: picks }) });
+      if (!tracked || !tracked.length) throw new Error("No leagues were tracked.");
+      location.hash = `#/league/${tracked[0].league_key}`;
+    } catch (ex) { err.textContent = ex.message; err.hidden = false; }
   };
 }
 
@@ -153,20 +206,21 @@ async function renderLeague(key) {
   catch (ex) { view.innerHTML = `<p class="error">${escapeHtml(ex.message)}</p>`; return; }
 
   view.innerHTML = `<div id="league-body">Loading ${escapeHtml(meta.name)}…</div>`;
-  // board.js (loaded by the board view) decides board-vs-season-mode from
-  // the live board poll; see Task 13.
+  // board.js decides board-vs-season-mode itself, from the live board poll's
+  // draft_status -- this shell only hands it the container and the league.
   window.__ffdoLeagueKey = key;
   window.__ffdoLeagueMeta = meta;
-  // Task 13 replaces board.js with a real module exporting `mount`; until
-  // then it's a plain auto-running script that throws on eval against this
-  // shell's DOM, so the dynamic import rejects. Swallow it here.
+  // board.js is an ES module exporting mount(); a rejection here is a genuine
+  // load or runtime error (bad network, syntax error, throw inside mount), not
+  // an expected not-yet-implemented state -- so say so rather than promising a
+  // future release.
   try {
     const mod = await import("./board/board.js");
     if (mod.mount) mod.mount(document.getElementById("league-body"), key, meta);
   } catch (e) {
     document.getElementById("league-body").textContent =
-      "Board view loads in the next release.";
-    console.warn("board module not ready", e);
+      "Couldn't load the board — check the console.";
+    console.error("board module failed to load", e);
   }
 }
 

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -357,6 +358,116 @@ def test_track_endpoint_maps_a_connect_error_to_400(monkeypatch):
 
     assert res.status_code == 400
     assert res.json()["detail"] == "League not found"
+
+
+def _unreachable_client():
+    """A provider client whose every `get_json` fails at the transport layer,
+    the way an outage (or a dropped connection) actually presents. Signature is
+    wide enough to stand in for both `SleeperClient.get_json(url)` and
+    `EspnClient.get_json(url, extra_headers=None, max_attempts=4)`."""
+
+    class _UnreachableClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def get_json(self, url: str, *args, **kwargs):
+            raise httpx.ConnectError("boom")
+
+        def close(self) -> None:
+            pass
+
+    return _UnreachableClient
+
+
+def test_track_endpoint_502s_when_sleeper_is_unreachable(monkeypatch):
+    """Spec §5.4: a provider outage is a 502, not a 500 -- a bare 500 tells the
+    user their own input was wrong. `_sleeper_discover` already had this arm;
+    track did not."""
+    app_mod._STORE.put_credential(
+        ProviderCredential("sleeper", "noah", None, None, "t"))
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _unreachable_client())
+
+    client = TestClient(create_app())
+    res = client.post("/api/leagues/track", json={
+        "provider": "sleeper", "provider_league_id": "L9", "season": 2026})
+
+    assert res.status_code == 502
+    assert "try again" in res.json()["detail"]
+    assert app_mod._STORE.list() == []
+
+
+def test_track_endpoint_502s_when_sleeper_is_unreachable_for_a_mock(monkeypatch):
+    app_mod._STORE.put_credential(
+        ProviderCredential("sleeper", "noah", None, None, "t"))
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _unreachable_client())
+
+    client = TestClient(create_app())
+    res = client.post("/api/leagues/track", json={
+        "provider": "sleeper-mock", "provider_league_id": "D9", "season": 2026})
+
+    assert res.status_code == 502
+    assert app_mod._STORE.list() == []
+
+
+def test_track_endpoint_502s_when_espn_is_unreachable(monkeypatch):
+    app_mod._STORE.put_credential(
+        ProviderCredential("espn", "{SWID}", "s2val", "{SWID}", "t"))
+    # Sleeper stays reachable (the ESPN branch needs its player profiles for
+    # the crosswalk); only ESPN's own client fails, so this exercises the
+    # ESPN arm rather than the Sleeper one.
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeSleeperClient)
+    monkeypatch.setattr("ffdo.ingest.espn.connect.EspnClient", _unreachable_client())
+
+    client = TestClient(create_app())
+    res = client.post("/api/leagues/track", json={
+        "provider": "espn", "provider_league_id": "9", "season": 2026})
+
+    assert res.status_code == 502
+    assert "try again" in res.json()["detail"]
+    assert app_mod._STORE.list() == []
+
+
+def test_refresh_502s_when_sleeper_is_unreachable(monkeypatch, tmp_path):
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_tracked())
+    store.put_credential(ProviderCredential("sleeper", "noah", None, None, "t"))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _unreachable_client())
+
+    client = TestClient(create_app())
+    res = client.post("/api/leagues/sleeper:L123:2025/refresh")
+
+    assert res.status_code == 502
+
+
+def test_track_endpoint_persists_nothing_when_a_later_item_fails(monkeypatch):
+    """All-or-nothing. Upserting inside the resolve loop left item 1 tracked
+    while the caller got a 400 and no `leagues` body -- a half-written batch
+    the discovery screen has no way to see or reconcile."""
+    from ffdo.ingest import connect as connect_mod
+
+    app_mod._STORE.put_credential(
+        ProviderCredential("sleeper", "noah", None, None, "t"))
+
+    def fake_track(sleeper, league_id, username):
+        if league_id == "L2":
+            raise connect_mod.ConnectError("League not found")
+        return _tracked(league_key=f"sleeper:{league_id}:2026",
+                        provider_league_id=league_id, season=2026)
+
+    monkeypatch.setattr("ffdo.ingest.connect.track", fake_track)
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeSleeperClient)
+
+    client = TestClient(create_app())
+    res = client.post("/api/leagues/track", json={"leagues": [
+        {"provider": "sleeper", "provider_league_id": "L1", "season": 2026},
+        {"provider": "sleeper", "provider_league_id": "L2", "season": 2026},
+    ]})
+
+    assert res.status_code == 400
+    assert res.json()["detail"] == "League not found"
+    # L1 resolved cleanly but must NOT have been persisted.
+    assert app_mod._STORE.list() == []
 
 
 def test_track_endpoint_warms_the_caches_for_the_new_league(monkeypatch):

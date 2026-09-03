@@ -212,11 +212,24 @@ function freshState() {
 
 let state = freshState();
 
+// Bumped by every mount(). Both pollers capture it before their first await
+// and bail the moment it moves, because mount() reassigns `state` and installs
+// new interval ids SYNCHRONOUSLY on a league switch while an in-flight fetch
+// for the previous league is still outstanding. Without this, league A's late
+// response resumes against league B's `state` -- clearing B's fresh interval
+// ids (permanently killing its pollers), or forcing B into season mode off A's
+// `draft_status: "complete"`, with no path back short of a reload.
+let _epoch = 0;
+
 async function refresh() {
+  const myEpoch = _epoch;
   try {
     const res = await fetch(`/api/leagues/${encodeURIComponent(_leagueKey)}/board`);
+    if (myEpoch !== _epoch) return;
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    state.data = await res.json();
+    const data = await res.json();
+    if (myEpoch !== _epoch) return;
+    state.data = data;
     // The draft finished: stop polling the board and hand the screen to the
     // season-mode placeholder. Only the heavy refresh() poll carries
     // draft_status (see Ruling 1) -- refreshLive() never does -- so this is
@@ -230,25 +243,31 @@ async function refresh() {
     document.getElementById("updated").textContent = new Date().toLocaleTimeString();
     render();
   } catch (err) {
+    // Same epoch guard: a stale league's failed fetch must not stamp "error"
+    // over the league the user is now actually looking at.
+    if (myEpoch !== _epoch) return;
     document.getElementById("updated").textContent = "error";
     console.error("board refresh failed", err);
   }
 }
 
-// `/api/board` recomputes VOR/baseline/rosters for the whole player pool on
-// every call, which is too slow to poll at auction speed -- see `refresh`
-// above, kept on its own slower interval for that data. Nomination and bid
-// don't need any of that: they come straight off Sleeper's draft metadata,
-// so `/api/board/live` fetches just that and this poll can run fast without
-// paying for the heavy rebuild. Skipped until the first full `refresh()`
-// lands, since it only patches fields onto `state.data` rather than
-// populating it.
+// `/api/leagues/{key}/board` recomputes VOR/baseline/rosters for the whole
+// player pool on every call, which is too slow to poll at auction speed -- see
+// `refresh` above, kept on its own slower interval for that data. Nomination
+// and bid don't need any of that: they come straight off Sleeper's draft
+// metadata, so `/api/leagues/{key}/board/live` fetches just that and this poll
+// can run fast without paying for the heavy rebuild. Skipped until the first
+// full `refresh()` lands, since it only patches fields onto `state.data`
+// rather than populating it.
 async function refreshLive() {
   if (!state.data) return;
+  const myEpoch = _epoch;
   try {
     const res = await fetch(`/api/leagues/${encodeURIComponent(_leagueKey)}/board/live`);
+    if (myEpoch !== _epoch) return;
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const live = await res.json();
+    if (myEpoch !== _epoch) return;
     state.data.live_nomination = live.live_nomination;
     state.data.picks_made = live.picks_made;
     applyLiveNomination();
@@ -718,10 +737,24 @@ function escapeHtml(s) {
 
 // Swaps the whole board out for the post-draft placeholder once the draft
 // completes. `meta` is the tracked-league record from
-// GET /api/leagues/{key}; its provider-set `name` is escaped with the same
-// helper the rest of this module uses, the format <option> values are
-// literals and safe unescaped.
+// GET /api/leagues/{key}; its provider-set `name`, `resolved_format` and
+// roster-slot labels are escaped with the same helper the rest of this module
+// uses (the numeric stats need none), and the format <option> values are
+// literals, safe unescaped.
+//
+// The stat grid and roster-slot chips are spec §6.3's "components already
+// rendered on today's connected view" -- they moved here verbatim in spirit
+// from the deleted web/main.js when the connected view was absorbed into this
+// screen.
 function renderSeasonMode(container, meta) {
+  const positions = meta.roster_positions || [];
+  const chips =
+    positions.filter(p => p !== "BN")
+      .map(p => `<span class="chip">${escapeHtml(p)}</span>`).join("") +
+    positions.filter(p => p === "BN")
+      .map(p => `<span class="chip bn">${escapeHtml(p)}</span>`).join("");
+  const scoringKeys = Object.keys(meta.scoring_settings || {}).length;
+
   container.innerHTML = `
     <section class="card season-mode">
       <span class="badge">DRAFT COMPLETE</span>
@@ -729,6 +762,13 @@ function renderSeasonMode(container, meta) {
       <p>${escapeHtml(meta.name)} has drafted. Roster analysis, standings, weekly lineups
          and waivers arrive in upcoming releases — each reads this league's
          own scoring and format.</p>
+      <div class="stat-grid">
+        <div class="stat"><span class="label">Teams</span><b>${meta.num_teams}</b></div>
+        <div class="stat"><span class="label">Format</span><b>${escapeHtml(meta.resolved_format)}</b></div>
+        <div class="stat"><span class="label">Scoring keys</span><b>${scoringKeys}</b></div>
+        <div class="stat"><span class="label">Budget</span><b>${meta.budget != null ? "$" + meta.budget : "—"}</b></div>
+      </div>
+      <div class="chip-row">${chips}</div>
       <div class="format-override">
         <label>Format
           <select id="fmt-override">
@@ -851,6 +891,7 @@ export function mount(container, leagueKey, meta) {
   clearInterval(state.pollId);
   clearInterval(state.livePollId);
   state = freshState();
+  _epoch++;
   _leagueKey = leagueKey;
   _container = container;
   _meta = meta;

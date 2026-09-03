@@ -22,7 +22,7 @@ from ffdo.ingest.client import V1, SleeperClient
 
 
 class ConnectError(Exception):
-    """A user-facing reason `resolve()` could not connect a league."""
+    """A user-facing reason `track()` could not connect a league."""
 
 
 def track(
@@ -58,6 +58,12 @@ def track(
         user_raw = sleeper.get_json(f"{V1}/user/{username}")
     except httpx.HTTPStatusError as exc:
         raise ConnectError("Username not found") from exc
+    # Sleeper answers an unknown username with `200 null`, not a 404 -- so the
+    # except arm above never fires and `user_mod.parse(None)` would raise a
+    # bare TypeError, surfacing as a 500 instead of the same clean, user-facing
+    # "Username not found" a real 404 already produces.
+    if not user_raw:
+        raise ConnectError("Username not found")
     user_id, _display_name = user_mod.parse(user_raw)
 
     rosters_raw = sleeper.get_json(f"{V1}/league/{league_id}/rosters")
@@ -129,6 +135,10 @@ def track_mock(
         user_raw = sleeper.get_json(f"{V1}/user/{username}")
     except httpx.HTTPStatusError as exc:
         raise ConnectError("Username not found") from exc
+    # Same `200 null` guard as `track()` above -- an unknown username is not a
+    # 404 from Sleeper, and `user_mod.parse(None)` is a TypeError/500.
+    if not user_raw:
+        raise ConnectError("Username not found")
     user_id, _display_name = user_mod.parse(user_raw)
 
     roster_id = mock_draft.resolve_roster_id(draft_raw, user_id)
