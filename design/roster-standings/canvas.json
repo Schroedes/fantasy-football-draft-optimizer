@@ -1,0 +1,14 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 90, "w": 1440, "h": 900, "title": "Season screen — redraft (two-panel, leading candidate)" },
+    { "file": "Dynasty.dc.html", "x": 1560, "y": 90, "w": 1440, "h": 900, "title": "Season screen — dynasty (adds draft capital)" },
+    { "file": "Stacked.dc.html", "x": 3120, "y": 90, "w": 1440, "h": 1180, "title": "Alt layout — full-width sections + sub-tabs" }
+  ],
+  "annotations": [
+    { "id": "note-intro", "x": 0, "y": -110, "w": 700, "text": "Sub-project #2 — Roster & standings. This replaces the foundation's 'Season mode — coming soon' placeholder as the #/league/{key} view for a drafted league. Player values are rest-of-season VOR (season-total projection minus games played), through a swappable interface #4 can replace." },
+    { "id": "note-main", "x": 0, "y": 1010, "w": 660, "text": "REDRAFT (leading candidate): two-panel. LEFT = your team — power-rank vs standings, positional-strength bars (rank /12), full roster by slot with ROS VOR, a 'thin at X' callout. RIGHT = league power ranking — position tabs (Overall/QB/RB/WR/TE), Starters-only vs Full-roster toggle, and a Delta column (power-rank spot minus standings spot). Everything visible at once; each panel is a bit dense." },
+    { "id": "note-dynasty", "x": 1560, "y": 1010, "w": 660, "text": "DYNASTY: same two-panel, but the RIGHT side splits into two stacked rankings — Power ranking (players) on top, Draft capital below (per-year pick chips, traded picks amber with 'via <team>', slot = original team's projected finish). Side-by-side per your ask: read 'good roster / weak picks' vs 'thin roster / loaded picks' directly. Blended score is the marked fast-follow. Sleeper dynasty/keeper only." },
+    { "id": "note-stacked", "x": 3120, "y": 1310, "w": 660, "text": "ALTERNATIVE layout: sub-tabs (Rankings / My roster) instead of two panels. Each section gets full width — more columns fit (Start VOR + Bench VOR + PF + PA + Delta all at once) — but you can't see your roster and the league ranking together. Trade-off: density vs. glanceability." }
+  ],
+  "launch": { "view": "canvas" }
+}
