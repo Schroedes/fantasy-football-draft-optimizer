@@ -4,6 +4,16 @@ const switcher = document.getElementById("league-switcher");
 
 const LAST_LEAGUE_KEY = "ffdo:lastLeagueKey";
 
+// Provider strings (league names, formats, statuses) are set by a league
+// commissioner -- a different person than the user -- so they're untrusted
+// input and must be escaped before reaching innerHTML. Same helper board.js
+// uses (see src/ffdo/web/board/board.js).
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
 async function getJSON(url, opts) {
   const res = await fetch(url, opts);
   if (!res.ok) {
@@ -22,8 +32,8 @@ function renderSwitcher(leagues, activeKey) {
   if (!leagues.length) { bar.hidden = true; return; }
   bar.hidden = false;
   switcher.innerHTML = leagues.map(l =>
-    `<option value="${l.league_key}"${l.league_key === activeKey ? " selected" : ""}>` +
-    `${l.name} — ${l.resolved_format}</option>`).join("");
+    `<option value="${escapeHtml(l.league_key)}"${l.league_key === activeKey ? " selected" : ""}>` +
+    `${escapeHtml(l.name)} — ${escapeHtml(l.resolved_format)}</option>`).join("");
   switcher.onchange = () => { location.hash = `#/league/${switcher.value}`; };
 }
 
@@ -80,6 +90,12 @@ function renderConnect(tracked) {
     view.querySelectorAll(".provider-toggle button").forEach(x => x.classList.toggle("on", x === b));
     view.querySelector('[data-fields="sleeper"]').hidden = provider !== "sleeper";
     view.querySelector('[data-fields="espn"]').hidden = provider !== "espn";
+    // Switching providers: drop the previous provider's error and any
+    // leagues discovered for it, so nothing stale lingers on screen.
+    const staleErr = view.querySelector("#connect-error");
+    staleErr.hidden = true;
+    staleErr.textContent = "";
+    view.querySelector("#discovered").innerHTML = "";
   });
 
   view.querySelector("#connect-form").onsubmit = async (e) => {
@@ -109,9 +125,9 @@ function renderDiscovered(leagues, season) {
         <li>
           <label>
             <input type="checkbox" data-i="${i}" ${l.already_tracked ? "checked disabled" : "checked"}>
-            <span class="lg-name">${l.name}</span>
-            <span class="badge">${l.format}</span>
-            <span class="badge muted">${l.draft_status || "—"}</span>
+            <span class="lg-name">${escapeHtml(l.name)}</span>
+            <span class="badge">${escapeHtml(l.format)}</span>
+            <span class="badge muted">${escapeHtml(l.draft_status || "—")}</span>
           </label>
         </li>`).join("")}
     </ul>
@@ -134,15 +150,24 @@ function renderDiscovered(leagues, season) {
 async function renderLeague(key) {
   let meta;
   try { meta = await getJSON(`/api/leagues/${encodeURIComponent(key)}`); }
-  catch (ex) { view.innerHTML = `<p class="error">${ex.message}</p>`; return; }
+  catch (ex) { view.innerHTML = `<p class="error">${escapeHtml(ex.message)}</p>`; return; }
 
-  view.innerHTML = `<div id="league-body">Loading ${meta.name}…</div>`;
+  view.innerHTML = `<div id="league-body">Loading ${escapeHtml(meta.name)}…</div>`;
   // board.js (loaded by the board view) decides board-vs-season-mode from
   // the live board poll; see Task 13.
   window.__ffdoLeagueKey = key;
   window.__ffdoLeagueMeta = meta;
-  const mod = await import("./board/board.js");
-  if (mod.mount) mod.mount(document.getElementById("league-body"), key, meta);
+  // Task 13 replaces board.js with a real module exporting `mount`; until
+  // then it's a plain auto-running script that throws on eval against this
+  // shell's DOM, so the dynamic import rejects. Swallow it here.
+  try {
+    const mod = await import("./board/board.js");
+    if (mod.mount) mod.mount(document.getElementById("league-body"), key, meta);
+  } catch (e) {
+    document.getElementById("league-body").textContent =
+      "Board view loads in the next release.";
+    console.warn("board module not ready", e);
+  }
 }
 
 window.addEventListener("hashchange", route);
