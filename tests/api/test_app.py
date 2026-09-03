@@ -380,6 +380,41 @@ def test_track_endpoint_warms_the_caches_for_the_new_league(monkeypatch):
         "the background warm must have populated the players cache")
     assert any("/projections/nfl/2026" in c for c in calls), (
         "the warm must use the tracked league's season, not a default")
+    # The contrast against test_tracking_a_mock_never_warms_the_team_name_cache:
+    # a REAL Sleeper league does warm the team-name cache, so that test is
+    # proving the gate discriminates, not that the warm never runs at all.
+    assert any("/league/L9/rosters" in c for c in calls), (
+        "a real Sleeper league must warm the team-name cache")
+
+
+def test_tracking_a_mock_never_warms_the_team_name_cache(monkeypatch):
+    """A `sleeper-mock` league has no league behind it -- its
+    `provider_league_id` IS a draft id -- so warming the team-name cache
+    would call `/league/<draft_id>/rosters`, which does not exist and raises
+    inside the background task. The warm gate is `provider == "sleeper"`
+    precisely, not merely `!= "espn"`."""
+    app_mod._STORE.put_credential(
+        ProviderCredential("sleeper", "noah", None, None, "t"))
+    monkeypatch.setattr(
+        "ffdo.ingest.connect.track_mock",
+        lambda sleeper, draft_id, username: _tracked(
+            league_key="sleeper-mock:D999:2026", provider="sleeper-mock",
+            provider_league_id="D999", draft_id="D999", season=2026,
+            is_mock=True))
+
+    FakeClient, calls = _recording_client({})
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    client = TestClient(create_app())
+    res = client.post("/api/leagues/track", json={
+        "provider": "sleeper-mock", "provider_league_id": "D999", "season": 2026})
+
+    assert res.status_code == 200
+    # The players/projections warm still happens -- only the team-name fetch
+    # is skipped.
+    assert any("/players/nfl" in c for c in calls)
+    assert not any("/rosters" in c or "/users" in c for c in calls), (
+        f"a mock draft has no /league/<id>/rosters to warm -- got {calls}")
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +503,35 @@ def test_patch_rejects_a_bogus_format(monkeypatch, tmp_path):
     assert store.get("sleeper:L123:2025").format_override is None
 
 
+def test_patch_with_an_empty_body_does_not_clear_the_override(monkeypatch, tmp_path):
+    """`payload.get("format_override")` returns None for `{}` just as it does
+    for an explicit `{"format_override": null}`. Without a presence check
+    those two are indistinguishable, so a PATCH carrying an unrelated (or
+    empty) body would silently wipe an override the user set deliberately."""
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_tracked(format_override="dynasty"))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+
+    client = TestClient(create_app())
+    res = client.patch("/api/leagues/sleeper:L123:2025", json={})
+
+    assert res.status_code == 422
+    assert store.get("sleeper:L123:2025").format_override == "dynasty", (
+        "an empty body must leave the existing override untouched")
+
+
+def test_patch_with_an_unrelated_body_does_not_clear_the_override(monkeypatch, tmp_path):
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_tracked(format_override="keeper"))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+
+    client = TestClient(create_app())
+    res = client.patch("/api/leagues/sleeper:L123:2025", json={"name": "Renamed"})
+
+    assert res.status_code == 422
+    assert store.get("sleeper:L123:2025").format_override == "keeper"
+
+
 def test_patch_404s_for_an_unknown_key():
     client = TestClient(create_app())
     res = client.patch("/api/leagues/sleeper:ghost:2025",
@@ -534,7 +598,11 @@ def test_refresh_404s_for_an_unknown_key():
     assert client.post("/api/leagues/sleeper:ghost:2025/refresh").status_code == 404
 
 
-def test_refresh_400s_for_an_espn_league_without_credentials(monkeypatch, tmp_path):
+def test_refresh_tells_an_unconnected_user_to_connect_not_to_reconnect(
+        monkeypatch, tmp_path):
+    """No stored ESPN credential at all is a user who never connected --
+    telling them their cookies "look expired -- reconnect ESPN" sends them
+    looking for a broken thing that was never there."""
     store = LeagueStore(tmp_path / "ffdo.db")
     store.upsert(_tracked(league_key="espn:9:2026", provider="espn",
                           provider_league_id="9", season=2026))
@@ -545,7 +613,40 @@ def test_refresh_400s_for_an_espn_league_without_credentials(monkeypatch, tmp_pa
     res = client.post("/api/leagues/espn:9:2026/refresh")
 
     assert res.status_code == 400
+    assert res.json()["detail"] == "Connect ESPN before refreshing a league"
+
+
+def test_refresh_reports_expired_cookies_when_a_credential_exists_but_is_hollow(
+        monkeypatch, tmp_path):
+    """The other half of the distinction: a credential row IS stored, but
+    carries no usable cookies (as the legacy session.json migration can
+    produce). That genuinely is a stale connection -- "reconnect" is right."""
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_tracked(league_key="espn:9:2026", provider="espn",
+                          provider_league_id="9", season=2026))
+    store.put_credential(ProviderCredential("espn", "{SWID}", None, None, "t"))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeSleeperClient)
+
+    client = TestClient(create_app())
+    res = client.post("/api/leagues/espn:9:2026/refresh")
+
+    assert res.status_code == 400
     assert "expired" in res.json()["detail"]
+
+
+def test_track_tells_an_unconnected_user_to_connect_espn(monkeypatch):
+    """Mirrors the Sleeper branch's "Connect Sleeper before tracking a
+    league" -- before this, the ESPN path fell through to the expired-cookies
+    message for a user who had simply never connected."""
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeSleeperClient)
+
+    client = TestClient(create_app())
+    res = client.post("/api/leagues/track", json={
+        "provider": "espn", "provider_league_id": "9", "season": 2026})
+
+    assert res.status_code == 400
+    assert res.json()["detail"] == "Connect ESPN before tracking a league"
 
 
 # ---------------------------------------------------------------------------

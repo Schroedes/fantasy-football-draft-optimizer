@@ -242,12 +242,19 @@ def create_app() -> FastAPI:
         warming the wrong one for a given provider is worse than useless --
         Sleeper's /league/<id>/rosters called with an ESPN league_id 404s or
         returns malformed data, raising inside this background task on every
-        ESPN connect."""
+        ESPN connect.
+
+        The team-name warm is gated on `provider == "sleeper"` specifically,
+        not merely `!= "espn"`: a `sleeper-mock` league has no league behind
+        it at all (its `provider_league_id` IS a draft id), so
+        /league/<draft_id>/rosters does not exist and would raise here on
+        every mock track. Mocks legitimately have no team names -- board.py
+        falls back to "Team {roster_id}" -- so there is nothing to warm."""
         sleeper = client_mod.SleeperClient()
         try:
             players_cache.get(lambda: _load_players(sleeper))  # warms the cache; return value unused here
             _projections_cache_for(season).get(lambda: _load_projections(sleeper, season))
-            if provider != "espn":
+            if provider == "sleeper":
                 _teams_cache_for(league_id).get(lambda: _load_teams(sleeper, league_id))
         finally:
             sleeper.close()
@@ -292,14 +299,16 @@ def create_app() -> FastAPI:
             sleeper.close()
 
     def _espn_discover(espn_s2: str, swid: str, season: int) -> list:
+        """No `httpx.HTTPError` -> 502 arm here, unlike `_sleeper_discover`:
+        `espn/discover.py` already swallows every transport/status failure
+        except 401/403 and returns `[]`, deliberately falling back to the
+        manual add-by-league-ID path. Expired cookies are the only thing that
+        reaches this handler, as a `ConnectError`."""
         try:
             return espn_discover_mod.list_leagues(
                 espn_s2, swid, season, tracked_keys=_tracked_keys())
         except espn_connect_mod.ConnectError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except httpx.HTTPError as exc:
-            raise HTTPException(
-                status_code=502, detail="ESPN is not responding right now") from exc
 
     def _espn_track(provider_league_id: str, season: int, cred) -> TrackedLeague:
         """Shared by `POST /api/leagues/track` and `.../refresh`. ESPN's
@@ -317,9 +326,18 @@ def create_app() -> FastAPI:
         except espn_connect_mod.ConnectError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    def _require_espn_credential():
+    def _require_espn_credential(action: str = "using this league"):
+        """Two genuinely different failures, two different instructions: no
+        stored credential at all means the user never connected ESPN (mirrors
+        the Sleeper branch's "Connect Sleeper before ..."), while a stored
+        credential missing its cookies is a connection that has gone stale.
+        Telling someone to "reconnect" a provider they never connected sends
+        them looking for a broken thing that was never there."""
         cred = _STORE.get_credential("espn")
-        if cred is None or cred.espn_s2 is None or cred.swid is None:
+        if cred is None:
+            raise HTTPException(
+                status_code=400, detail=f"Connect ESPN before {action}")
+        if cred.espn_s2 is None or cred.swid is None:
             raise HTTPException(
                 status_code=400,
                 detail="Your ESPN cookies look expired -- reconnect ESPN")
@@ -428,7 +446,7 @@ def create_app() -> FastAPI:
                 finally:
                     sleeper.close()
             elif provider == "espn":
-                cred = _require_espn_credential()
+                cred = _require_espn_credential("tracking a league")
                 lg = _espn_track(pid, season, cred)
             else:
                 raise HTTPException(status_code=400, detail="Unknown provider")
@@ -478,9 +496,16 @@ def create_app() -> FastAPI:
     def patch_league(league_key: str, payload: dict) -> dict:
         """The one league field a user can set by hand: keeper/dynasty
         detection is a heuristic over provider settings, so an explicit
-        override has to be able to win. `None` clears it."""
+        override has to be able to win. An explicit `null` clears it.
+
+        The key must be PRESENT: `payload.get("format_override")` cannot tell
+        `{}` from `{"format_override": null}`, so without this guard a PATCH
+        with an empty or unrelated body would silently wipe an override the
+        user set deliberately."""
         _load_league(league_key)
-        value = payload.get("format_override")
+        if "format_override" not in payload:
+            raise HTTPException(status_code=422, detail="format_override is required")
+        value = payload["format_override"]
         if value is not None and value not in _FORMATS:
             raise HTTPException(status_code=422, detail="Invalid format_override")
         _STORE.set_format_override(league_key, value)
@@ -513,7 +538,7 @@ def create_app() -> FastAPI:
             finally:
                 sleeper.close()
         else:
-            cred = _require_espn_credential()
+            cred = _require_espn_credential("refreshing a league")
             fresh = _espn_track(lg.provider_league_id, lg.season, cred)
         _STORE.upsert(fresh)
         return _league_public_dict(_load_league(league_key))
@@ -543,7 +568,7 @@ def create_app() -> FastAPI:
         provider = session.provider
 
         if provider == "espn":
-            cred = _require_espn_credential()
+            cred = _require_espn_credential("opening this board")
 
             # Mirrors get_board()'s ESPN branch below, minus the mTeam view
             # (team names aren't needed here) and minus _load_projections
@@ -604,7 +629,7 @@ def create_app() -> FastAPI:
         provider = session.provider
 
         if provider == "espn":
-            cred = _require_espn_credential()
+            cred = _require_espn_credential("opening this board")
 
             # ESPN's snake-only MVP has no mock-draft equivalent, so this
             # branch is never a mock draft.
