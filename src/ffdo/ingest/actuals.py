@@ -5,6 +5,8 @@ league's own settings, so no re-scoring here. Shared with sub-projects
 
 from __future__ import annotations
 
+import httpx
+
 from ffdo.ingest.client import V1, SleeperClient
 
 
@@ -13,7 +15,12 @@ def points_so_far(
 ) -> dict[str, float]:
     banked: dict[str, float] = {}
     for week in range(1, max(0, through_week) + 1):
-        rows = sleeper.get_json(f"{V1}/league/{league_id}/matchups/{week}")
+        try:
+            rows = sleeper.get_json(f"{V1}/league/{league_id}/matchups/{week}")
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                continue
+            raise
         for row in rows or []:
             for pid, pts in (row.get("players_points") or {}).items():
                 banked[str(pid)] = banked.get(str(pid), 0.0) + float(pts)
