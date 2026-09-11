@@ -47,3 +47,20 @@ def test_through_week_zero_returns_empty_and_makes_no_calls():
 
     assert actuals.points_so_far(_client(handler), "L1", 0) == {}
     assert calls == []
+
+
+def test_404_week_is_skipped_but_earlier_weeks_still_counted():
+    """A 404 on a future week should not raise; earlier weeks' data
+    should still be summed normally (satisfies brief: 404 contributes nothing
+    and does not raise)."""
+    def handler(request):
+        w = int(str(request.url).rsplit("/", 1)[-1])
+        if w == 1:
+            return httpx.Response(200, json=[{"roster_id": 1, "players_points": {"100": 15.5}}])
+        elif w == 2:
+            # Simulate a future week Sleeper hasn't opened data for yet
+            return httpx.Response(404, json={"error": "not found"})
+        return httpx.Response(200, json=[])
+
+    out = actuals.points_so_far(_client(handler), "L1", 2)
+    assert out == {"100": 15.5}  # Only week 1's points, week 2 404'd and contributed nothing
