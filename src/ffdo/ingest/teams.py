@@ -7,11 +7,10 @@ from typing import Any
 from ffdo.domain.models import TeamProfile
 
 
-def parse(
-    rosters: list[dict[str, Any]],
-    users: list[dict[str, Any]],
-) -> dict[int, TeamProfile]:
-    display_names: dict[str, str] = {}
+def _display_names(users: list[dict[str, Any]]) -> dict[str, str]:
+    """{user_id: team_name or display_name}. Team name from a user's
+    metadata beats the raw display name; a user with neither is omitted."""
+    out: dict[str, str] = {}
     for u in users:
         user_id = u.get("user_id")
         if user_id is None:
@@ -19,8 +18,15 @@ def parse(
         metadata = u.get("metadata") or {}
         name = metadata.get("team_name") or u.get("display_name")
         if name:
-            display_names[str(user_id)] = name
+            out[str(user_id)] = name
+    return out
 
+
+def parse(
+    rosters: list[dict[str, Any]],
+    users: list[dict[str, Any]],
+) -> dict[int, TeamProfile]:
+    names = _display_names(users)
     out: dict[int, TeamProfile] = {}
     for r in rosters:
         raw_roster_id = r.get("roster_id")
@@ -28,7 +34,7 @@ def parse(
             continue
         roster_id = int(raw_roster_id)
         owner_id = r.get("owner_id")
-        name = display_names.get(str(owner_id)) if owner_id is not None else None
+        name = names.get(str(owner_id)) if owner_id is not None else None
         out[roster_id] = TeamProfile(
             roster_id=roster_id,
             display_name=name or f"Team {roster_id}",
