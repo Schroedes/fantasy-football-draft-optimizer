@@ -10,8 +10,10 @@ SEASON_LENGTH: Final[dict[int, int]] = {
 
 # NFL bye weeks by season. Hand-maintained -- update each August when the
 # schedule is released. Team abbreviations match Sleeper's `team` field on
-# PlayerProfile (e.g. "ARI", "BAL", "LAR"). Source: the published NFL
-# regular-season schedule.
+# PlayerProfile (e.g. "ARI", "BAL", "LAR"). PLACEHOLDER for 2026: drawn from
+# a plausible distribution, NOT yet verified against the real published
+# schedule -- treat every 2026 bye-week value below as provisional until
+# checked.
 NFL_BYE_WEEKS: Final[dict[int, dict[str, int]]] = {
     2026: {
         "ARI": 8, "ATL": 5, "BAL": 7, "BUF": 7, "CAR": 14, "CHI": 5, "CIN": 10,

@@ -637,6 +637,43 @@ def test_needs_attention_true_for_a_short_roster_once_warmed(monkeypatch, tmp_pa
     assert client.get("/api/leagues").json()[0]["needs_attention"] is True
 
 
+def test_needs_attention_false_for_a_full_lineup_using_ir_and_taxi_slots(
+        monkeypatch, tmp_path):
+    """Sleeper's `starters` array never includes IR/taxi-squad players (see
+    ffdo.ingest.rosters.fetch, which only reads the `starters` list) -- so
+    counting "IR"/"TAXI" entries in `roster_positions` as startable slots
+    made `unfilled` structurally always True for any league using those
+    slot types, regardless of whether the lineup was actually fully set.
+    A league whose roster_positions include IR and TAXI, with a full roster
+    and every non-IR/TAXI/BN slot started, must NOT report needs_attention."""
+    from tests.api.test_season_endpoint import _tracked, _recording_client
+    store = LeagueStore(tmp_path / "ffdo.db")
+    # 4 startable-or-not slots: QB, RB (startable) + IR + TAXI (not). Roster 1
+    # rosters exactly 4 known players and starts exactly the 2 startable ones,
+    # so neither `short` nor `unfilled` should fire once the IR/TAXI slots
+    # are correctly excluded from the startable count.
+    store.upsert(_tracked(roster_positions=("QB", "RB", "IR", "TAXI")))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+    rosters = [
+        {"roster_id": 1, "owner_id": "U1",
+         "players": ["p_qb", "p_rb", "p_wr", "p_rb2"],
+         "starters": ["p_qb", "p_rb"],
+         "settings": {"wins": 6, "losses": 3, "fpts": 1284, "fpts_decimal": 0,
+                      "fpts_against": 1244, "fpts_against_decimal": 0}},
+        {"roster_id": 2, "owner_id": "U2", "players": ["p_rb2"],
+         "starters": ["p_rb2"],
+         "settings": {"wins": 3, "losses": 6, "fpts": 1100, "fpts_against": 1250}},
+    ]
+    monkeypatch.setattr(
+        "ffdo.ingest.client.SleeperClient",
+        _recording_client({f"{V1}/league/L1/rosters": rosters}))
+
+    client = TestClient(create_app())
+    assert client.get("/api/leagues").json()[0]["needs_attention"] is False
+    client.get("/api/leagues/sleeper:L1:2026/season")
+    assert client.get("/api/leagues").json()[0]["needs_attention"] is False
+
+
 def test_get_leagues_is_empty_when_nothing_is_tracked():
     client = TestClient(create_app())
     assert client.get("/api/leagues").json() == []
@@ -1496,6 +1533,44 @@ def test_board_poll_updates_the_stored_draft_status(monkeypatch):
 
     TestClient(create_app()).get("/api/leagues/sleeper:L123:2025/board")
 
+    assert app_mod._STORE.get("sleeper:L123:2025").draft_status == "complete"
+
+
+def test_board_completed_draft_short_circuits_before_loading_projections(monkeypatch):
+    """A real league reopened after its season started has a completed
+    draft AND a Sleeper projections feed that's reliably contaminated
+    post-kickoff (`_load_projections` raises `ContaminatedProjectionError`,
+    a `RuntimeError` subclass, and `get_board` has no 502 arm to catch it).
+    Before this fix, `/board` unconditionally loaded projections even for a
+    finished draft and 500'd on every such league -- with no way to reach
+    the season screen, since board.js only hands off once `/board` succeeds
+    with `draft_status: "complete"`. Now the endpoint must check
+    `state.status` and return early, never touching the projections feed at
+    all."""
+    app_mod._STORE.upsert(_tracked(draft_status="drafting"))
+
+    complete_draft = {**_BOARD_DRAFT_RAW, "status": "complete"}
+    contaminated_projections = [{
+        "player_id": "P1", "stats": {"pts_half_ppr": 100.0},
+        "last_modified": 9_999_999_999_000,  # long after the 2025 kickoff
+    }]
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D123/picks": [],
+        f"{V1}/draft/D123": complete_draft,
+        f"{V1}/league/L123/rosters": [],
+        f"{V1}/league/L123/users": [],
+        f"{V1}/league/L123": {**_BOARD_REAL_LEAGUE_RAW, "status": "complete"},
+        f"{V1}/players/nfl": _BOARD_PLAYERS_RAW,
+        f"{PROJECTIONS}/2025": contaminated_projections,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    res = TestClient(create_app()).get("/api/leagues/sleeper:L123:2025/board")
+
+    assert res.status_code == 200
+    assert res.json() == {"draft_status": "complete", "is_mock": False}
+    assert not any("/projections/" in c for c in calls), (
+        f"projections must never be fetched once the draft is complete: {calls}")
     assert app_mod._STORE.get("sleeper:L123:2025").draft_status == "complete"
 
 

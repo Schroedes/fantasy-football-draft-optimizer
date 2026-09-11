@@ -1,4 +1,5 @@
 import httpx
+import pytest
 
 from ffdo.ingest.client import SleeperClient
 from ffdo.ingest.sleeper import traded_picks
@@ -82,3 +83,22 @@ def test_404_returns_implicit_ownership_not_an_error():
         standings_order=STANDINGS, draft_years=(2027,), team_names=NAMES)
     assert len(out) == 3
     assert all(p.current_owner_roster_id == p.original_roster_id for p in out)
+
+
+def test_persistent_5xx_propagates_rather_than_returning_implicit_ownership(
+        monkeypatch):
+    """The mirror image of test_404_returns_implicit_ownership_not_an_error:
+    a real outage (every attempt 500s until retries are exhausted, which
+    surfaces as a plain RuntimeError from get_json_with_retry) must NOT be
+    swallowed into "nobody has traded any picks" -- that would silently
+    fabricate trade-free ownership instead of surfacing the outage so the
+    caller (get_season) can degrade draft_capital to None."""
+    monkeypatch.setattr("ffdo.ingest.client.time.sleep", lambda *_a, **_kw: None)
+
+    def handler(request):
+        return httpx.Response(500, json={"error": "boom"})
+
+    with pytest.raises(RuntimeError):
+        traded_picks.capital(
+            _client(handler), "L1", num_teams=3, rounds=1,
+            standings_order=STANDINGS, draft_years=(2027,), team_names=NAMES)

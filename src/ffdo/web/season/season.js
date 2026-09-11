@@ -102,7 +102,7 @@ function renderWeekLabel() {
 }
 
 function renderRightPanel() {
-  const tabBar = _meta.resolved_format === "dynasty" ? `
+  const tabBar = Array.isArray(_data.draft_capital) ? `
     <div class="panel-tabs">
       <button data-panel-tab="power" class="${_panel === "power" ? "on" : ""}">Power ranking</button>
       <button data-panel-tab="capital" class="${_panel === "capital" ? "on" : ""}">Draft capital</button>
