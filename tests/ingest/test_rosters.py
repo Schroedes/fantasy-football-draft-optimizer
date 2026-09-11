@@ -51,3 +51,31 @@ def test_fetch_handles_null_players_and_missing_decimals():
     assert r2.starter_ids == ()
     assert r2.team_name == "CoolTeam"                 # falls back to display_name
     assert r2.points_for == 1100.0
+
+
+def test_raw_starters_preserves_positional_alignment_including_empty_slots():
+    rosters_raw = [
+        {"roster_id": 1, "owner_id": "U1", "players": ["a", "b", "c"],
+         "starters": ["a", "0", "c", "b"],
+         "settings": {"wins": 0, "losses": 0}},
+        {"roster_id": 2, "owner_id": "U2", "players": ["d"],
+         "starters": ["d"], "settings": {"wins": 0, "losses": 0}},
+    ]
+
+    def handler(request):
+        if request.url.path.endswith("/rosters"):
+            return httpx.Response(200, json=rosters_raw)
+        return httpx.Response(200, json=[])
+
+    out = rosters.raw_starters(_client(handler), "L1", roster_id=1)
+    assert out == ("a", None, "c", "b")
+
+
+def test_raw_starters_returns_empty_tuple_for_an_unknown_roster_id():
+    def handler(request):
+        return httpx.Response(200, json=[
+            {"roster_id": 1, "owner_id": "U1", "players": [], "starters": [],
+             "settings": {}},
+        ])
+
+    assert rosters.raw_starters(_client(handler), "L1", roster_id=99) == ()

@@ -45,3 +45,28 @@ def fetch(sleeper: SleeperClient, league_id: str) -> list[RosterEntry]:
         ))
     out.sort(key=lambda e: e.roster_id)
     return out
+
+
+def raw_starters(
+    sleeper: SleeperClient, league_id: str, roster_id: int,
+) -> tuple[str | None, ...]:
+    """The tracked user's OWN starters array, exactly as Sleeper returns
+    it -- positionally aligned to the league's starting slots (in order,
+    length always equal to the starting-slot count), with `"0"` (Sleeper's
+    empty-slot placeholder) mapped to `None`.
+
+    Deliberately NOT `RosterEntry.starter_ids` (see `fetch` above): that
+    field is a compacted SET with alignment already discarded, correct for
+    #2's "is this player starting at all" question but wrong for a
+    slot-by-slot diff, which needs the alignment back. This fetches the
+    same endpoint `fetch` does and is safe to call alongside it -- no
+    caching here, same as `fetch`, since a roster's starters can change at
+    any moment right up to kickoff."""
+    rosters_raw = sleeper.get_json(f"{V1}/league/{league_id}/rosters")
+    for r in rosters_raw:
+        if r.get("roster_id") == roster_id:
+            return tuple(
+                None if p in ("0", 0, None) else str(p)
+                for p in (r.get("starters") or [])
+            )
+    return ()
