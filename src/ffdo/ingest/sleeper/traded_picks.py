@@ -31,23 +31,34 @@ def capital(
 ) -> list[DraftPickAsset]:
     traded = _traded_raw(sleeper, league_id)
 
-    # (year, round, original_roster) -> final current owner
-    owner: dict[tuple[int, int, int], int] = {}
+    # (year, round, original_roster) -> {previous_owner_id -> owner_id} edges.
+    # A pick that changed hands more than once produces multiple entries
+    # sharing the same key; the edges must be walked as a chain (from the
+    # original roster forward) rather than merged by array position, since
+    # the source array is not guaranteed to be in chronological order.
+    edges: dict[tuple[int, int, int], dict[int, int]] = {}
     for entry in traded:
         try:
             key = (int(entry["season"]), int(entry["round"]), int(entry["roster_id"]))
+            previous_owner = int(entry["previous_owner_id"])
+            new_owner = int(entry["owner_id"])
         except (KeyError, TypeError, ValueError):
             continue
-        owner[key] = int(entry["owner_id"])
+        edges.setdefault(key, {})[previous_owner] = new_owner
+
+    slot_by_roster = {rid: i + 1 for i, rid in enumerate(standings_order)}
 
     next_year = min(draft_years) if draft_years else None
     out: list[DraftPickAsset] = []
     for year in draft_years:
         for rnd in range(1, rounds + 1):
             for original in range(1, num_teams + 1):
-                current = owner.get((year, rnd, original), original)
-                slot = (standings_order.index(original) + 1
-                        if year == next_year and original in standings_order
+                key_edges = edges.get((year, rnd, original), {})
+                current = original
+                while current in key_edges:
+                    current = key_edges[current]
+                slot = (slot_by_roster.get(original)
+                        if year == next_year and original in slot_by_roster
                         else None)
                 out.append(DraftPickAsset(
                     season=year,

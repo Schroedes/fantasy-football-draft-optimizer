@@ -59,6 +59,20 @@ def test_chain_trade_lands_on_final_owner():
     assert pick.current_owner_roster_id == 3
 
 
+def test_chain_trade_reversed_order_still_lands_on_final_owner():
+    # Same chain as test_chain_trade_lands_on_final_owner (1 -> 2 -> 3), but
+    # the entries appear in reverse order in the raw array (2->3 hop before
+    # 1->2 hop). The owner must still resolve to the true final owner, 3 --
+    # not the intermediate holder, 2 -- regardless of array order.
+    traded = [
+        {"season": "2027", "round": 1, "roster_id": 1, "owner_id": 3, "previous_owner_id": 2},
+        {"season": "2027", "round": 1, "roster_id": 1, "owner_id": 2, "previous_owner_id": 1},
+    ]
+    out = _capital(traded)
+    pick = next(p for p in out if p.season == 2027 and p.original_roster_id == 1)
+    assert pick.current_owner_roster_id == 3
+
+
 def test_404_returns_implicit_ownership_not_an_error():
     def handler(request):
         return httpx.Response(404, json={"error": "not found"})
