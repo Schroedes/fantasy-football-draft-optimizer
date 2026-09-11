@@ -8,6 +8,20 @@ SEASON_LENGTH: Final[dict[int, int]] = {
     2021: 17, 2022: 17, 2023: 17, 2024: 18, 2025: 18, 2026: 18,
 }
 
+# NFL bye weeks by season. Hand-maintained -- update each August when the
+# schedule is released. Team abbreviations match Sleeper's `team` field on
+# PlayerProfile (e.g. "ARI", "BAL", "LAR"). Source: the published NFL
+# regular-season schedule.
+NFL_BYE_WEEKS: Final[dict[int, dict[str, int]]] = {
+    2026: {
+        "ARI": 8, "ATL": 5, "BAL": 7, "BUF": 7, "CAR": 14, "CHI": 5, "CIN": 10,
+        "CLE": 9, "DAL": 10, "DEN": 12, "DET": 8, "GB": 5, "HOU": 6, "IND": 11,
+        "JAX": 8, "KC": 10, "LAC": 12, "LAR": 8, "LV": 8, "MIA": 12, "MIN": 6,
+        "NE": 14, "NO": 11, "NYG": 11, "NYJ": 9, "PHI": 9, "PIT": 5, "SEA": 8,
+        "SF": 14, "TB": 9, "TEN": 10, "WAS": 12,
+    },
+}
+
 OFFENSE_POSITIONS: Final[frozenset[str]] = frozenset({"QB", "RB", "WR", "TE"})
 
 # Scoring keys excluded from offense classification even when they match an
