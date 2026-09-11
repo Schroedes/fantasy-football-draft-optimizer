@@ -142,6 +142,52 @@ def test_502_on_provider_outage(monkeypatch, tmp_path):
     assert TestClient(create_app()).get("/api/leagues/sleeper:L1:2026/season").status_code == 502
 
 
+def test_traded_picks_outage_omits_capital_but_still_renders_the_rest(
+        monkeypatch, tmp_path):
+    """A dynasty/keeper league whose traded-picks feed alone is down (a
+    genuine outage, not the "no trade history" 404 shape) must still get a
+    full 200 season payload -- draft_capital degrades to None instead of
+    the whole endpoint 502ing, since roster/power-ranking/standings have
+    nothing to do with the traded-picks feed."""
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_tracked(fmt="dynasty"))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+
+    resp = {
+        f"{V1}/state/nfl": _STATE,
+        f"{V1}/league/L1/rosters": _ROSTERS,
+        f"{V1}/league/L1/users": _USERS,
+        f"{V1}/players/nfl": _PLAYERS,
+        "/projections/": _PROJ,
+        "/matchups/": _MATCHUPS,
+    }
+
+    class _FlakyTradedPicks:
+        def __init__(self, *a, **k): pass
+
+        def get_json(self, url, *a, **k):
+            if "/traded_picks" in url:
+                raise RuntimeError("GET ... failed after 4 attempts")
+            for key, val in resp.items():
+                if key in url:
+                    return val
+            return [] if "/matchups/" in url or "/projections/" in url else {}
+
+        def close(self): pass
+
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FlakyTradedPicks)
+
+    res = TestClient(create_app()).get("/api/leagues/sleeper:L1:2026/season")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["draft_capital"] is None
+    assert body["your_roster"]["team_name"] == "You"
+    assert len(body["your_roster"]["players"]) == 3
+    assert [s["roster_id"] for s in body["standings"]]
+    assert set(body["power_ranking"]["by_position"]) == {"QB", "RB", "WR", "TE"}
+
+
 def test_cross_format_guard_same_roster_different_values(monkeypatch, tmp_path):
     _seed(monkeypatch, tmp_path, _tracked(fmt="redraft"))
     redraft = TestClient(create_app()).get("/api/leagues/sleeper:L1:2026/season").json()

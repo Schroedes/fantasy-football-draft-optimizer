@@ -13,10 +13,18 @@ from ffdo.ingest.client import V1, SleeperClient
 
 
 def _traded_raw(sleeper: SleeperClient, league_id: str) -> list[dict]:
+    """A 404 here means Sleeper has no trade history for this league -- a
+    real, common state, not an outage (confirmed live) -- so it degrades to
+    `[]` (every roster implicitly owns its own picks), same as an empty 200.
+    Any other failure must propagate: `get_season` treats a genuine outage
+    on this feed differently from "no trades ever happened" (see its
+    handling of `capital()`)."""
     try:
         return sleeper.get_json(f"{V1}/league/{league_id}/traded_picks") or []
-    except (httpx.HTTPError, RuntimeError):
-        return []
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return []
+        raise
 
 
 def capital(

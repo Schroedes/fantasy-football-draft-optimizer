@@ -36,6 +36,14 @@ _STORE = LeagueStore(Path("data") / "ffdo.db",
 
 _FORMATS = ("redraft", "keeper", "dynasty")
 
+# Slots in `league.roster_positions` that never appear in Sleeper's
+# `starters` array. "BN" is the obvious one; "IR" and "TAXI" are the other
+# two Sleeper roster-slot types, and this codebase doesn't ingest their
+# separate reserve/taxi arrays into `starter_ids` -- so a league using
+# either slot type must not count them as startable when comparing against
+# `starter_ids`, or "unfilled" is a permanent false positive.
+_NON_STARTING_SLOTS = frozenset({"BN", "IR", "TAXI"})
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -840,10 +848,22 @@ def create_app() -> FastAPI:
                     draft_meta = sleeper.get_json(_uncached(f"{client_mod.V1}/draft/{draft_id}"))
                     picks_raw = sleeper.get_json(_uncached(f"{client_mod.V1}/draft/{draft_id}/picks"))
 
+                state = draft_mod.parse(draft_meta, picks_raw)
+                if state.status == "complete":
+                    # The season screen (src/ffdo/web/season/season.js) takes over
+                    # once draft_status flips to "complete" -- board.js never
+                    # renders this board data in that case, and Sleeper's
+                    # projections feed is reliably contaminated post-kickoff
+                    # (`_load_projections` raises on it), so loading it here just
+                    # to throw the result away would 500 every real league whose
+                    # draft happened before the app was reopened. See get_season
+                    # for the actual season-view data.
+                    _STORE.touch_status(league_key, state.status)
+                    return {"draft_status": state.status, "is_mock": is_mock}
+
                 profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
                 proj, adp_data = _projections_cache_for(lg.season).get(
                     lambda: _load_projections(sleeper, lg.season))
-                state = draft_mod.parse(draft_meta, picks_raw)
                 # Mock drafts have no /league/<id>/rosters or /users to derive
                 # team display names from -- board.py's rosters payload already
                 # falls back to "Team {roster_id}" when `teams` is None, which
@@ -1081,7 +1101,8 @@ def create_app() -> FastAPI:
         # league the user merely observes), matching `your_roster` below.
         you_entry = next((r for r in rosters if r.roster_id == lg.roster_id), None)
         if you_entry is not None:
-            unfilled = sum(1 for s in lg.roster_positions if s != "BN") > len(you_entry.starter_ids)
+            unfilled = (sum(1 for s in lg.roster_positions if s not in _NON_STARTING_SLOTS)
+                       > len(you_entry.starter_ids))
             short = len(you_entry.player_ids) < lg.roster_size
             _roster_count_cache_for(lg.league_key).get(lambda: {"attn": bool(unfilled or short)})
 
@@ -1218,13 +1239,22 @@ def create_app() -> FastAPI:
                 # first, which is what gives an untraded pick its projected
                 # slot.
                 worst_to_best = sorted(rosters, key=lambda r: (r.wins, r.points_for))
-                capital = traded_picks_mod.capital(
-                    sleeper, lg.provider_league_id,
-                    num_teams=lg.num_teams,
-                    rounds=int((lg.raw_settings or {}).get("draft_rounds") or 4),
-                    standings_order=[r.roster_id for r in worst_to_best],
-                    draft_years=(lg.season + 1, lg.season + 2),
-                    team_names={r.roster_id: r.team_name for r in rosters})
+                try:
+                    capital = traded_picks_mod.capital(
+                        sleeper, lg.provider_league_id,
+                        num_teams=lg.num_teams,
+                        rounds=int((lg.raw_settings or {}).get("draft_rounds") or 4),
+                        standings_order=[r.roster_id for r in worst_to_best],
+                        draft_years=(lg.season + 1, lg.season + 2),
+                        team_names={r.roster_id: r.team_name for r in rosters})
+                except (httpx.HTTPError, RuntimeError):
+                    # The traded-picks feed failing shouldn't take down the
+                    # whole season view -- draft_capital just goes absent,
+                    # exactly like a redraft league (_draft_capital_payload
+                    # already treats `capital is None` as "omit the panel").
+                    logging.getLogger("ffdo.api").warning(
+                        "season: traded-picks fetch failed for %s, "
+                        "draft_capital omitted", lg.league_key)
         except (httpx.HTTPError, RuntimeError) as exc:
             # Both halves are load-bearing: `ffdo.ingest.http.
             # get_json_with_retry` raises a plain `RuntimeError` once retries

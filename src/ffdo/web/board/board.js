@@ -252,6 +252,26 @@ async function refresh() {
     // Same epoch guard: a stale league's failed fetch must not stamp "error"
     // over the league the user is now actually looking at.
     if (myEpoch !== _epoch) return;
+    // /board can fail for reasons unrelated to the draft itself (e.g. a
+    // contaminated post-kickoff projections feed) even though the draft is
+    // actually complete -- the cheap /leagues/{key} endpoint doesn't load
+    // projections at all, so it's a reliable fallback signal to hand off to
+    // the season screen instead of stamping "error" over a working season.
+    try {
+      const metaRes = await fetch(`/api/leagues/${encodeURIComponent(_leagueKey)}`);
+      if (metaRes.ok) {
+        const metaData = await metaRes.json();
+        if (myEpoch !== _epoch) return;
+        if (metaData.draft_status === "complete") {
+          clearInterval(state.pollId); clearInterval(state.livePollId);
+          const m = await import("../season/season.js");
+          await m.mountSeason(_container, _leagueKey, _meta);
+          return;
+        }
+      }
+    } catch (fallbackErr) {
+      console.error("season fallback check failed", fallbackErr);
+    }
     document.getElementById("updated").textContent = "error";
     console.error("board refresh failed", err);
   }
