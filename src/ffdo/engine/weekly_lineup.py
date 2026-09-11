@@ -28,7 +28,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 
 from ffdo.domain.constants import INJURY_OUT_STATUSES
-from ffdo.domain.models import PlayerProfile, ValuedPlayer, WeeklyProjection
+from ffdo.domain.models import PlayerProfile, SlotDiff, ValuedPlayer, WeeklyProjection
 from ffdo.engine import vor
 from ffdo.engine.replacement import FLEX_ELIGIBILITY, rank_by_position
 from ffdo.engine.scoring import score_stats
@@ -93,3 +93,43 @@ def optimal_slots(
             result[i] = None
 
     return result
+
+
+def diff(
+    current_starters: tuple[str | None, ...],
+    optimal: Mapping[int, str | None],
+    locked_teams: frozenset[str],
+    valued: Mapping[str, ValuedPlayer],
+    profiles: Mapping[str, PlayerProfile],
+    league,
+) -> list[SlotDiff]:
+    def value_of(pid: str | None) -> float:
+        if pid is None:
+            return 0.0
+        vp = valued.get(pid)
+        return vp.vor if vp is not None else 0.0
+
+    rows: list[SlotDiff] = []
+    for i, slot_label in enumerate(league.starting_slots):
+        current = current_starters[i] if i < len(current_starters) else None
+        best = optimal.get(i)
+
+        if current == best:
+            rows.append(SlotDiff(
+                slot_index=i, slot_label=slot_label, status="match",
+                current_player_id=current, optimal_player_id=None, delta=0.0))
+            continue
+
+        current_profile = profiles.get(current) if current else None
+        best_profile = profiles.get(best) if best else None
+        current_locked = current_profile is not None and current_profile.team in locked_teams
+        empty_and_best_locked = (
+            current is None and best_profile is not None
+            and best_profile.team in locked_teams)
+        status = "missed" if (current_locked or empty_and_best_locked) else "suggested_swap"
+
+        rows.append(SlotDiff(
+            slot_index=i, slot_label=slot_label, status=status,
+            current_player_id=current, optimal_player_id=best,
+            delta=round(value_of(best) - value_of(current), 1)))
+    return rows

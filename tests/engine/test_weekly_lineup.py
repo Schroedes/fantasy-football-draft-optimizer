@@ -1,4 +1,4 @@
-from ffdo.domain.models import PlayerProfile, WeeklyProjection
+from ffdo.domain.models import PlayerProfile, SlotDiff, WeeklyProjection
 from ffdo.engine import weekly_lineup
 
 # Match the League fixture shape used in tests/engine/test_ros_value.py --
@@ -137,3 +137,107 @@ def test_optimal_slots_none_when_fewer_eligible_players_than_slots():
     slots = weekly_lineup.optimal_slots(valued, league)
     assert slots[0] == "p1"
     assert slots[1] is None
+
+
+def _valued_from(profiles, weekly_points, league, bye_teams=frozenset()):
+    return weekly_lineup.weekly_value(
+        list(profiles), league, weekly_points=weekly_points, profiles=profiles,
+        bye_teams=bye_teams)
+
+
+def test_diff_match_when_current_equals_optimal():
+    profiles = {"p1": _profile("p1", "RB")}
+    weekly_points = {"p1": _proj("p1", 10, rush_yd=100.0)}
+    league = _League(starting_slots=("RB",))
+    valued = _valued_from(profiles, weekly_points, league)
+    optimal = weekly_lineup.optimal_slots(valued, league)
+
+    rows = weekly_lineup.diff(("p1",), optimal, frozenset(), valued, profiles, league)
+    assert rows == [SlotDiff(slot_index=0, slot_label="RB", status="match",
+                             current_player_id="p1", optimal_player_id=None, delta=0.0)]
+
+
+def test_diff_suggested_swap_when_better_option_is_unlocked():
+    profiles = {"p_bench": _profile("p_bench", "RB", team="BENCH_TEAM"),
+               "p_started": _profile("p_started", "RB", team="STARTED_TEAM")}
+    weekly_points = {"p_bench": _proj("p_bench", 10, rush_yd=150.0),
+                     "p_started": _proj("p_started", 10, rush_yd=20.0)}
+    league = _League(starting_slots=("RB",))
+    valued = _valued_from(profiles, weekly_points, league)
+    optimal = weekly_lineup.optimal_slots(valued, league)
+    assert optimal[0] == "p_bench"
+
+    rows = weekly_lineup.diff(("p_started",), optimal, frozenset(),
+                              valued, profiles, league)
+    row = rows[0]
+    assert row.status == "suggested_swap"
+    assert row.current_player_id == "p_started"
+    assert row.optimal_player_id == "p_bench"
+    assert row.delta > 0
+
+
+def test_diff_missed_when_current_starters_team_already_locked():
+    profiles = {"p_bench": _profile("p_bench", "RB", team="BENCH_TEAM"),
+               "p_started": _profile("p_started", "RB", team="STARTED_TEAM")}
+    weekly_points = {"p_bench": _proj("p_bench", 10, rush_yd=150.0),
+                     "p_started": _proj("p_started", 10, rush_yd=20.0)}
+    league = _League(starting_slots=("RB",))
+    valued = _valued_from(profiles, weekly_points, league)
+    optimal = weekly_lineup.optimal_slots(valued, league)
+
+    rows = weekly_lineup.diff(("p_started",), optimal, frozenset({"STARTED_TEAM"}),
+                              valued, profiles, league)
+    assert rows[0].status == "missed"
+
+
+def test_diff_missed_for_an_empty_slot_whose_only_fix_already_locked():
+    profiles = {"p_bench": _profile("p_bench", "RB", team="BENCH_TEAM")}
+    weekly_points = {"p_bench": _proj("p_bench", 10, rush_yd=150.0)}
+    league = _League(starting_slots=("RB",))
+    valued = _valued_from(profiles, weekly_points, league)
+    optimal = weekly_lineup.optimal_slots(valued, league)
+    assert optimal[0] == "p_bench"
+
+    rows = weekly_lineup.diff((None,), optimal, frozenset({"BENCH_TEAM"}),
+                              valued, profiles, league)
+    assert rows[0].status == "missed"
+    assert rows[0].current_player_id is None
+    assert rows[0].optimal_player_id == "p_bench"
+
+
+def test_diff_suggested_swap_for_an_empty_slot_whose_fix_is_still_unlocked():
+    profiles = {"p_bench": _profile("p_bench", "RB", team="BENCH_TEAM")}
+    weekly_points = {"p_bench": _proj("p_bench", 10, rush_yd=150.0)}
+    league = _League(starting_slots=("RB",))
+    valued = _valued_from(profiles, weekly_points, league)
+    optimal = weekly_lineup.optimal_slots(valued, league)
+
+    rows = weekly_lineup.diff((None,), optimal, frozenset(),
+                              valued, profiles, league)
+    assert rows[0].status == "suggested_swap"
+
+
+def test_diff_match_when_both_current_and_optimal_are_empty():
+    league = _League(starting_slots=("RB",))
+    rows = weekly_lineup.diff((None,), {0: None}, frozenset(), {}, {}, league)
+    assert rows[0].status == "match"
+    assert rows[0].current_player_id is None
+    assert rows[0].optimal_player_id is None
+
+
+def test_diff_current_starter_excluded_from_valued_still_shows_a_zero_value():
+    """A current starter who was excluded from `valued` (bye/hard-out) must
+    not crash the diff, and reads as 0.0 rather than raising KeyError."""
+    profiles = {"p_bye": _profile("p_bye", "RB", team="BYE_TEAM"),
+               "p_bench": _profile("p_bench", "RB", team="BENCH_TEAM")}
+    weekly_points = {"p_bye": _proj("p_bye", 10, rush_yd=150.0),
+                     "p_bench": _proj("p_bench", 10, rush_yd=50.0)}
+    league = _League(starting_slots=("RB",))
+    valued = _valued_from(profiles, weekly_points, league, bye_teams=frozenset({"BYE_TEAM"}))
+    assert "p_bye" not in valued
+    optimal = weekly_lineup.optimal_slots(valued, league)
+
+    rows = weekly_lineup.diff(("p_bye",), optimal, frozenset(), valued, profiles, league)
+    assert rows[0].current_player_id == "p_bye"
+    assert rows[0].status == "suggested_swap"
+    assert rows[0].delta == round(valued["p_bench"].vor - 0.0, 1)
