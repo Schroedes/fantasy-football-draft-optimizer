@@ -35,3 +35,12 @@ def test_parse_keys_output_by_roster_id_as_int():
     users = [{"user_id": "u5", "display_name": "Five"}]
     out = teams.parse(rosters, users)
     assert out[5].roster_id == 5
+
+
+def test_display_names_helper_is_reused_by_parse():
+    from ffdo.ingest.teams import _display_names
+    users = [{"user_id": "u1", "display_name": "u1", "metadata": {"team_name": "Alpha"}}]
+    assert _display_names(users) == {"u1": "Alpha"}
+    # parse still works exactly as before
+    out = teams.parse([{"roster_id": 1, "owner_id": "u1"}], users)
+    assert out[1].display_name == "Alpha"
