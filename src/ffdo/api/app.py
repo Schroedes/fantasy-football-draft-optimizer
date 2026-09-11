@@ -125,6 +125,13 @@ class _TTLCache:
         """True if a value is already cached -- never triggers a fetch."""
         return self._value is not None
 
+    @property
+    def value(self) -> Any:
+        """Peek the cached value without triggering a fetch. Callers must
+        check `has_value()` first -- this simply returns whatever `_value`
+        currently holds (`None` if nothing has been cached yet)."""
+        return self._value
+
 
 _TRAILING_DRAFT_ID_RE = re.compile(r"(\d+)/?$")
 
@@ -227,12 +234,25 @@ def create_app() -> FastAPI:
     # draft board's cache must never do. A 24h TTL because the preseason
     # anchor is, by definition, not changing during the season.
     season_proj_anchor_caches: dict[int, _TTLCache] = {}
+    # Keyed by league_key, warmed as a side effect of `_assemble_season` (the
+    # season view) rather than fetched independently -- this is the
+    # "needs_attention" signal for the `/api/leagues` switcher. It is
+    # deliberately best-effort: a league whose season view has never been
+    # opened has no entry here, and `list_leagues_endpoint` treats that as
+    # `needs_attention: False` rather than fetching rosters itself just to
+    # answer a switcher-row question. A 24h TTL matches `teams_caches` --
+    # long enough that a page of switcher rows doesn't need every league's
+    # season view re-opened every few minutes to stay accurate.
+    roster_count_caches: dict[str, _TTLCache] = {}
 
     def _projections_cache_for(season: int) -> _TTLCache:
         return projections_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
 
     def _teams_cache_for(league_id: str) -> _TTLCache:
         return teams_caches.setdefault(league_id, _TTLCache(ttl_seconds=24 * 3600))
+
+    def _roster_count_cache_for(league_key: str) -> _TTLCache:
+        return roster_count_caches.setdefault(league_key, _TTLCache(ttl_seconds=24 * 3600))
 
     def _espn_player_pool_cache_for(season: int) -> _TTLCache:
         return espn_player_pool_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
@@ -586,17 +606,25 @@ def create_app() -> FastAPI:
     def list_leagues_endpoint() -> list[dict]:
         """The switcher's payload: one compact row per tracked league. The
         full record is a separate `GET /api/leagues/{league_key}`, so the
-        switcher doesn't ship every league's scoring settings on page load."""
-        return [
-            {
+        switcher doesn't ship every league's scoring settings on page load.
+
+        `needs_attention` is best-effort and cache-warmed: it reads whatever
+        `_assemble_season` (the season view) last computed for this league's
+        roster and defaults to `False` for a league whose season view has
+        never been opened -- this endpoint never fetches rosters itself just
+        to answer that question."""
+        rows = []
+        for lg in _STORE.list():
+            cache = roster_count_caches.get(lg.league_key)
+            attn = bool(cache.value["attn"]) if (cache and cache.has_value()) else False
+            rows.append({
                 "league_key": lg.league_key, "name": lg.name,
                 "provider": lg.provider, "season": lg.season,
                 "format": lg.fmt, "resolved_format": lg.resolved_format,
                 "draft_status": lg.draft_status, "is_mock": lg.is_mock,
-                "needs_attention": False,
-            }
-            for lg in _STORE.list()
-        ]
+                "needs_attention": attn,
+            })
+        return rows
 
     @app.get("/api/leagues/{league_key}")
     def get_league(league_key: str) -> dict:
@@ -1045,6 +1073,17 @@ def create_app() -> FastAPI:
             actuals=actuals,
             weeks_played=through_week,
             season_weeks=_season_weeks(lg.season))
+
+        # Warms the `needs_attention` signal the `/api/leagues` switcher
+        # reads -- best-effort and side-effect-only: this endpoint's own
+        # response is untouched by it. Only meaningful when the caller has a
+        # roster of their own in this league (`you_entry` is None for a
+        # league the user merely observes), matching `your_roster` below.
+        you_entry = next((r for r in rosters if r.roster_id == lg.roster_id), None)
+        if you_entry is not None:
+            unfilled = sum(1 for s in lg.roster_positions if s != "BN") > len(you_entry.starter_ids)
+            short = len(you_entry.player_ids) < lg.roster_size
+            _roster_count_cache_for(lg.league_key).get(lambda: {"attn": bool(unfilled or short)})
 
         def _rank(position: str, scope: str) -> list[dict]:
             rows = power_ranking_mod.rank(
