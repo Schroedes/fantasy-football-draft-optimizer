@@ -79,16 +79,22 @@ def test_optimal_slots_assigns_dedicated_slots_by_rank():
 
 def test_optimal_slots_flex_takes_the_best_remaining_eligible_player():
     profiles = {"p_rb1": _profile("p_rb1", "RB"), "p_rb2": _profile("p_rb2", "RB"),
-               "p_wr1": _profile("p_wr1", "WR")}
+               "p_rb3": _profile("p_rb3", "RB"), "p_wr1": _profile("p_wr1", "WR")}
     weekly_points = {
         "p_rb1": _proj("p_rb1", 10, rush_yd=150.0),   # best RB -> dedicated RB slot
         "p_rb2": _proj("p_rb2", 10, rush_yd=60.0),    # 2nd RB -> should win FLEX over p_wr1
+        "p_rb3": _proj("p_rb3", 10, rush_yd=5.0),     # weak filler -- absorbs the replacement-level floor
+                                                        # so p_rb2 gets a genuine positive VOR instead of
+                                                        # becoming its own replacement level (the bug: with
+                                                        # only 2 RBs, p_rb2 was tied at VOR=0.0 with p_wr1,
+                                                        # making the FLEX pick depend on hash-seed-randomized
+                                                        # frozenset iteration order)
         "p_wr1": _proj("p_wr1", 10, rec=3.0, rec_yd=20.0),   # weaker than p_rb2 on VOR
     }
     league = _League(starting_slots=("RB", "FLEX"))
 
     valued = weekly_lineup.weekly_value(
-        ["p_rb1", "p_rb2", "p_wr1"], league, weekly_points=weekly_points,
+        ["p_rb1", "p_rb2", "p_rb3", "p_wr1"], league, weekly_points=weekly_points,
         profiles=profiles, bye_teams=frozenset())
     slots = weekly_lineup.optimal_slots(valued, league)
     assert slots[0] == "p_rb1"
