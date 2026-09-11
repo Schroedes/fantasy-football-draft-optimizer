@@ -1,0 +1,292 @@
+/* Season screen (post-draft two-panel roster + standings view). Reuses the
+   palette tokens declared in app.css's / board.css's :root -- both define
+   the same set (--bg, --surface, --surface-2, --border, --border-strong,
+   --text, --muted, --faint, --accent, --green, --red, --amber, plus the
+   font stacks) -- rather than redefining a palette here. This file only ever
+   loads alongside one of those two, since season.js's mountSeason() is only
+   ever reached through board.js (see board/board.js's refresh()), which
+   guarantees board.css is already on the page. */
+
+.season-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 18px;
+}
+.season-strip-left { display: flex; align-items: center; gap: 12px; }
+.season-week-label { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); }
+.season-refresh-btn {
+  font: 600 12.5px var(--font-sans);
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+.season-refresh-btn:hover { color: var(--text); border-color: var(--border-strong); }
+
+.season-two-panel {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+.season-left {
+  width: 420px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.season-right {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.season-empty { color: var(--muted); font-size: 13px; padding: 20px 4px; }
+
+/* ---- your team header ---- */
+.your-team-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.your-team-id, .your-team-rank { display: flex; flex-direction: column; gap: 4px; }
+.your-team-rank { align-items: flex-end; }
+.your-team-kicker {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 1.3px;
+  color: var(--faint);
+  font-weight: 600;
+}
+.your-team-name { font-size: 18px; font-weight: 700; }
+.your-team-record { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+.your-team-power { font-family: var(--font-mono); font-size: 20px; font-weight: 600; color: var(--accent); }
+.your-team-delta { font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); }
+.your-team-delta.pos { color: var(--green); }
+.your-team-delta.neg { color: var(--red); }
+
+.hr { height: 1px; background: var(--border); }
+
+/* ---- positional strength ---- */
+.pos-bars { display: flex; flex-direction: column; gap: 9px; }
+.section-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 1.3px;
+  color: var(--faint);
+  font-weight: 600;
+}
+.pos-bar-row { display: flex; align-items: center; gap: 12px; }
+.pos-bar-label { font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--muted); width: 26px; flex-shrink: 0; }
+.pos-bar { flex: 1; height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+.pos-bar-fill { height: 100%; border-radius: 4px; background: var(--muted); }
+.pos-bar-fill.strong { background: var(--green); }
+.pos-bar-fill.weak { background: var(--red); }
+.pos-bar-rank { font-family: var(--font-mono); font-size: 11px; color: var(--muted); width: 60px; text-align: right; flex-shrink: 0; }
+.pos-bar-rank.strong { color: var(--green); }
+.pos-bar-rank.weak { color: var(--red); }
+
+/* ---- roster list ---- */
+.roster-list { display: flex; flex-direction: column; gap: 2px; }
+.roster-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 1.3px;
+  color: var(--faint);
+  padding-bottom: 4px;
+}
+.roster-row { display: flex; align-items: center; gap: 11px; padding: 7px 2px; border-bottom: 1px solid var(--border); }
+.roster-row-main { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.roster-row-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.roster-row.bench .roster-row-name { color: var(--muted); }
+.roster-row-meta { font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); }
+.roster-row-value { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--text); flex-shrink: 0; }
+.roster-row.bench .roster-row-value { color: var(--faint); }
+.roster-row-value.neg { color: var(--red); }
+.bench-value { font-size: 11.5px; color: var(--faint); padding-top: 8px; }
+
+.slot-chip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 6px;
+  border-radius: 4px;
+  width: 38px;
+  text-align: center;
+  flex-shrink: 0;
+  background: color-mix(in oklch, var(--accent) 15%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in oklch, var(--accent) 38%, transparent);
+}
+.slot-chip.bn { background: var(--surface-2); color: var(--faint); border-color: var(--border); }
+
+.callout {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+/* ---- right panel: tabs ---- */
+.panel-tabs {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+  margin-bottom: 4px;
+}
+.panel-tabs button {
+  font: 600 13px var(--font-sans);
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 10px 2px;
+  cursor: pointer;
+}
+.panel-tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+
+.power-toolbar, .capital-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pos-tabs, .scope-toggle {
+  display: flex;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 3px;
+  gap: 2px;
+}
+.pos-tabs button, .scope-toggle button {
+  font: 600 11.5px var(--font-mono);
+  padding: 6px 13px;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.pos-tabs button.on, .scope-toggle button.on { background: var(--accent); color: #0a0f14; }
+
+/* ---- power ranking / draft capital table ---- */
+.pr-table { display: flex; flex-direction: column; }
+.pr-row {
+  display: grid;
+  grid-template-columns: 44px 1fr 90px 70px 90px 64px;
+  gap: 14px;
+  align-items: center;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.pr-row.pr-head {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--faint);
+  padding: 0 10px 9px;
+}
+.pr-row.you { background: color-mix(in oklch, var(--accent) 8%, transparent); }
+.pr-rank { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--muted); }
+.pr-team {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-row.you .pr-team { font-weight: 700; color: var(--accent); }
+.pr-value, .pr-rec, .pr-pf, .pr-delta { font-family: var(--font-mono); font-size: 12.5px; text-align: right; }
+.pr-value { font-weight: 600; color: var(--text); }
+.pr-rec { color: var(--muted); }
+.pr-pf { color: var(--faint); }
+.pr-delta { font-weight: 600; color: var(--faint); }
+.pr-delta.pos { color: var(--green); }
+.pr-delta.neg { color: var(--red); }
+
+.you-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+  border: 1px solid color-mix(in oklch, var(--accent) 45%, transparent);
+  padding: 1px 5px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+/* Draft capital rows swap the fixed rank/rec/pf/delta columns for one
+   pick-chip column per season year -- count varies by league, so the
+   column count comes in as a custom property set on .pr-table.cap-table
+   rather than a fixed selector. */
+.pr-row.cap-row {
+  grid-template-columns: 44px 1fr repeat(var(--cap-cols, 2), minmax(160px, 1fr));
+}
+.pick-cell { display: flex; flex-wrap: wrap; gap: 5px; }
+.pick-cell-empty { color: var(--faint); font-family: var(--font-mono); font-size: 11px; }
+.pick-chip {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  background: color-mix(in oklch, var(--accent) 12%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in oklch, var(--accent) 35%, transparent);
+}
+.pick-chip.traded {
+  background: color-mix(in oklch, var(--amber) 12%, transparent);
+  color: var(--amber);
+  border-color: color-mix(in oklch, var(--amber) 35%, transparent);
+}
+.ghost-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--faint);
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  padding: 6px 11px;
+  margin-left: auto;
+}
+
+.legend { font-size: 11.5px; color: var(--faint); line-height: 1.5; margin: auto 0 0; padding: 12px 10px 0; }
+.legend-amber { color: var(--amber); }
