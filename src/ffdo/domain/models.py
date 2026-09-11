@@ -199,3 +199,55 @@ class ValuedPlayer:
 class TeamProfile:
     roster_id: int
     display_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class NflWeek:
+    season: int
+    week: int              # the upcoming / in-progress week (Sleeper display_week)
+    season_type: str       # "pre" | "regular" | "post"
+    complete: bool          # regular season over -> the view freezes values
+
+
+@dataclass(frozen=True, slots=True)
+class RosterEntry:
+    roster_id: int
+    team_name: str
+    player_ids: tuple[str, ...]       # Sleeper player ids (ESPN ids crosswalked upstream)
+    starter_ids: tuple[str, ...]
+    wins: int
+    losses: int
+    ties: int
+    points_for: float
+    points_against: float
+
+
+@dataclass(frozen=True, slots=True)
+class PowerRow:
+    roster_id: int
+    team_name: str
+    is_you: bool
+    value: float
+    bench_value: float
+    power_rank: int
+    standings_rank: int
+
+    @property
+    def delta(self) -> int:
+        return self.standings_rank - self.power_rank
+
+
+@dataclass(frozen=True, slots=True)
+class DraftPickAsset:
+    season: int
+    round: int
+    projected_slot: int | None
+    current_owner_roster_id: int
+    original_roster_id: int
+    via_team_name: str | None
+
+    @property
+    def label(self) -> str:
+        if self.projected_slot is not None:
+            return f"{self.round}.{self.projected_slot:02d}"
+        return f"R{self.round}"

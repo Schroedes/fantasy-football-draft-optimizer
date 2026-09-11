@@ -206,3 +206,43 @@ def test_team_profile_is_frozen_and_holds_roster_id_and_name():
     assert tp.display_name == "The Foobars"
     with pytest.raises(dataclasses.FrozenInstanceError):
         tp.display_name = "renamed"
+
+
+def test_nfl_week_constructs():
+    from ffdo.domain.models import NflWeek
+    w = NflWeek(season=2026, week=10, season_type="regular", complete=False)
+    assert w.week == 10 and w.complete is False
+
+
+def test_roster_entry_holds_tuples():
+    from ffdo.domain.models import RosterEntry
+    r = RosterEntry(roster_id=1, team_name="X", player_ids=("a", "b"),
+                    starter_ids=("a",), wins=6, losses=3, ties=0,
+                    points_for=1284.6, points_against=1244.0)
+    assert r.player_ids == ("a", "b") and r.starter_ids == ("a",)
+
+
+def test_power_row_delta_is_standings_minus_power():
+    from ffdo.domain.models import PowerRow
+    row = PowerRow(roster_id=1, team_name="X", is_you=True, value=340.0,
+                   bench_value=0.0, power_rank=2, standings_rank=4)
+    assert row.delta == 2          # roster ranks 2 spots better than record
+
+
+def test_draft_pick_asset_label():
+    from ffdo.domain.models import DraftPickAsset
+    with_slot = DraftPickAsset(season=2027, round=1, projected_slot=2,
+                               current_owner_roster_id=7, original_roster_id=11,
+                               via_team_name="Picks R Us")
+    assert with_slot.label == "1.02"
+    round_only = DraftPickAsset(season=2028, round=2, projected_slot=None,
+                                current_owner_roster_id=7, original_roster_id=7,
+                                via_team_name=None)
+    assert round_only.label == "R2"
+
+
+def test_nfl_bye_weeks_has_current_season():
+    from ffdo.domain.constants import NFL_BYE_WEEKS
+    assert 2026 in NFL_BYE_WEEKS
+    assert NFL_BYE_WEEKS[2026]["ATL"] in range(4, 15)   # a real bye week
+    assert len(NFL_BYE_WEEKS[2026]) == 32               # all teams
