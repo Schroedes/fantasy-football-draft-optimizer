@@ -621,6 +621,22 @@ def test_get_leagues_lists_tracked_with_resolved_format(monkeypatch, tmp_path):
     assert row["league_key"] == "sleeper:L123:2025"
 
 
+def test_needs_attention_true_for_a_short_roster_once_warmed(monkeypatch, tmp_path):
+    from tests.api.test_season_endpoint import _tracked, _recording_client, _ROSTERS
+    store = LeagueStore(tmp_path / "ffdo.db")
+    # roster 1 has 3 players but roster_size is 6 (QB,RB,WR,FLEX,BN,BN)
+    store.upsert(_tracked())
+    monkeypatch.setattr(app_mod, "_STORE", store)
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _recording_client())
+
+    client = TestClient(create_app())
+    # cold: needs_attention defaults false
+    assert client.get("/api/leagues").json()[0]["needs_attention"] is False
+    # warm it via the season endpoint
+    client.get("/api/leagues/sleeper:L1:2026/season")
+    assert client.get("/api/leagues").json()[0]["needs_attention"] is True
+
+
 def test_get_leagues_is_empty_when_nothing_is_tracked():
     client = TestClient(create_app())
     assert client.get("/api/leagues").json() == []
