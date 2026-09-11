@@ -68,6 +68,24 @@ def test_position_ranking_respects_scope():
     assert t2_full > t2_start          # b2a (benched RB) only counts under "full"
 
 
+def test_flex_started_player_counts_toward_its_own_position():
+    # team 2's FLEX slot is won by f2 (a WR, VOR 18) over b2a (a bench RB, VOR 15) --
+    # see test_position_ranking_respects_scope's docstring/setup for why.
+    wr_starters = power_ranking.rank(ROSTERS, VALUED, _league(), STANDINGS, None,
+                                     position="WR", scope="starters")
+    t2 = next(r for r in wr_starters if r.roster_id == 2)
+    # w2 (WR, dedicated slot, VOR 20) + f2 (WR, FLEX slot, VOR 18) = 38.
+    # If FLEX attribution were broken (e.g. only dedicated-slot WRs counted,
+    # or FLEX players were dropped from every position), this would be 20, not 38.
+    assert t2.value == 38.0
+
+    wr_full = next(r for r in power_ranking.rank(ROSTERS, VALUED, _league(), STANDINGS, None,
+                                                  position="WR", scope="full")
+                   if r.roster_id == 2)
+    # full scope adds the still-benched WR b2b (VOR 14): 20 + 18 + 14 = 52.
+    assert wr_full.value == 52.0
+
+
 def test_delta_sign_positive_when_roster_beats_record():
     rows = power_ranking.rank(ROSTERS, VALUED, _league(), {1: 3, 2: 1, 3: 2}, None,
                               position="OVR", scope="starters")
