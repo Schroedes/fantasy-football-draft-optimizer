@@ -251,3 +251,21 @@ class DraftPickAsset:
         if self.projected_slot is not None:
             return f"{self.round}.{self.projected_slot:02d}"
         return f"R{self.round}"
+
+
+@dataclass(frozen=True, slots=True)
+class WeeklyProjection:
+    player_id: str
+    season: int
+    week: int
+    stats: Mapping[str, float]
+
+
+@dataclass(frozen=True, slots=True)
+class SlotDiff:
+    slot_index: int                   # index into league.starting_slots (NOT roster_positions)
+    slot_label: str                   # "RB", "FLEX", etc. -- starting_slots[slot_index]
+    status: str                       # "match" | "suggested_swap" | "missed"
+    current_player_id: str | None
+    optimal_player_id: str | None
+    delta: float                      # optimal value - current value; 0.0 when status == "match"

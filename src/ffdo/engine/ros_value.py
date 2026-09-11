@@ -18,12 +18,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
+from ffdo.domain.constants import INJURY_OUT_STATUSES
 from ffdo.domain.models import PlayerProfile, SeasonProjection, ValuedPlayer
 from ffdo.engine import dynasty_curve, vor
 from ffdo.engine.scoring import score_stats
 
 K = 4  # pace-blend half-life: at weeks_played == K, pace and preseason weigh equally
-_INJURY_OUT = frozenset({"IR", "PUP", "Out", "Sus"})
 
 
 def _blended_full_season(
@@ -60,7 +60,7 @@ def roster_value(
         banked = float(actuals.get(pid, 0.0))
         current_full = _blended_full_season(preseason, banked, weeks_played, season_weeks)
 
-        if not profile.active or profile.injury_status in _INJURY_OUT:
+        if not profile.active or profile.injury_status in INJURY_OUT_STATUSES:
             value_pts[pid] = 0.0
         elif is_dynasty:
             value_pts[pid] = current_full * dynasty_curve.multiplier(

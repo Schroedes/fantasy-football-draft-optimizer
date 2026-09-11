@@ -24,6 +24,13 @@ NFL_BYE_WEEKS: Final[dict[int, dict[str, int]]] = {
     },
 }
 
+# Injury statuses that mean a player cannot take the field at all, shared
+# by engine/ros_value.py (zeroes a rest-of-season value for these) and
+# engine/weekly_lineup.py (excludes these entirely from a weekly solve --
+# see that module's docstring for why exclusion, not zeroing, is correct
+# there).
+INJURY_OUT_STATUSES: Final[frozenset[str]] = frozenset({"IR", "PUP", "Out", "Sus"})
+
 OFFENSE_POSITIONS: Final[frozenset[str]] = frozenset({"QB", "RB", "WR", "TE"})
 
 # Scoring keys excluded from offense classification even when they match an
