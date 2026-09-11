@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 import uuid
@@ -59,6 +60,21 @@ def _league_public_dict(lg: TrackedLeague) -> dict:
     data["format"] = data.pop("fmt")
     data["resolved_format"] = lg.resolved_format
     return data
+
+
+def _standings_rank(rosters) -> dict[int, int]:
+    """roster_id -> standings position (1 = best), by (wins, points_for)
+    desc -- the default tiebreak both Sleeper and ESPN use.
+
+    Deliberately derived here rather than read off the provider: Sleeper's
+    /league/<id>/rosters carries no rank field at all, and ESPN's
+    `playoffSeed` encodes division winners' auto-seeding, which is not the
+    straight record order the power ranking's `delta` is meant to compare
+    against. Computing both sides of that comparison the same way is what
+    makes "3 spots better than your record" mean anything.
+    """
+    order = sorted(rosters, key=lambda r: (r.wins, r.points_for), reverse=True)
+    return {r.roster_id: i + 1 for i, r in enumerate(order)}
 
 
 def _discovered_public(d: DiscoveredLeague) -> dict:
@@ -150,23 +166,32 @@ def create_app() -> FastAPI:
 
     from ffdo.api import board as board_mod
     from ffdo.domain import models as models_mod
+    from ffdo.domain.constants import NFL_BYE_WEEKS, SEASON_LENGTH
     from ffdo.engine import auction, scoring, vor
+    from ffdo.engine import power_ranking as power_ranking_mod
+    from ffdo.engine import ros_value as ros_value_mod
+    from ffdo.ingest import actuals as actuals_mod
     from ffdo.ingest import client as client_mod
     from ffdo.ingest import connect as connect_mod
     from ffdo.ingest import discover as discover_mod
     from ffdo.ingest import draft as draft_mod
     from ffdo.ingest import league as league_mod
     from ffdo.ingest import mock_draft as mock_draft_mod
+    from ffdo.ingest import nfl_state as nfl_state_mod
     from ffdo.ingest import players as players_mod
     from ffdo.ingest import projections as proj_mod
+    from ffdo.ingest import rosters as rosters_mod
     from ffdo.ingest import teams as teams_mod
+    from ffdo.ingest.espn import actuals as espn_actuals_mod
     from ffdo.ingest.espn import connect as espn_connect_mod
     from ffdo.ingest.espn import client as espn_client_mod
     from ffdo.ingest.espn import discover as espn_discover_mod
     from ffdo.ingest.espn import crosswalk as espn_crosswalk_mod
     from ffdo.ingest.espn import draft as espn_draft_mod
     from ffdo.ingest.espn import league as espn_league_mod
+    from ffdo.ingest.espn import rosters as espn_rosters_mod
     from ffdo.ingest.espn import teams as espn_teams_mod
+    from ffdo.ingest.sleeper import traded_picks as traded_picks_mod
 
     players_cache = _TTLCache(ttl_seconds=24 * 3600)
     # Keyed by season rather than a single shared cache: the projections feed
@@ -190,6 +215,18 @@ def create_app() -> FastAPI:
     # changes within a draft session.
     espn_player_pool_caches: dict[int, _TTLCache] = {}
     espn_crosswalk_caches: dict[int, _TTLCache] = {}
+    # /state/nfl is a single global document (not league- or season-scoped),
+    # so unlike the caches above it needs no keying -- every league's season
+    # view asks the same question and gets the same answer. An hour is well
+    # inside the shortest interval that matters here (Sleeper advances
+    # `display_week` once a week, on Tuesday).
+    nfl_state_cache = _TTLCache(ttl_seconds=3600)
+    # Separate from `projections_caches` despite reading the same feed: this
+    # one holds ONLY the `SeasonProjection` half and is allowed to fall back
+    # to `allow_contaminated=True` (see `_load_projection_anchor`), which the
+    # draft board's cache must never do. A 24h TTL because the preseason
+    # anchor is, by definition, not changing during the season.
+    season_proj_anchor_caches: dict[int, _TTLCache] = {}
 
     def _projections_cache_for(season: int) -> _TTLCache:
         return projections_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
@@ -223,6 +260,44 @@ def create_app() -> FastAPI:
                 "&position[]=WR&position[]=TE&position[]=DEF"
                 "&position[]=K"),
             season)
+
+    def _season_proj_anchor_for(season: int) -> _TTLCache:
+        return season_proj_anchor_caches.setdefault(
+            season, _TTLCache(ttl_seconds=24 * 3600))
+
+    def _load_projection_anchor(sleeper: client_mod.SleeperClient, season: int):
+        """The preseason projection anchor `ros_value.roster_value` blends
+        season-to-date pace against.
+
+        Sleeper overwrites (and for some players wipes) its projections feed
+        after kickoff, which is exactly what `_load_projections`'
+        `ContaminatedProjectionError` guard exists to refuse -- and the
+        season view runs entirely post-kickoff, so that refusal fires on
+        every single call once the season is underway. Refusing outright
+        would mean no season view at all from week 1 onward, so this falls
+        back to the post-kickoff feed with `allow_contaminated=True` and says
+        so in the log. The fallback degrades gracefully rather than lying:
+        `roster_value`'s pace blend shifts weight off the anchor as
+        `weeks_played` grows (half of it is gone by week 4), so the further
+        into the season the contaminated anchor is used, the less it counts.
+
+        `ContaminatedProjectionError` must be caught BEFORE the caller's
+        `RuntimeError -> 502` arm sees it -- it subclasses `RuntimeError`,
+        and it is not a provider outage.
+        """
+        try:
+            proj, _adp = _load_projections(sleeper, season)
+            return proj
+        except proj_mod.ContaminatedProjectionError:
+            logging.getLogger("ffdo.api").warning(
+                "season anchor: using post-kickoff projections for %s "
+                "(no clean preseason snapshot)", season)
+            raw = sleeper.get_json(
+                f"{client_mod.PROJECTIONS}/{season}"
+                "?season_type=regular&position[]=QB&position[]=RB"
+                "&position[]=WR&position[]=TE&position[]=DEF&position[]=K")
+            proj, _adp = proj_mod.parse(raw, season, allow_contaminated=True)
+            return proj
 
     def _load_teams(sleeper: client_mod.SleeperClient, league_id: str):
         return teams_mod.parse(
@@ -811,6 +886,320 @@ def create_app() -> FastAPI:
 
         board["is_mock"] = is_mock
         return board
+
+    def _season_weeks(season: int) -> int:
+        """Regular-season length. The NFL moved 17 -> 18 games in 2024, so a
+        pace projection must normalize against the right number or every
+        season before 2024 reads ~6% high."""
+        return SEASON_LENGTH.get(season, 18)
+
+    def _through_week(nfl) -> int:
+        """The last week whose actual points are final.
+
+        `nfl.week` is the upcoming / in-progress week, so its points are
+        partial at best -- counting them would make a pace projection read
+        low mid-week and then jump on Tuesday. Preseason has no scored weeks
+        at all, and once the regular season is over every week counts."""
+        if nfl.complete:
+            return _season_weeks(nfl.season)
+        if nfl.season_type == "pre":
+            return 0
+        return max(0, nfl.week - 1)
+
+    def _roster_callout(lg: TrackedLeague, you, valued, profiles) -> str | None:
+        """One short, actionable line for the roster panel's header, or None.
+
+        Order matters: an empty roster spot is a thing the user can act on
+        today (there is a free agent to add), so it outranks "thin at RB",
+        which is a structural observation about a roster that is already
+        full. Only the first is returned -- a header with three warnings in
+        it is a header nobody reads.
+        """
+        short = lg.roster_size - len(you.player_ids)
+        if short > 0:
+            return f"{short} empty roster spot{'s' if short != 1 else ''}"
+
+        # "Startable" means positive VOR: a player valued at or below
+        # replacement is, by definition, someone the waiver wire can match.
+        startable: dict[str, int] = {}
+        for pid in you.player_ids:
+            prof = profiles.get(pid)
+            if prof is None:
+                continue
+            vp = valued.get(pid)
+            if vp is not None and vp.vor > 0:
+                startable[prof.position] = startable.get(prof.position, 0) + 1
+
+        starting_positions = set(lg.starting_slots)
+        for pos in ("QB", "RB", "WR", "TE"):
+            if pos in starting_positions and startable.get(pos, 0) == 1:
+                return f"thin at {pos}"
+        return None
+
+    def _your_roster_payload(lg, you, valued, profiles, power_payload,
+                             standings_rank) -> dict:
+        byes = NFL_BYE_WEEKS.get(lg.season, {})
+        # Slot labels come from the provider's own `starters` array rather
+        # than being re-derived from the optimal-lineup fill: this panel
+        # shows what the user actually has set, not what they should have
+        # set. (The "should" view is sub-project #3's weekly lineup screen.)
+        starters = set(you.starter_ids)
+        players = []
+        for pid in you.player_ids:
+            prof = profiles.get(pid)
+            if prof is None:
+                # Same silent omission `ros_value.roster_value` already
+                # applies: a rostered id with no Sleeper profile (a stale
+                # crosswalk miss, an offseason-only id) has no name,
+                # position or value to show, and inventing zeros for it
+                # would put a phantom row on the user's roster.
+                continue
+            vp = valued.get(pid)
+            players.append({
+                "player_id": pid, "name": prof.full_name, "position": prof.position,
+                "team": prof.team, "slot": prof.position if pid in starters else "BN",
+                "starter": pid in starters,
+                "value": round(vp.vor, 1) if vp else 0.0,
+                "age": prof.age, "bye_week": byes.get(prof.team or ""),
+                "injury_status": prof.injury_status,
+            })
+        players.sort(key=lambda p: (not p["starter"], -p["value"]))
+
+        def _you_in(rows):
+            return next((r for r in rows if r["roster_id"] == lg.roster_id), None)
+
+        overall_you = _you_in(power_payload["overall"]["starters"])
+        bench_full = _you_in(power_payload["overall"]["full"])
+        pos_rank = {}
+        for pos in ("QB", "RB", "WR", "TE"):
+            hit = _you_in(power_payload["by_position"][pos]["starters"])
+            pos_rank[pos] = hit["power_rank"] if hit else None
+
+        return {
+            "roster_id": you.roster_id, "team_name": you.team_name,
+            "wins": you.wins, "losses": you.losses, "ties": you.ties,
+            "points_for": round(you.points_for, 1),
+            "points_against": round(you.points_against, 1),
+            "power_rank": overall_you["power_rank"] if overall_you else None,
+            "standings_rank": standings_rank.get(you.roster_id),
+            "positional_rank": pos_rank,
+            "bench_value": bench_full["bench_value"] if bench_full else 0.0,
+            "callout": _roster_callout(lg, you, valued, profiles),
+            "players": players,
+        }
+
+    def _draft_capital_payload(capital, rosters, your_roster_id):
+        """Teams ranked by how much future draft capital they hold, each with
+        its picks grouped by draft year for the UI's per-year chip rows.
+
+        Ranked by pick COUNT first, then by the best (lowest) projected slot
+        any of those picks carries, because a pick's only quality signal here
+        is where it projects to land -- there is no pick-value model in this
+        sub-project (that is #5's trade work). `None` in, `None` out: redraft
+        leagues have no future picks to speak of and the panel is hidden
+        entirely rather than shown empty.
+        """
+        if capital is None:
+            return None
+        names = {r.roster_id: r.team_name for r in rosters}
+        by_owner: dict[int, list] = {}
+        for asset in capital:
+            by_owner.setdefault(asset.current_owner_roster_id, []).append(asset)
+        ranked = sorted(
+            by_owner.items(),
+            key=lambda kv: (-len(kv[1]),
+                            min((a.projected_slot or 99) for a in kv[1]),
+                            kv[0]))
+        out = []
+        for i, (owner_id, assets) in enumerate(ranked):
+            picks: dict[str, list] = {}
+            for a in sorted(assets, key=lambda a: (a.season, a.round,
+                                                   a.projected_slot or 99)):
+                picks.setdefault(str(a.season), []).append({
+                    "label": a.label, "round": a.round,
+                    "projected_slot": a.projected_slot,
+                    "via_team_name": a.via_team_name,
+                })
+            out.append({
+                "power_rank": i + 1, "roster_id": owner_id,
+                "team_name": names.get(owner_id, f"Team {owner_id}"),
+                "is_you": owner_id == your_roster_id, "picks": picks,
+            })
+        return out
+
+    def _assemble_season(lg, nfl, through_week, rosters, profiles, proj_anchor,
+                         actuals, standings_rank, capital) -> dict:
+        """The one payload builder both providers end in. Everything above
+        this point is provider-specific fetching; everything from here down
+        is the same code for Sleeper and ESPN, because both branches have
+        already normalized to `RosterEntry` + Sleeper player ids."""
+        all_pids = {pid for r in rosters for pid in r.player_ids}
+        # THE FROZEN SEAM (see engine/ros_value.py): sub-project #4 swaps the
+        # body of `roster_value` for a real multi-year model and keeps this
+        # exact call shape. Nothing here may reach inside it.
+        valued = ros_value_mod.roster_value(
+            all_pids, lg,
+            resolved_format=lg.resolved_format,
+            season_proj=proj_anchor,
+            profiles=profiles,
+            actuals=actuals,
+            weeks_played=through_week,
+            season_weeks=_season_weeks(lg.season))
+
+        def _rank(position: str, scope: str) -> list[dict]:
+            rows = power_ranking_mod.rank(
+                rosters, valued, lg, standings_rank, lg.roster_id,
+                position=position, scope=scope)
+            return [{
+                "roster_id": row.roster_id, "team_name": row.team_name,
+                "is_you": row.is_you, "value": row.value,
+                "bench_value": row.bench_value, "power_rank": row.power_rank,
+                "standings_rank": row.standings_rank, "delta": row.delta,
+            } for row in rows]
+
+        power_ranking_payload = {
+            "overall": {"starters": _rank("OVR", "starters"),
+                        "full": _rank("OVR", "full")},
+            "by_position": {
+                pos: {"starters": _rank(pos, "starters"),
+                      "full": _rank(pos, "full")}
+                for pos in ("QB", "RB", "WR", "TE")
+            },
+        }
+
+        # `roster_id` can legitimately be None (a league the user only
+        # observes, or one whose roster slot never resolved), and a roster
+        # that does not exist in the feed is not an error -- the panel is
+        # simply absent, the way the draft board already tolerates having no
+        # seat of its own.
+        you = next((r for r in rosters if r.roster_id == lg.roster_id), None)
+        your_roster = (_your_roster_payload(lg, you, valued, profiles,
+                                            power_ranking_payload, standings_rank)
+                       if you else None)
+
+        return {
+            "nfl_week": {"season": nfl.season, "week": nfl.week,
+                         "season_type": nfl.season_type, "complete": nfl.complete,
+                         "values_through_week": through_week},
+            "your_roster": your_roster,
+            "power_ranking": power_ranking_payload,
+            "standings": [
+                {"roster_id": r.roster_id, "team_name": r.team_name,
+                 "wins": r.wins, "losses": r.losses, "ties": r.ties,
+                 "points_for": round(r.points_for, 1),
+                 "points_against": round(r.points_against, 1)}
+                for r in sorted(rosters, key=lambda r: standings_rank[r.roster_id])
+            ],
+            "draft_capital": _draft_capital_payload(capital, rosters, lg.roster_id),
+        }
+
+    def _season_espn(lg: TrackedLeague) -> dict:
+        """ESPN's season view. The valuation inputs (player profiles, the
+        projection anchor) come from Sleeper regardless of provider -- ESPN
+        has no equivalent feed this project trusts -- so this branch talks to
+        both APIs and crosswalks ESPN's roster ids onto Sleeper's before
+        handing the result to the shared assembler."""
+        cred = _require_espn_credential("the season view")
+
+        sleeper = client_mod.SleeperClient()
+        try:
+            profiles, espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            proj_anchor = _season_proj_anchor_for(lg.season).get(
+                lambda: _load_projection_anchor(sleeper, lg.season))
+        except (httpx.HTTPError, RuntimeError) as exc:
+            # `RuntimeError` for the same exhausted-retry reason as
+            # `_sleeper_discover`'s arm -- ffdo.ingest.http raises a plain
+            # RuntimeError once retries run out, never an httpx error.
+            raise HTTPException(
+                status_code=502, detail="Couldn't reach Sleeper, try again") from exc
+        finally:
+            sleeper.close()
+
+        espn = espn_client_mod.EspnClient(cred.espn_s2, cred.swid)
+        try:
+            player_pool_raw = _espn_player_pool_cache_for(lg.season).get(
+                lambda: espn.get_json(
+                    f"{espn_client_mod.BASE}/seasons/{lg.season}/players"
+                    "?view=kona_player_info",
+                    extra_headers=espn_client_mod.PLAYER_POOL_FILTER_HEADER))
+            cw = _espn_crosswalk_cache_for(lg.season).get(
+                lambda: espn_crosswalk_mod.build(
+                    espn_id_index, profiles,
+                    espn_crosswalk_mod.parse_player_pool(player_pool_raw)))
+            rosters, nfl, mroster_raw = espn_rosters_mod.fetch(
+                espn, lg.provider_league_id, lg.season, cw)
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=502, detail="Couldn't reach ESPN, try again") from exc
+        finally:
+            espn.close()
+
+        through_week = _through_week(nfl)
+        # Pure parse of the mRoster payload already in hand -- no second
+        # round trip, unlike Sleeper's week-by-week matchups walk.
+        actuals = espn_actuals_mod.points_so_far(mroster_raw, cw, through_week)
+        # ESPN exposes no traded-pick feed this project reads, so the draft
+        # capital panel is absent for ESPN leagues of every format -- an
+        # honest gap rather than an implicit-ownership table that would be
+        # silently wrong the moment anyone traded a pick.
+        return _assemble_season(lg, nfl, through_week, rosters, profiles,
+                                proj_anchor, actuals, _standings_rank(rosters), None)
+
+    @app.get("/api/leagues/{league_key}/season")
+    def get_season(league_key: str) -> dict:
+        """The post-draft season view: your roster, the league power ranking,
+        standings, and (dynasty/keeper only) draft capital.
+
+        Deliberately returns a full 200 payload even when
+        `draft_status != "complete"`. The frontend decides board-vs-season
+        routing from the live draft status it is already polling, and a
+        league mid-draft still has real rosters and standings to show.
+        """
+        lg = _load_league(league_key)
+
+        if lg.provider == "espn":
+            return _season_espn(lg)
+
+        sleeper = client_mod.SleeperClient()
+        try:
+            nfl = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
+            profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            proj_anchor = _season_proj_anchor_for(lg.season).get(
+                lambda: _load_projection_anchor(sleeper, lg.season))
+            # The live roster feed, NOT the draft board's pick-derived
+            # rosters: post-draft, adds/drops/trades have moved players.
+            rosters = rosters_mod.fetch(sleeper, lg.provider_league_id)
+            through_week = _through_week(nfl)
+            actuals = actuals_mod.points_so_far(
+                sleeper, lg.provider_league_id, through_week)
+
+            capital = None
+            if lg.resolved_format in ("dynasty", "keeper"):
+                # Reverse standings order = draft order: worst record picks
+                # first, which is what gives an untraded pick its projected
+                # slot.
+                worst_to_best = sorted(rosters, key=lambda r: (r.wins, r.points_for))
+                capital = traded_picks_mod.capital(
+                    sleeper, lg.provider_league_id,
+                    num_teams=lg.num_teams,
+                    rounds=int((lg.raw_settings or {}).get("draft_rounds") or 4),
+                    standings_order=[r.roster_id for r in worst_to_best],
+                    draft_years=(lg.season + 1, lg.season + 2),
+                    team_names={r.roster_id: r.team_name for r in rosters})
+        except (httpx.HTTPError, RuntimeError) as exc:
+            # Both halves are load-bearing: `ffdo.ingest.http.
+            # get_json_with_retry` raises a plain `RuntimeError` once retries
+            # are exhausted (the common outage shape), while a permanent
+            # status escapes as `httpx.HTTPStatusError`. See
+            # `_sleeper_discover` for the full reasoning.
+            raise HTTPException(
+                status_code=502, detail="Couldn't reach Sleeper, try again") from exc
+        finally:
+            sleeper.close()
+
+        return _assemble_season(lg, nfl, through_week, rosters, profiles,
+                                proj_anchor, actuals, _standings_rank(rosters),
+                                capital)
 
     # Static mounts MUST be registered last: StaticFiles("/") matches any
     # path under it, so routes declared after this point would be shadowed.
