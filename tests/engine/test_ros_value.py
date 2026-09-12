@@ -74,3 +74,40 @@ def test_player_without_a_projection_is_omitted():
         ["rb", "ghost"], _league(), resolved_format="redraft", season_proj={"rb": _proj("rb", _RB_STATS)},
         profiles=profiles, actuals={}, weeks_played=0)
     assert "ghost" not in valued
+
+
+def test_dynasty_uses_the_real_age_curve_when_provided():
+    profiles = {"rb": _profile("rb", "RB", age=24)}
+    proj = {"rb": _proj("rb", _RB_STATS)}
+    kw = dict(season_proj=proj, profiles=profiles, actuals={}, weeks_played=0)
+    no_curve = ros_value.roster_value(["rb"], _league(), resolved_format="dynasty", **kw)
+    curve = {"RB": {25: 10.0, 26: 10.0, 27: 10.0, 28: 10.0, 29: 10.0}}
+    with_curve = ros_value.roster_value(
+        ["rb"], _league(), resolved_format="dynasty", age_curve=curve, **kw)
+    assert with_curve["rb"].projected_points > no_curve["rb"].projected_points
+
+
+def test_dynasty_with_no_curve_or_history_matches_current_full_not_double_it():
+    """Regression for the dynasty_value doubling bug (see Task 4) --
+    verified end-to-end through roster_value, not just in dynasty_value's
+    own unit tests."""
+    profiles = {"rb": _profile("rb", "RB", age=24)}
+    proj = {"rb": _proj("rb", _RB_STATS)}
+    valued = ros_value.roster_value(
+        ["rb"], _league(), resolved_format="dynasty", season_proj=proj,
+        profiles=profiles, actuals={}, weeks_played=0)
+    # _RB_STATS scores ~250 pts under _league()'s scoring (see the existing
+    # comment on _RB_STATS in this file) -- with no curve/history, dynasty
+    # value must equal that ~250, not ~500.
+    assert valued["rb"].projected_points < 300.0
+
+
+def test_redraft_branch_ignores_history_and_age_curve_entirely():
+    profiles = {"rb": _profile("rb", "RB", age=24)}
+    proj = {"rb": _proj("rb", _RB_STATS)}
+    kw = dict(season_proj=proj, profiles=profiles, actuals={"rb": 50.0}, weeks_played=5)
+    without = ros_value.roster_value(["rb"], _league(), resolved_format="redraft", **kw)
+    with_extra = ros_value.roster_value(
+        ["rb"], _league(), resolved_format="redraft",
+        history={"rb": []}, age_curve={"RB": {25: 999.0}}, **kw)
+    assert without["rb"].projected_points == with_extra["rb"].projected_points
