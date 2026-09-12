@@ -75,7 +75,13 @@ def test_year_one_uses_the_players_current_age_not_age_plus_one():
     curve = {"RB": {28: -30.0}}
     result = dynasty_value.annuity_value(
         250.0, profile, [], curve, current_season=2026, horizon_years=1)
-    assert result < 250.0
+    # The buggy indexing (curve.get(age + year, ...)) misses this curve's
+    # only entry entirely, so year 1 == current_full and the result lands
+    # at 250.0 (up to float rounding, e.g. 249.99999999999997 -- `< 250.0`
+    # alone does NOT discriminate the bug). The fixed indexing picks up
+    # the -30.0 ppg delta, floors year 1's value at 0.0, and pulls the
+    # weighted result well below 250 -- a threshold with real margin.
+    assert result < 200.0
 
 
 def test_curve_delta_is_scaled_by_season_length_not_left_as_raw_ppg():
