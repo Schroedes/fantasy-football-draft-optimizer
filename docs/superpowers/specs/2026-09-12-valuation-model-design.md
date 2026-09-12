@@ -286,15 +286,38 @@ Steps (per the brainstorming-approved design):
    — a single per-position durability estimate (Task 13's existing
    function, unmodified), held CONSTANT across every horizon year (§1.2's
    documented simplification — no age-dependent injury growth).
-3. For `year in 1..horizon_years`:
+3. Start the running totals with year 0 itself (`current_full`,
+   undiscounted, weight `1.0`) — **not** added on top at the end (see the
+   correctness note below): `total_value = current_full`, `total_weight
+   = 1.0`. Then for `year in 1..horizon_years`:
    `cumulative_delta += age_curve.get(profile.position, {}).get(profile.age + year, 0.0)`
    `year_value = max(0.0, current_full + cumulative_delta)`
    `weight = survival / (1 + discount_rate) ** year`
-   accumulate `discounted_sum += year_value * weight` and `weight_sum += weight`.
-4. Return `current_full + (discounted_sum / weight_sum if weight_sum > 0 else 0.0)`
-   — an annuity-equivalent INCLUDING year 0 (`current_full` itself,
-   undiscounted) plus the discounted-average of years 1..horizon, landing
-   back on the same season-points scale every other `ValuedPlayer` uses.
+   accumulate `total_value += year_value * weight` and
+   `total_weight += weight`.
+4. Return `total_value / total_weight`
+   — a single weighted average across years 0..horizon (year 0 always
+   included with weight 1.0), landing back on the same season-points
+   scale every other `ValuedPlayer` uses.
+
+   **Correctness note (caught during plan-writing, not just brainstorming
+   — worth stating precisely so an implementer doesn't reintroduce it):**
+   an earlier draft of this formula computed `current_full +
+   (discounted_sum / weight_sum over years 1..horizon)` — i.e. added year
+   0 ON TOP of an average of the OTHER years, rather than folding year 0
+   INTO the average. That version silently doubles the dynasty value
+   whenever `age_curve` has no data for a player's future ages (a very
+   real case — an empty/sparse curve is exactly what a player near the
+   edge of the training data's age range, or before the curve is ever
+   populated, would see): with no curve data, `year_value == current_full`
+   for every future year too, so "current_full + average(a bunch of
+   current_full's)" collapses to `current_full + current_full`, not
+   `current_full`. The corrected step 3/4 above folds year 0 into the SAME
+   weighted average as every other year, which means "no curve data at
+   all" correctly degrades to `dynasty_value == current_full` (a graceful,
+   inert no-op) instead of silently doubling every dynasty value in the
+   app. **This is the exact formula to implement — do not use the
+   "current_full + average(1..horizon)" version.**
 5. A missing `age_curve` entry for a given future age (out of the
    training data's observed range — very young or very old) contributes
    `0.0` to `cumulative_delta` for that year (flat, not declining) —
