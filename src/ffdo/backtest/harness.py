@@ -98,3 +98,7 @@ def evaluate_season(
         "improvement": round(model_rho - baseline_rho, 4),
         "season_length": length,
     }
+
+
+def sweep_durability_weights(season: int, weights: Sequence[float]) -> list[dict]:
+    return [evaluate_season(season, age_weight=0.0, durability_weight=w) for w in weights]

@@ -49,3 +49,10 @@ def test_adp_baseline_reproduces_the_known_correlation(season):
 def test_zero_weights_leave_the_baseline_untouched():
     result = harness.evaluate_season(2025, age_weight=0.0, durability_weight=0.0)
     assert result["improvement"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_sweep_durability_weights_returns_one_result_per_weight():
+    results = harness.sweep_durability_weights(2025, [0.0, 0.5, 1.0])
+    assert len(results) == 3
+    assert results[0]["improvement"] == pytest.approx(0.0, abs=1e-9)  # weight 0.0 is always a no-op baseline
+    assert all("model_rho" in r for r in results)
