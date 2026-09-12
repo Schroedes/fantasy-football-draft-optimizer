@@ -43,6 +43,11 @@ OFFENSE_POSITIONS: Final[frozenset[str]] = frozenset({"QB", "RB", "WR", "TE"})
 # a "no" for one question doesn't invalidate the data for a different one.
 # Re-fit periodically via scripts/refresh_snapshot.py + scripts/fit_age_curve.py
 # as more seasons of real data accumulate.
+# Fit from data/snapshots/2026-09-12, seasons [2021, 2022, 2023, 2024, 2025, 2026].
+# That snapshot directory is NOT tracked in git (see the 2026-09-12 sub-project's
+# SDD ledger, Task 1's ruling) -- re-fitting from the older, tracked
+# 2026-08-22-draft-day snapshot will NOT reproduce these exact values, since it
+# covers different/fewer seasons. This is expected, not a bug.
 DYNASTY_AGE_CURVE: Final[dict[str, dict[int, float]]] = {
     "C": {
         21: 0.0, 22: 0.0, 23: 0.0, 24: 0.0, 25: 0.0, 26: -0.0182,
