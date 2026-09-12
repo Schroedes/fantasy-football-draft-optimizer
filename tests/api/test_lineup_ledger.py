@@ -65,6 +65,27 @@ def test_resolve_none_when_final_matches_nothing_beyond_the_original(tmp_path):
     assert followed == "none"
 
 
+def test_resolve_none_ignores_slots_that_already_matched_before_any_recommendation(tmp_path):
+    ledger = LineupLedger(tmp_path / "ffdo.db")
+    # slot 0 already matched the recommendation before any suggestion was made;
+    # slot 1 is the only ACTUAL suggested change (p2 instead of the original p_old2).
+    ledger.record_if_absent("sleeper:L1:2026", 2026, 10,
+                            recommended={0: "p1", 1: "p2"}, actual=("p1", "p_old2"))
+    # user ignored the one real suggestion and kept their original slot 1 pick.
+    followed = ledger.resolve("sleeper:L1:2026", 2026, 10, final_actual=("p1", "p_old2"))
+    assert followed == "none"
+
+
+def test_resolve_full_when_nothing_was_actually_actionable(tmp_path):
+    ledger = LineupLedger(tmp_path / "ffdo.db")
+    # the recommendation matched the original actual lineup everywhere --
+    # there was nothing to suggest, so trivially "full".
+    ledger.record_if_absent("sleeper:L1:2026", 2026, 10,
+                            recommended={0: "p1", 1: "p2"}, actual=("p1", "p2"))
+    followed = ledger.resolve("sleeper:L1:2026", 2026, 10, final_actual=("p1", "p2"))
+    assert followed == "full"
+
+
 def test_two_different_weeks_are_independent_rows(tmp_path):
     ledger = LineupLedger(tmp_path / "ffdo.db")
     ledger.record_if_absent("sleeper:L1:2026", 2026, 9, recommended={0: "wk9"}, actual=("a",))

@@ -191,10 +191,23 @@ def test_diff_missed_when_current_starters_team_already_locked():
 
 
 def test_diff_missed_for_an_empty_slot_whose_only_fix_already_locked():
-    profiles = {"p_bench": _profile("p_bench", "RB", team="BENCH_TEAM")}
-    weekly_points = {"p_bench": _proj("p_bench", 10, rush_yd=150.0)}
+    # A filler RB is required (same thin-pool pattern as
+    # `test_optimal_slots_flex_takes_the_best_remaining_eligible_player`
+    # and the Fix 4(b) test above): with only `p_bench` in the RB pool and
+    # `num_teams=2`, the dedicated slot's greedy fill fully consumes the
+    # 1-player pool, pinning the replacement floor at `p_bench`'s own
+    # value -- VOR 0.0 by construction. Once `diff()` compares VOR instead
+    # of only identity (this branch's Fix 2), a VOR-0.0 "best" for an empty
+    # slot (baseline value 0.0 too) would be wrongly read as "no
+    # improvement" even though a real player obviously beats an empty
+    # slot. The filler gives `p_bench` genuine positive headroom instead.
+    profiles = {"p_bench": _profile("p_bench", "RB", team="BENCH_TEAM"),
+               "p_filler": _profile("p_filler", "RB", team="FILLER_TEAM")}
+    weekly_points = {"p_bench": _proj("p_bench", 10, rush_yd=150.0),
+                     "p_filler": _proj("p_filler", 10, rush_yd=5.0)}
     league = _League(starting_slots=("RB",))
     valued = _valued_from(profiles, weekly_points, league)
+    assert valued["p_bench"].vor > 0
     optimal = weekly_lineup.optimal_slots(valued, league)
     assert optimal[0] == "p_bench"
 
@@ -206,10 +219,14 @@ def test_diff_missed_for_an_empty_slot_whose_only_fix_already_locked():
 
 
 def test_diff_suggested_swap_for_an_empty_slot_whose_fix_is_still_unlocked():
-    profiles = {"p_bench": _profile("p_bench", "RB", team="BENCH_TEAM")}
-    weekly_points = {"p_bench": _proj("p_bench", 10, rush_yd=150.0)}
+    # See the filler-player note in the previous test -- same thin-pool fix.
+    profiles = {"p_bench": _profile("p_bench", "RB", team="BENCH_TEAM"),
+               "p_filler": _profile("p_filler", "RB", team="FILLER_TEAM")}
+    weekly_points = {"p_bench": _proj("p_bench", 10, rush_yd=150.0),
+                     "p_filler": _proj("p_filler", 10, rush_yd=5.0)}
     league = _League(starting_slots=("RB",))
     valued = _valued_from(profiles, weekly_points, league)
+    assert valued["p_bench"].vor > 0
     optimal = weekly_lineup.optimal_slots(valued, league)
 
     rows = weekly_lineup.diff((None,), optimal, frozenset(),
@@ -227,17 +244,85 @@ def test_diff_match_when_both_current_and_optimal_are_empty():
 
 def test_diff_current_starter_excluded_from_valued_still_shows_a_zero_value():
     """A current starter who was excluded from `valued` (bye/hard-out) must
-    not crash the diff, and reads as 0.0 rather than raising KeyError."""
+    not crash the diff, and reads as 0.0 rather than raising KeyError.
+
+    A third, weak filler RB is included so `p_bench` (the bench replacement)
+    gets genuine positive VOR headroom instead of becoming its own
+    replacement-level floor by construction -- with only ONE surviving RB,
+    `p_bench`'s VOR would be exactly 0.0 and the final `delta == 0.0`
+    assertion couldn't tell "correctly falls back to 0.0" apart from
+    "genuinely computed a real value that happens to be 0.0" (same
+    thin-pool pattern already fixed elsewhere in this file, e.g.
+    `test_optimal_slots_flex_takes_the_best_remaining_eligible_player`).
+    """
     profiles = {"p_bye": _profile("p_bye", "RB", team="BYE_TEAM"),
-               "p_bench": _profile("p_bench", "RB", team="BENCH_TEAM")}
+               "p_bench": _profile("p_bench", "RB", team="BENCH_TEAM"),
+               "p_filler": _profile("p_filler", "RB", team="FILLER_TEAM")}
     weekly_points = {"p_bye": _proj("p_bye", 10, rush_yd=150.0),
-                     "p_bench": _proj("p_bench", 10, rush_yd=50.0)}
+                     "p_bench": _proj("p_bench", 10, rush_yd=50.0),
+                     "p_filler": _proj("p_filler", 10, rush_yd=5.0)}
     league = _League(starting_slots=("RB",))
     valued = _valued_from(profiles, weekly_points, league, bye_teams=frozenset({"BYE_TEAM"}))
     assert "p_bye" not in valued
     optimal = weekly_lineup.optimal_slots(valued, league)
+    assert optimal[0] == "p_bench"
 
     rows = weekly_lineup.diff(("p_bye",), optimal, frozenset(), valued, profiles, league)
     assert rows[0].current_player_id == "p_bye"
     assert rows[0].status == "suggested_swap"
+    assert valued["p_bench"].vor > 0   # genuine headroom, not a 0.0/0.0 coincidence
     assert rows[0].delta == round(valued["p_bench"].vor - 0.0, 1)
+
+
+def test_diff_match_for_permutation_equivalent_lineup_not_offsetting_swaps():
+    """Two RBs with IDENTICAL weekly points (hence identical VOR) can be
+    slotted either way between the dedicated RB slot and FLEX with no
+    change to total value. `optimal_slots` picks one specific arrangement
+    (by its internal tie-break); if the user's actual lineup happens to
+    have them the other way around, the diff must NOT report two
+    offsetting "suggested_swap" rows (one recommending a change that is
+    strictly worse) -- both slots are already optimal in aggregate, so
+    both must read "match".
+
+    Hand-verified VOR math: both players score rush_yd=100.0 -> identical
+    `score_stats` output (10.0) -> identical `adjusted_points` -> the
+    league-wide replacement level for RB (from `replacement_levels`, with
+    `num_teams=2` and a 2-player pool, exhausts the whole pool in the
+    dedicated-slot pass) lands at the LAST player's value, which for this
+    tied pool is also 10.0 -- so VOR == 10.0 - 10.0 == 0.0 for BOTH
+    players. `value_of(best) <= value_of(current)` (0.0 <= 0.0) therefore
+    holds in both directions.
+    """
+    profiles = {"p_rb_a": _profile("p_rb_a", "RB"), "p_rb_b": _profile("p_rb_b", "RB")}
+    weekly_points = {"p_rb_a": _proj("p_rb_a", 10, rush_yd=100.0),
+                     "p_rb_b": _proj("p_rb_b", 10, rush_yd=100.0)}
+    league = _League(starting_slots=("RB", "FLEX"))
+    valued = _valued_from(profiles, weekly_points, league)
+    assert valued["p_rb_a"].vor == 0.0
+    assert valued["p_rb_b"].vor == 0.0
+    optimal = weekly_lineup.optimal_slots(valued, league)
+    assert optimal == {0: "p_rb_b", 1: "p_rb_a"}
+
+    # Current lineup has the pair in the REVERSE arrangement from `optimal`.
+    rows = weekly_lineup.diff(("p_rb_a", "p_rb_b"), optimal, frozenset(),
+                              valued, profiles, league)
+    assert rows[0].status == "match"
+    assert rows[1].status == "match"
+
+
+def test_diff_match_when_no_eligible_replacement_exists_at_all():
+    """A bye-week starter with NO bench replacement league-wide at that
+    position (`optimal.get(i)` is `None`) must read as "match", not a
+    "suggested_swap" to a blank optimal player."""
+    profiles = {"p_bye": _profile("p_bye", "RB", team="BYE_TEAM")}
+    weekly_points = {"p_bye": _proj("p_bye", 10, rush_yd=150.0)}
+    league = _League(starting_slots=("RB",))
+    valued = _valued_from(profiles, weekly_points, league, bye_teams=frozenset({"BYE_TEAM"}))
+    assert valued == {}
+    optimal = weekly_lineup.optimal_slots(valued, league)
+    assert optimal[0] is None
+
+    rows = weekly_lineup.diff(("p_bye",), optimal, frozenset(), valued, profiles, league)
+    assert rows[0].status == "match"
+    assert rows[0].current_player_id == "p_bye"
+    assert rows[0].optimal_player_id is None

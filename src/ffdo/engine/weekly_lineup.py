@@ -114,7 +114,12 @@ def diff(
         current = current_starters[i] if i < len(current_starters) else None
         best = optimal.get(i)
 
-        if current == best:
+        # Nothing actionable: either literally the same player/slot, or `best`
+        # doesn't exist, or `best` isn't actually an improvement over `current`
+        # (e.g. current's best RB sits in FLEX while a functionally-equivalent
+        # RB sits in the dedicated slot -- swapping them would change nothing
+        # or make things worse, so it must not be reported as a "swap").
+        if current == best or best is None or value_of(best) <= value_of(current):
             rows.append(SlotDiff(
                 slot_index=i, slot_label=slot_label, status="match",
                 current_player_id=current, optimal_player_id=None, delta=0.0))

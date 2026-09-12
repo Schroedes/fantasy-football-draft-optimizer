@@ -1342,7 +1342,7 @@ def create_app() -> FastAPI:
             sleeper.close()
 
         all_teams = frozenset(p.team for p in profiles.values() if p.team)
-        bye_teams = schedule_mod.bye_teams(games, all_teams)
+        bye_teams = schedule_mod.bye_teams(games, all_teams) if games else frozenset()
         locked_teams = schedule_mod.locked_teams(games)
         locked_now = schedule_mod.week_locked(games)
 

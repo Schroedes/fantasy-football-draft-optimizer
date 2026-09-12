@@ -128,12 +128,18 @@ class LineupLedger:
         if record is None:
             raise ValueError(
                 f"no lineup_recommendation row for {league_key} season {season} week {week}")
-        total = len(record.recommended)
-        matches = sum(
-            1 for i, want in record.recommended.items()
-            if i < len(final_actual) and final_actual[i] == want
-        )
-        followed = "full" if matches == total else ("partial" if matches > 0 else "none")
+        actionable = {
+            i: want for i, want in record.recommended.items()
+            if i >= len(record.actual) or record.actual[i] != want
+        }
+        if not actionable:
+            followed = "full"   # nothing was actually recommended as a change
+        else:
+            matches = sum(
+                1 for i, want in actionable.items()
+                if i < len(final_actual) and final_actual[i] == want
+            )
+            followed = "full" if matches == len(actionable) else ("partial" if matches > 0 else "none")
         with self._connect() as conn:
             conn.execute(
                 "UPDATE lineup_recommendation SET followed = ?, resolved_at = ? "

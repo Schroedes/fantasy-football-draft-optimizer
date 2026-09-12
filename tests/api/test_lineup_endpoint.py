@@ -262,7 +262,33 @@ def test_lineup_degrades_gracefully_when_schedule_fetch_fails(monkeypatch, tmp_p
     monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FlakySchedule)
     res = TestClient(create_app()).get("/api/leagues/sleeper:L1:2026/lineup")
     assert res.status_code == 200
-    assert res.json()["week_locked"] is False
+    body = res.json()
+    assert body["week_locked"] is False
+
+    # Regression guard for the "empty schedule collapses every team to a
+    # bye" bug: a failed/empty schedule fetch must leave `bye_teams` empty
+    # (no info available), NOT "every team in the league" -- the latter
+    # excludes every player from `valued` entirely, which zeroes out
+    # `value` for every player in the diff. Hand-verified VOR math (same
+    # fixture as `test_lineup_payload_is_well_formed`, unaffected by
+    # schedule data either way): weekly points are p_qb=18.4, p_rb=20.0,
+    # p_wr=22.5, p_rb2=9.5 (`score_stats` against `_WEEKLY_PROJ` and the
+    # league's scoring settings). The RB pool is [p_rb, p_rb2]; with
+    # `num_teams=2` the dedicated RB slot's 2 greedy passes fully consume
+    # that 2-deep pool, pinning the replacement floor at p_rb2's own value
+    # (9.5) -- so p_rb's real VOR is 20.0 - 9.5 = 10.5, genuine positive
+    # headroom, not the collapsed-to-0.0 value the bug produced for every
+    # player (when every player is wrongly excluded as "on bye", `valued`
+    # is empty and every player's displayed value falls back to 0.0).
+    diff_rows = body["diff"]
+    assert len(diff_rows) == 4
+    rb_row = next(d for d in diff_rows if d["slot_label"] == "RB")
+    assert rb_row["current"] is not None
+    assert rb_row["current"]["player_id"] == "p_rb"
+    assert rb_row["current"]["value"] == 10.5
+    # The bug also degenerated every row to `optimal: null` -- confirm the
+    # diff isn't universally the garbage-collapsed shape.
+    assert any(d["current"] is not None for d in diff_rows)
 
 
 def test_lineup_ledger_is_written_on_first_view_and_not_overwritten_on_second(
@@ -298,4 +324,20 @@ def test_lineup_ledger_resolves_once_the_week_is_fully_locked(monkeypatch, tmp_p
     monkeypatch.setattr("ffdo.ingest.client.SleeperClient",
                         _recording_client({f"{SCHEDULE}/2026": all_locked}))
     resolved = client.get("/api/leagues/sleeper:L1:2026/lineup").json()
-    assert resolved["ledger"]["followed"] in ("full", "partial", "none")
+    # Derivation: roster 1's starters are ["p_qb", "p_rb", "p_wr", "0"] --
+    # i.e. current_starters == ("p_qb", "p_rb", "p_wr", None). With
+    # _WEEKLY_PROJ's numbers, VOR per slot works out to p_qb=0.0 (its own
+    # replacement floor, only QB in the pool), p_rb=10.5 (RB pool of
+    # [p_rb, p_rb2] gives p_rb real headroom over the floor p_rb2=0.0),
+    # p_wr=0.0 (only WR in the pool), and FLEX has no remaining eligible
+    # player once RB/WR pools are each exhausted by the dedicated slots
+    # (num_teams=2 consumes the whole 2-deep RB pool, the 1-deep WR pool).
+    # So `optimal_slots` returns exactly {0: "p_qb", 1: "p_rb", 2: "p_wr",
+    # 3: None} -- IDENTICAL to `current_starters` slot for slot. The first
+    # `.get()` call's `record_if_absent` therefore stores a recommendation
+    # that already matches the original `actual` in every slot, so (after
+    # the ledger's actionable-only-grading fix) there is nothing actionable
+    # at all, and `resolve()` short-circuits straight to "full" -- the
+    # second call's unchanged roster data as `final_actual` can't change
+    # that outcome, since no slot was ever actionable to begin with.
+    assert resolved["ledger"]["followed"] == "full"
