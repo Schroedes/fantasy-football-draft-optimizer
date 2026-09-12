@@ -13,7 +13,8 @@ function escapeHtml(s) {
 }
 
 let _c, _key, _meta, _data;
-let _panel = "power", _pos = "OVR", _scope = "starters";
+let _panel = "lineup", _pos = "OVR", _scope = "starters";
+let _lineupData = null;   // null until the Lineup tab has been opened at least once
 
 // Sub-strip (week context + refresh) above a two-panel skeleton. #season-body
 // itself is deliberately left empty here -- render() populates it (and
@@ -51,9 +52,10 @@ export async function mountSeason(container, leagueKey, meta) {
   // is cached across a league switch in the shell (re-import resolves to the
   // same instance), so without this a second league would open wearing the
   // first league's tab selection (same reasoning as board.js's freshState()).
-  _panel = "power";
+  _panel = "lineup";
   _pos = "OVR";
   _scope = "starters";
+  _lineupData = null;
 
   container.innerHTML = SHELL;
   container.querySelector("#season-refresh").addEventListener("click", load);
@@ -102,12 +104,77 @@ function renderWeekLabel() {
 }
 
 function renderRightPanel() {
-  const tabBar = Array.isArray(_data.draft_capital) ? `
+  const showCapital = Array.isArray(_data.draft_capital);
+  const tabBar = `
     <div class="panel-tabs">
+      <button data-panel-tab="lineup" class="${_panel === "lineup" ? "on" : ""}">Lineup</button>
       <button data-panel-tab="power" class="${_panel === "power" ? "on" : ""}">Power ranking</button>
-      <button data-panel-tab="capital" class="${_panel === "capital" ? "on" : ""}">Draft capital</button>
-    </div>` : "";
+      ${showCapital ? `<button data-panel-tab="capital" class="${_panel === "capital" ? "on" : ""}">Draft capital</button>` : ""}
+    </div>`;
+  if (_panel === "lineup") {
+    if (_lineupData === null) {
+      loadLineup();
+      return tabBar + `<div class="lineup-loading">Loading this week's lineup&hellip;</div>`;
+    }
+    return tabBar + renderLineup();
+  }
   return tabBar + (_panel === "capital" ? renderCapital() : renderPower());
+}
+
+async function loadLineup() {
+  try {
+    const res = await fetch(`/api/leagues/${encodeURIComponent(_key)}/lineup`);
+    if (!res.ok) {
+      _lineupData = { error: (await res.json().catch(() => ({}))).detail || "Couldn't load the lineup" };
+    } else {
+      _lineupData = await res.json();
+    }
+  } catch (e) {
+    _lineupData = { error: "Couldn't load the lineup" };
+  }
+  render();
+}
+
+function renderLineup() {
+  if (_lineupData.error) {
+    return `<div class="lineup-error">${escapeHtml(_lineupData.error)}</div>`;
+  }
+  const d = _lineupData;
+  if (d.diff.length === 0) {
+    return `<div class="lineup-empty">Roster not available</div>`;
+  }
+  const header = d.week_locked
+    ? `Week ${d.nfl_week.week} — locked, review below`
+    : `Week ${d.nfl_week.week} lineup — ${d.swaps_suggested} swap${d.swaps_suggested === 1 ? "" : "s"} suggested`;
+
+  const rows = d.diff.map(row => {
+    const slot = `<span class="slot-chip">${escapeHtml(row.slot_label)}</span>`;
+    if (row.status === "match") {
+      const cur = row.current
+        ? `${escapeHtml(row.current.name)} <span class="lineup-team">${escapeHtml(row.current.team || "")}</span> &middot; ${row.current.value}`
+        : `<span class="lineup-team">empty</span>`;
+      return `<div class="lineup-row lineup-match">${slot}<span class="lineup-current">${cur}</span></div>`;
+    }
+    const curName = row.current ? escapeHtml(row.current.name) : "empty";
+    const optName = row.optimal ? escapeHtml(row.optimal.name) : "";
+    const sign = row.delta > 0 ? "+" : "";
+    if (row.status === "suggested_swap") {
+      return `<div class="lineup-row lineup-swap">
+        ${slot}
+        <span class="lineup-current lineup-bench-out">${curName}</span>
+        <span class="lineup-arrow">&rarr;</span>
+        <span class="lineup-optimal">${optName}</span>
+        <span class="lineup-delta">${sign}${row.delta} pts</span>
+      </div>`;
+    }
+    return `<div class="lineup-row lineup-missed">
+      ${slot}
+      <span class="lineup-current lineup-bench-out">${curName}</span>
+      <span class="lineup-missed-label">missed &mdash; ${optName} already locked out</span>
+    </div>`;
+  }).join("");
+
+  return `<div class="lineup-header">${escapeHtml(header)}</div><div class="lineup-list">${rows}</div>`;
 }
 
 function renderPower() {
