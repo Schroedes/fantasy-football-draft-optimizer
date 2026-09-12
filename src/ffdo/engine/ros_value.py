@@ -12,7 +12,9 @@ What it does today:
   redraft/keeper: value = max(0, current_full - banked)   [rest of season]
   dynasty:        value = dynasty_value.annuity_value(current_full, ...)
                           [a real multi-year, discounted, data-driven model]
-Then engine.vor.compute puts it on a value-over-replacement scale.
+Then engine.vor.compute puts it on a value-over-replacement scale
+(redraft/keeper also folds in a durability adjustment once promoted --
+see engine/adjustments.py -- via vor.compute's existing `adjustments` kwarg).
 """
 
 from __future__ import annotations
@@ -23,7 +25,8 @@ from ffdo.domain.constants import INJURY_OUT_STATUSES
 from ffdo.domain.models import (
     PlayerProfile, SeasonProjection, SeasonStatLine, ValuedPlayer,
 )
-from ffdo.engine import dynasty_value, vor
+from ffdo.engine import adjustments, dynasty_value, vor
+from ffdo.engine.replacement import replacement_levels
 from ffdo.engine.scoring import score_stats
 
 K = 4  # pace-blend half-life: at weeks_played == K, pace and preseason weigh equally
@@ -74,5 +77,15 @@ def roster_value(
                 current_season=league.season)
         else:
             value_pts[pid] = max(0.0, current_full - banked)
+
+    if not is_dynasty and adjustments.DURABILITY_WEIGHT:
+        positions = {pid: profiles[pid].position for pid in value_pts if pid in profiles}
+        season_replacement = replacement_levels(value_pts, positions, league)
+        replacement_ppg = {pos: level / season_weeks for pos, level in season_replacement.items()}
+        built = adjustments.build(
+            profiles, history or {}, value_pts, replacement_ppg,
+            durability_weight=adjustments.DURABILITY_WEIGHT,
+            current_season=league.season)
+        return vor.compute(value_pts, profiles, league, adjustments=built)
 
     return vor.compute(value_pts, profiles, league)
