@@ -15,6 +15,7 @@ import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
+from ffdo.api.lineup_ledger import LineupLedger
 from ffdo.api.store import LeagueStore
 from ffdo.domain.models import DiscoveredLeague, TrackedLeague
 
@@ -33,6 +34,7 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 # fixture -- production startup is the only place that migration belongs.
 _STORE = LeagueStore(Path("data") / "ffdo.db",
                      legacy_session_path=Path("data") / "session.json")
+_LINEUP_LEDGER = LineupLedger(Path("data") / "ffdo.db")
 
 _FORMATS = ("redraft", "keeper", "dynasty")
 
@@ -207,6 +209,9 @@ def create_app() -> FastAPI:
     from ffdo.ingest.espn import rosters as espn_rosters_mod
     from ffdo.ingest.espn import teams as espn_teams_mod
     from ffdo.ingest.sleeper import traded_picks as traded_picks_mod
+    from ffdo.ingest.sleeper import weekly_projections as weekly_projections_mod
+    from ffdo.ingest.sleeper import schedule as schedule_mod
+    from ffdo.engine import weekly_lineup as weekly_lineup_mod
 
     players_cache = _TTLCache(ttl_seconds=24 * 3600)
     # Keyed by season rather than a single shared cache: the projections feed
@@ -252,6 +257,7 @@ def create_app() -> FastAPI:
     # long enough that a page of switcher rows doesn't need every league's
     # season view re-opened every few minutes to stay accurate.
     roster_count_caches: dict[str, _TTLCache] = {}
+    weekly_proj_caches: dict[tuple[int, int], _TTLCache] = {}
 
     def _projections_cache_for(season: int) -> _TTLCache:
         return projections_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
@@ -261,6 +267,9 @@ def create_app() -> FastAPI:
 
     def _roster_count_cache_for(league_key: str) -> _TTLCache:
         return roster_count_caches.setdefault(league_key, _TTLCache(ttl_seconds=24 * 3600))
+
+    def _weekly_proj_cache_for(season: int, week: int) -> _TTLCache:
+        return weekly_proj_caches.setdefault((season, week), _TTLCache(ttl_seconds=900))
 
     def _espn_player_pool_cache_for(season: int) -> _TTLCache:
         return espn_player_pool_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
@@ -1269,6 +1278,108 @@ def create_app() -> FastAPI:
         return _assemble_season(lg, nfl, through_week, rosters, profiles,
                                 proj_anchor, actuals, _standings_rank(rosters),
                                 capital)
+
+    @app.get("/api/leagues/{league_key}/lineup")
+    def get_lineup(league_key: str) -> dict:
+        """This week's optimal-lineup recommendation vs. your actual
+        current starters, lock-aware. Sleeper-only: the weekly-projections
+        and schedule/lock feeds this endpoint depends on have no ESPN
+        equivalent in this codebase (see the plan's Global Constraints) --
+        an ESPN league gets an honest 400 rather than a recommendation
+        silently built on data that was never fetched for it.
+        """
+        lg = _load_league(league_key)
+        if lg.provider != "sleeper":
+            raise HTTPException(
+                status_code=400, detail="Weekly lineup is Sleeper-only for now")
+
+        sleeper = client_mod.SleeperClient()
+        try:
+            nfl = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
+
+            if lg.roster_id is None:
+                # A league the user only observes -- nothing personal to
+                # recommend, same posture as #2's `your_roster: null`.
+                return {
+                    "nfl_week": {"season": nfl.season, "week": nfl.week},
+                    "week_locked": False, "swaps_suggested": 0, "diff": [],
+                    "ledger": None,
+                }
+
+            profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            rosters = rosters_mod.fetch(sleeper, lg.provider_league_id)
+            current_starters = rosters_mod.raw_starters(
+                sleeper, lg.provider_league_id, lg.roster_id)
+            weekly_proj = _weekly_proj_cache_for(nfl.season, nfl.week).get(
+                lambda: weekly_projections_mod.fetch(sleeper, nfl.season, nfl.week))
+
+            try:
+                # Deliberately NOT behind a `_TTLCache` like the feeds
+                # above: this is the live lock signal (see
+                # `ffdo.ingest.sleeper.schedule`'s docstring), the same
+                # category as `get_board_live`'s picks/nomination fetch,
+                # which this codebase also always re-fetches uncached --
+                # a stale "week_locked" would tell a user they can still
+                # swap a player whose game already started.
+                games = schedule_mod.week_games(sleeper, nfl.season, nfl.week)
+            except (httpx.HTTPError, RuntimeError) as exc:
+                # Unofficial, undocumented endpoint -- degrade to "nothing
+                # is locked" rather than fail the whole request.
+                logging.getLogger("ffdo.api").warning(
+                    "lineup: schedule fetch failed for %s week %s (%s) -- "
+                    "treating nothing as locked", lg.league_key, nfl.week, exc)
+                games = []
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=502, detail="Couldn't reach Sleeper, try again") from exc
+        finally:
+            sleeper.close()
+
+        all_teams = frozenset(p.team for p in profiles.values() if p.team)
+        bye_teams = schedule_mod.bye_teams(games, all_teams)
+        locked_teams = schedule_mod.locked_teams(games)
+        locked_now = schedule_mod.week_locked(games)
+
+        all_pids = {pid for r in rosters for pid in r.player_ids}
+        valued = weekly_lineup_mod.weekly_value(
+            all_pids, lg, weekly_points=weekly_proj, profiles=profiles,
+            bye_teams=bye_teams)
+        optimal = weekly_lineup_mod.optimal_slots(valued, lg)
+        diff_rows = weekly_lineup_mod.diff(
+            current_starters, optimal, locked_teams, valued, profiles, lg)
+
+        record = _LINEUP_LEDGER.record_if_absent(
+            lg.league_key, nfl.season, nfl.week, optimal, current_starters)
+        if record.followed is None and locked_now:
+            _LINEUP_LEDGER.resolve(lg.league_key, nfl.season, nfl.week, current_starters)
+            record = _LINEUP_LEDGER.get(lg.league_key, nfl.season, nfl.week)
+
+        def _player_json(pid: str | None) -> dict | None:
+            if pid is None:
+                return None
+            prof = profiles.get(pid)
+            vp = valued.get(pid)
+            return {
+                "player_id": pid,
+                "name": prof.full_name if prof else pid,
+                "team": prof.team if prof else None,
+                "value": round(vp.vor, 1) if vp is not None else 0.0,
+            }
+
+        return {
+            "nfl_week": {"season": nfl.season, "week": nfl.week},
+            "week_locked": locked_now,
+            "swaps_suggested": sum(1 for d in diff_rows if d.status == "suggested_swap"),
+            "diff": [
+                {"slot_index": d.slot_index, "slot_label": d.slot_label,
+                 "status": d.status,
+                 "current": _player_json(d.current_player_id),
+                 "optimal": _player_json(d.optimal_player_id),
+                 "delta": d.delta}
+                for d in diff_rows
+            ],
+            "ledger": {"recorded_at": record.recorded_at, "followed": record.followed},
+        }
 
     # Static mounts MUST be registered last: StaticFiles("/") matches any
     # path under it, so routes declared after this point would be shadowed.
