@@ -122,16 +122,33 @@ function renderRightPanel() {
 }
 
 async function loadLineup() {
+  // Capture which league this fetch is for before the first await, the same
+  // way board.js's refresh()/refreshLive() capture _epoch -- mountSeason()
+  // reassigns _key synchronously on a league switch, so if it no longer
+  // matches by the time (any) await below resolves, this response belongs to
+  // a league the user has already navigated away from and must be discarded:
+  // no _lineupData assignment, no render(). Without this, a slow response for
+  // league A arriving after the user has switched to league B would overwrite
+  // B's freshly-reset _lineupData (or its still-loading null) with A's diff.
+  const myKey = _key;
+  let result;
   try {
-    const res = await fetch(`/api/leagues/${encodeURIComponent(_key)}/lineup`);
+    const res = await fetch(`/api/leagues/${encodeURIComponent(myKey)}/lineup`);
+    if (_key !== myKey) return;
     if (!res.ok) {
-      _lineupData = { error: (await res.json().catch(() => ({}))).detail || "Couldn't load the lineup" };
+      const body = await res.json().catch(() => ({}));
+      if (_key !== myKey) return;
+      result = { error: body.detail || "Couldn't load the lineup" };
     } else {
-      _lineupData = await res.json();
+      const data = await res.json();
+      if (_key !== myKey) return;
+      result = data;
     }
   } catch (e) {
-    _lineupData = { error: "Couldn't load the lineup" };
+    if (_key !== myKey) return;
+    result = { error: "Couldn't load the lineup" };
   }
+  _lineupData = result;
   render();
 }
 
