@@ -64,6 +64,37 @@ def test_result_is_never_negative_even_with_strongly_negative_deltas():
     assert 0.0 <= result < 50.0
 
 
+def test_year_one_uses_the_players_current_age_not_age_plus_one():
+    """Off-by-one regression: `age_curve[A]` is the delta from age A to
+    A+1 (fit_age_curve's docstring), so year 1's lookup must be the
+    player's OWN current age, not age + 1 -- the latter silently skips
+    the very next transition. A curve defined ONLY at the player's
+    current age discriminates this: the buggy indexing (age + 1) would
+    miss it entirely and leave year 1 unchanged from current_full."""
+    profile = _profile(pos="RB", age=28)
+    curve = {"RB": {28: -30.0}}
+    result = dynasty_value.annuity_value(
+        250.0, profile, [], curve, current_season=2026, horizon_years=1)
+    assert result < 250.0
+
+
+def test_curve_delta_is_scaled_by_season_length_not_left_as_raw_ppg():
+    """Unit-mismatch regression: fit_age_curve's deltas are points-PER-GAME,
+    but current_full is a season TOTAL -- the same ppg-to-season-total
+    conversion adjustments.build already applies to its own age entry
+    (delta_ppg * length) must happen here too, or the age effect ends up
+    roughly a season's worth of games too small."""
+    profile = _profile(pos="RB", age=28)
+    curve = {"RB": {28: -5.0}}
+    result = dynasty_value.annuity_value(
+        250.0, profile, [], curve, current_season=2026, horizon_years=1)
+    season_length = SEASON_LENGTH[2026]
+    # An unscaled (raw-ppg) delta of -5 could only ever pull the result a
+    # few points below 250; a correctly season-scaled delta pulls it down
+    # by tens of points even after discounting/survival-weighting.
+    assert result < 250.0 - (5.0 * season_length * 0.3)
+
+
 def test_horizon_years_and_discount_rate_are_overridable():
     profile = _profile(pos="WR", age=24)
     curve = {"WR": {25: 10.0, 26: 10.0}}

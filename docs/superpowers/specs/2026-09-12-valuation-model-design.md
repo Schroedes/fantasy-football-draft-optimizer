@@ -290,11 +290,32 @@ Steps (per the brainstorming-approved design):
    undiscounted, weight `1.0`) — **not** added on top at the end (see the
    correctness note below): `total_value = current_full`, `total_weight
    = 1.0`. Then for `year in 1..horizon_years`:
-   `cumulative_delta += age_curve.get(profile.position, {}).get(profile.age + year, 0.0)`
+   `delta_ppg = age_curve.get(profile.position, {}).get(profile.age + year - 1, 0.0)`
+   `cumulative_delta += delta_ppg * SEASON_LENGTH[current_season]`
    `year_value = max(0.0, current_full + cumulative_delta)`
    `weight = survival / (1 + discount_rate) ** year`
    accumulate `total_value += year_value * weight` and
    `total_weight += weight`.
+
+   **Two more correctness notes (caught during the sub-project's final
+   whole-branch review, after an earlier draft of this exact pseudocode
+   had already shipped with both bugs — an implementer following the
+   text above literally would reproduce them):**
+   - **Index:** `age_curve[A]` is the mean PPG delta from age `A` to
+     `A + 1` (`fit_age_curve`'s docstring). Year 1 (one season from now)
+     IS that `A -> A+1` transition, so it reads `curve[age + year - 1]`,
+     not `curve[age + year]` — the latter silently skips the player's
+     very next transition and reaches one year past `horizon_years`
+     instead.
+   - **Units:** `fit_age_curve` returns points-PER-GAME deltas, but
+     `current_full` is a season TOTAL. The delta must be scaled by
+     `SEASON_LENGTH[current_season]` before being added — the same
+     ppg-to-season conversion `adjustments.build()`'s own age entry
+     already applies (`delta_ppg * length`) — or the age effect ends up
+     roughly a season's worth of games too small (e.g. a real RB
+     aging from 24 to 29 barely moved the result at all under the
+     unscaled version, when it should be one of the largest effects the
+     model produces).
 4. Return `total_value / total_weight`
    — a single weighted average across years 0..horizon (year 0 always
    included with weight 1.0), landing back on the same season-points

@@ -59,7 +59,19 @@ def annuity_value(
     total_weight = 1.0
     cumulative_delta = 0.0
     for year in range(1, horizon_years + 1):
-        cumulative_delta += position_curve.get(profile.age + year, 0.0)
+        # `age_curve[A]` is the mean points-PER-GAME delta from age A to
+        # A+1 (see adjustments.fit_age_curve's docstring). Year 1 (one
+        # season from now) is the A -> A+1 transition, so it reads
+        # `curve[age + year - 1]`, not `curve[age + year]` -- the latter
+        # silently skips the player's very next transition and reaches
+        # one year past `horizon_years` instead. And since `current_full`
+        # is a season TOTAL, not a per-game rate, the delta must be scaled
+        # by `season_length` before being added -- the same ppg-to-season
+        # conversion `adjustments.build`'s age entry already applies
+        # (`delta_ppg * length`) -- or the age effect ends up roughly
+        # `season_length`-times too small.
+        delta_ppg = position_curve.get(profile.age + year - 1, 0.0)
+        cumulative_delta += delta_ppg * season_length
         year_value = max(0.0, current_full + cumulative_delta)
         weight = survival / (1.0 + discount_rate) ** year
         total_value += year_value * weight
