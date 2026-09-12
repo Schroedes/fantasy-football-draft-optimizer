@@ -245,11 +245,11 @@ function renderTrades() {
       <div>Week ${t.week}: Roster ${t.roster_a_id} got ${escapeHtml(gotA)}
         (value at trade ${t.side_a_value_at_trade}, since then
         ${t.current_player_points_delta_a > 0 ? "+" : ""}${t.current_player_points_delta_a} pts
-        ${t.current_pick_value_a ? ` + ${t.current_pick_value_a} pick value now` : ""})</div>
+        ${t.current_pick_value_a ? `, pick value now ${t.current_pick_value_a}` : ""})</div>
       <div>Roster ${t.roster_b_id} got ${escapeHtml(gotB)}
         (value at trade ${t.side_b_value_at_trade}, since then
         ${t.current_player_points_delta_b > 0 ? "+" : ""}${t.current_player_points_delta_b} pts
-        ${t.current_pick_value_b ? ` + ${t.current_pick_value_b} pick value now` : ""})</div>
+        ${t.current_pick_value_b ? `, pick value now ${t.current_pick_value_b}` : ""})</div>
     </div>`;
   }).join("");
   return `<div class="lineup-list">${rows}</div>`;
