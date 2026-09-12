@@ -159,6 +159,58 @@ def test_lineup_missed_row_when_current_starters_team_already_locked(monkeypatch
     assert rb_row["optimal"]["player_id"] == "p_rb3"
 
 
+def test_lineup_never_recommends_another_teams_player(monkeypatch, tmp_path):
+    """`weekly_value`'s VOR/replacement-level math legitimately needs the
+    WHOLE league's rostered players as its pool (same as power_ranking.py
+    does for the season view) -- but the lineup SOLVE must only ever pick
+    from the tracked user's own roster. A bug here would let
+    `optimal_slots` recommend starting a player on a DIFFERENT roster,
+    which is not merely wrong but literally impossible to act on.
+
+    None of this file's other tests isolate this: the base fixture's
+    roster 2 (`p_rb2`) always scores worse than roster 1's own players in
+    every other test's numbers, and the swap/missed-row tests drop roster
+    2 from the payload entirely, so a cross-team leak would never surface
+    in either. This test gives roster 2 an extra player (`p_other_wr`)
+    that heavily outscores everything on roster 1 -- if `optimal_slots`
+    were ever run against the full-league pool instead of roster 1's own,
+    `p_other_wr` would win roster 1's FLEX slot outright.
+    """
+    extended_players = {**_PLAYERS, "p_other_wr": {
+        "first_name": "O", "last_name": "WR", "position": "WR", "team": "AAA",
+        "age": 24, "years_exp": 2, "active": True,
+    }}
+    custom_rosters = [
+        _ROSTERS[0],  # roster 1 (the tracked user) -- unchanged
+        {"roster_id": 2, "owner_id": "U2",
+         "players": ["p_rb2", "p_other_wr"], "starters": ["p_rb2", "p_other_wr"],
+         "settings": {"wins": 3, "losses": 6, "fpts": 1100, "fpts_against": 1250}},
+    ]
+    extended_proj = _WEEKLY_PROJ + [
+        # Far higher than anything on roster 1: rec20*1 + rec_yd300*0.1
+        # + rec_td5*6 = 20 + 30 + 30 = 80 points, vs. roster 1's best
+        # (p_wr at 22.5).
+        {"player_id": "p_other_wr", "stats": {"rec": 20.0, "rec_yd": 300.0, "rec_td": 5.0}},
+    ]
+    _seed(monkeypatch, tmp_path, _tracked(), extra={
+        f"{V1}/league/L1/rosters": custom_rosters,
+        f"{V1}/players/nfl": extended_players,
+        f"{PROJECTIONS}/2026/10": extended_proj,
+    })
+    res = TestClient(create_app()).get("/api/leagues/sleeper:L1:2026/lineup")
+    assert res.status_code == 200
+    body = res.json()
+
+    all_ids = set()
+    for row in body["diff"]:
+        if row["current"] is not None:
+            all_ids.add(row["current"]["player_id"])
+        if row["optimal"] is not None:
+            all_ids.add(row["optimal"]["player_id"])
+    assert "p_other_wr" not in all_ids
+    assert "p_rb2" not in all_ids
+
+
 def test_lineup_week_locked_true_once_every_game_has_started(monkeypatch, tmp_path):
     all_locked = [{**g, "status": "complete"} for g in _SCHEDULE_2026]
     _seed(monkeypatch, tmp_path, _tracked(), extra={f"{SCHEDULE}/2026": all_locked})

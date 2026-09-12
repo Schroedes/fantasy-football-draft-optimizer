@@ -1350,7 +1350,16 @@ def create_app() -> FastAPI:
         valued = weekly_lineup_mod.weekly_value(
             all_pids, lg, weekly_points=weekly_proj, profiles=profiles,
             bye_teams=bye_teams)
-        optimal = weekly_lineup_mod.optimal_slots(valued, lg)
+        # `valued` spans the WHOLE league (needed for `weekly_value`'s
+        # VOR/replacement-level baseline, same as power_ranking.py's
+        # league-wide pool) -- but the lineup solve itself must only pick
+        # from the tracked user's own roster, or it can recommend starting
+        # another team's player. Same scoping `power_ranking._team_value`
+        # already does for the season view's per-team lineup solve.
+        you_roster = next((r for r in rosters if r.roster_id == lg.roster_id), None)
+        your_valued = ({pid: valued[pid] for pid in you_roster.player_ids if pid in valued}
+                      if you_roster is not None else {})
+        optimal = weekly_lineup_mod.optimal_slots(your_valued, lg)
         diff_rows = weekly_lineup_mod.diff(
             current_starters, optimal, locked_teams, valued, profiles, lg)
 
