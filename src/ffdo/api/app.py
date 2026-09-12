@@ -1516,7 +1516,7 @@ def create_app() -> FastAPI:
             through_week = _through_week(nfl)
             actuals = actuals_mod.points_so_far(sleeper, lg.provider_league_id, through_week)
             real_trades = transactions_mod.fetch_trades(
-                sleeper, lg.provider_league_id, season=lg.season, through_week=through_week)
+                sleeper, lg.provider_league_id, season=lg.season, through_week=nfl.week)
         except (httpx.HTTPError, RuntimeError) as exc:
             raise HTTPException(status_code=502, detail="Couldn't reach Sleeper, try again") from exc
         finally:
