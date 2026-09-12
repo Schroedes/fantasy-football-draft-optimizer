@@ -5,6 +5,9 @@ a luck-adjusted power ranking (overall and by position, starters or full
 roster), your roster with rest-of-season / dynasty values, the league
 standings, and — for Sleeper dynasty/keeper leagues — a draft-capital
 ranking.
+The season screen's **Lineup** tab shows this week's optimal starting
+lineup against what you actually have set, lock-aware (a player whose
+game has already started is never suggested as a swap).
 
 ## Running it
 
