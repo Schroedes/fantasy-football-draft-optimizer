@@ -269,3 +269,11 @@ class SlotDiff:
     current_player_id: str | None
     optimal_player_id: str | None
     delta: float                      # optimal value - current value; 0.0 when status == "match"
+
+
+@dataclass(frozen=True, slots=True)
+class TradeEvaluation:
+    side_a_value: float
+    side_b_value: float
+    differential: float          # side_a_value - side_b_value
+    differential_pct: float | None   # None when either side's value is 0.0
