@@ -44,6 +44,20 @@ def test_differential_pct_is_none_when_a_side_is_zero():
     assert result.differential_pct is None
 
 
+def test_differential_pct_is_none_when_one_side_is_zero_and_other_is_negative():
+    """Regression: the guard must check each side explicitly, not
+    min(a, b) != 0 -- engine.vor.compute can produce negative VOR for a
+    below-replacement player, so min() alone doesn't detect 'either side
+    is exactly zero' when the OTHER side is negative."""
+    valued = {"p1": _valued("p1", 0.0), "p2": _valued("p2", -5.0)}
+    side_a = {"player_ids": ["p1"], "picks": []}
+    side_b = {"player_ids": ["p2"], "picks": []}
+    result = trade_value.evaluate_trade(
+        side_a, side_b, valued_players=valued, pick_curve={},
+        current_season=2026, round_size=12)
+    assert result.differential_pct is None
+
+
 def test_differential_pct_computed_against_the_smaller_side():
     valued = {"p1": _valued("p1", 100.0), "p2": _valued("p2", 50.0)}
     side_a = {"player_ids": ["p1"], "picks": []}

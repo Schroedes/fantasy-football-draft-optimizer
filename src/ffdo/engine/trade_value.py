@@ -45,8 +45,10 @@ def evaluate_trade(
     b_value = _side_value(side_b, valued_players, pick_curve,
                           current_season=current_season, round_size=round_size)
     differential = a_value - b_value
-    smaller = min(a_value, b_value)
-    differential_pct = (differential / smaller) if smaller != 0.0 else None
+    differential_pct = (
+        None if a_value == 0.0 or b_value == 0.0
+        else differential / min(a_value, b_value)
+    )
     return TradeEvaluation(
         side_a_value=a_value, side_b_value=b_value,
         differential=differential, differential_pct=differential_pct)
