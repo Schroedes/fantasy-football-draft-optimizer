@@ -189,9 +189,20 @@ side_value = sum(valued_players[pid].vor for pid in side.player_ids
 
 `TradeEvaluation` carries `side_a_value`, `side_b_value`,
 `differential = side_a_value - side_b_value`, and
-`differential_pct = differential / min(side_a_value, side_b_value)` (guarded
-against division by zero: `None` if either side's value is `0.0`). No
-fairness label — the raw numbers are the entire output (§2).
+`differential_pct`: `None` if `side_a_value == 0.0` or `side_b_value ==
+0.0`, else `differential / min(side_a_value, side_b_value)`.
+
+**Correctness note (caught during Task 5's review, sub-project #5's SDD
+execution):** an earlier version of this guard checked
+`min(side_a_value, side_b_value) != 0.0` instead of checking each side's
+value explicitly. Since `engine.vor.compute` can legitimately produce a
+NEGATIVE `vor` for a below-replacement player, `min(...)` is not
+equivalent to "either side is zero": e.g. `side_a_value = 0.0,
+side_b_value = -5.0` has `min(0.0, -5.0) == -5.0`, which is not `0.0`, so
+the old guard would incorrectly compute a percentage instead of returning
+`None` even though one side genuinely IS worth zero. The corrected guard
+above checks each side explicitly. No fairness label — the raw numbers
+are the entire output (§2).
 
 For a pure redraft league, `side.picks` is always empty (redraft has no
 persistent picks) — this degenerates cleanly to players-only, no
