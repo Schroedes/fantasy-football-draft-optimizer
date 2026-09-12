@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ffdo.api.lineup_ledger import LineupLedger
 from ffdo.api.store import LeagueStore
+from ffdo.api.trade_ledger import TradeLedger
 from ffdo.domain.models import DiscoveredLeague, TrackedLeague
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -35,6 +36,7 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 _STORE = LeagueStore(Path("data") / "ffdo.db",
                      legacy_session_path=Path("data") / "session.json")
 _LINEUP_LEDGER = LineupLedger(Path("data") / "ffdo.db")
+_TRADE_LEDGER = TradeLedger(Path("data") / "ffdo.db")
 
 _FORMATS = ("redraft", "keeper", "dynasty")
 
@@ -183,10 +185,13 @@ def create_app() -> FastAPI:
 
     from ffdo.api import board as board_mod
     from ffdo.domain import models as models_mod
-    from ffdo.domain.constants import DYNASTY_AGE_CURVE, NFL_BYE_WEEKS, SEASON_LENGTH
+    from ffdo.domain.constants import DYNASTY_AGE_CURVE, NFL_BYE_WEEKS, PICK_VALUE_CURVE, SEASON_LENGTH
+    from ffdo.domain.models import DraftPickAsset
     from ffdo.engine import auction, scoring, vor
+    from ffdo.engine import pick_value as pick_value_mod
     from ffdo.engine import power_ranking as power_ranking_mod
     from ffdo.engine import ros_value as ros_value_mod
+    from ffdo.engine import trade_value as trade_value_mod
     from ffdo.ingest import actuals as actuals_mod
     from ffdo.ingest import client as client_mod
     from ffdo.ingest import connect as connect_mod
@@ -210,6 +215,7 @@ def create_app() -> FastAPI:
     from ffdo.ingest.espn import teams as espn_teams_mod
     from ffdo.ingest.sleeper import player_history as player_history_mod
     from ffdo.ingest.sleeper import traded_picks as traded_picks_mod
+    from ffdo.ingest.sleeper import transactions as transactions_mod
     from ffdo.ingest.sleeper import weekly_projections as weekly_projections_mod
     from ffdo.ingest.sleeper import schedule as schedule_mod
     from ffdo.engine import weekly_lineup as weekly_lineup_mod
@@ -1433,6 +1439,146 @@ def create_app() -> FastAPI:
             ],
             "ledger": {"recorded_at": record.recorded_at, "followed": record.followed},
         }
+
+    @app.post("/api/leagues/{league_key}/trade/evaluate")
+    def evaluate_trade_endpoint(league_key: str, payload: dict) -> dict:
+        """Hypothetical trade evaluator. side_a is always the tracked
+        user's own roster (spec §7) -- partner_roster_id names the other
+        team side_b's players/picks are assumed to belong to."""
+        lg = _load_league(league_key)
+        if lg.provider != "sleeper":
+            raise HTTPException(status_code=400, detail="Trade evaluator is Sleeper-only for now")
+
+        sleeper = client_mod.SleeperClient()
+        try:
+            nfl = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
+            profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            proj_anchor = _season_proj_anchor_for(lg.season).get(
+                lambda: _load_projection_anchor(sleeper, lg.season))
+            rosters = rosters_mod.fetch(sleeper, lg.provider_league_id)
+            through_week = _through_week(nfl)
+            actuals = actuals_mod.points_so_far(sleeper, lg.provider_league_id, through_week)
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(status_code=502, detail="Couldn't reach Sleeper, try again") from exc
+        finally:
+            sleeper.close()
+
+        all_pids = {pid for r in rosters for pid in r.player_ids}
+        valued = ros_value_mod.roster_value(
+            all_pids, lg, resolved_format=lg.resolved_format, season_proj=proj_anchor,
+            profiles=profiles, actuals=actuals, weeks_played=through_week,
+            season_weeks=_season_weeks(lg.season))
+
+        side_a = payload.get("side_a") or {}
+        side_b = payload.get("side_b") or {}
+
+        def _picks_from_payload(raw_picks: list) -> list:
+            return [DraftPickAsset(
+                season=int(p["season"]), round=int(p["round"]),
+                projected_slot=p.get("projected_slot"),
+                current_owner_roster_id=int(p.get("current_owner_roster_id", 0)),
+                original_roster_id=int(p.get("original_roster_id", 0)),
+                via_team_name=None) for p in raw_picks]
+
+        result = trade_value_mod.evaluate_trade(
+            {"player_ids": side_a.get("player_ids", []),
+             "picks": _picks_from_payload(side_a.get("picks", []))},
+            {"player_ids": side_b.get("player_ids", []),
+             "picks": _picks_from_payload(side_b.get("picks", []))},
+            valued_players=valued, pick_curve=PICK_VALUE_CURVE,
+            current_season=lg.season, round_size=lg.num_teams)
+        return {
+            "side_a_value": round(result.side_a_value, 1),
+            "side_b_value": round(result.side_b_value, 1),
+            "differential": round(result.differential, 1),
+            "differential_pct": (round(result.differential_pct, 3)
+                                 if result.differential_pct is not None else None),
+        }
+
+    @app.get("/api/leagues/{league_key}/trades")
+    def get_trades(league_key: str) -> dict:
+        """The real-trade decision ledger. Detects any new completed trade
+        (every trade in the league, not only the tracked user's -- spec
+        §6.1) as a side effect, then returns every recorded trade with a
+        freshly recomputed current value (spec §6.3 -- never a one-time
+        resolution)."""
+        lg = _load_league(league_key)
+        if lg.provider != "sleeper":
+            raise HTTPException(status_code=400, detail="Trade ledger is Sleeper-only for now")
+
+        sleeper = client_mod.SleeperClient()
+        try:
+            nfl = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
+            profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            proj_anchor = _season_proj_anchor_for(lg.season).get(
+                lambda: _load_projection_anchor(sleeper, lg.season))
+            rosters = rosters_mod.fetch(sleeper, lg.provider_league_id)
+            through_week = _through_week(nfl)
+            actuals = actuals_mod.points_so_far(sleeper, lg.provider_league_id, through_week)
+            real_trades = transactions_mod.fetch_trades(
+                sleeper, lg.provider_league_id, season=lg.season, through_week=through_week)
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(status_code=502, detail="Couldn't reach Sleeper, try again") from exc
+        finally:
+            sleeper.close()
+
+        all_pids = {pid for r in rosters for pid in r.player_ids}
+        valued = ros_value_mod.roster_value(
+            all_pids, lg, resolved_format=lg.resolved_format, season_proj=proj_anchor,
+            profiles=profiles, actuals=actuals, weeks_played=through_week,
+            season_weeks=_season_weeks(lg.season))
+
+        for trade in real_trades:
+            side_a = {"player_ids": trade.roster_a_gets, "picks": trade.picks_to_a}
+            side_b = {"player_ids": trade.roster_b_gets, "picks": trade.picks_to_b}
+            evaluation = trade_value_mod.evaluate_trade(
+                side_a, side_b, valued_players=valued, pick_curve=PICK_VALUE_CURVE,
+                current_season=lg.season, round_size=lg.num_teams)
+            banked_a = {pid: actuals.get(pid, 0.0) for pid in trade.roster_a_gets}
+            banked_b = {pid: actuals.get(pid, 0.0) for pid in trade.roster_b_gets}
+            _TRADE_LEDGER.record_if_absent(
+                lg.league_key, trade, side_a_value=evaluation.side_a_value,
+                side_b_value=evaluation.side_b_value, banked_a=banked_a, banked_b=banked_b)
+
+        entries = _TRADE_LEDGER.list_for_league(lg.league_key)
+        out = []
+        for entry in entries:
+            current_a_delta = sum(
+                actuals.get(pid, 0.0) - entry.banked_a_at_trade.get(pid, 0.0)
+                for pid in entry.roster_a_gets)
+            current_b_delta = sum(
+                actuals.get(pid, 0.0) - entry.banked_b_at_trade.get(pid, 0.0)
+                for pid in entry.roster_b_gets)
+            current_picks_a = sum(
+                pick_value_mod.slot_value(
+                    DraftPickAsset(season=p["season"], round=p["round"],
+                                   projected_slot=p["projected_slot"],
+                                   current_owner_roster_id=p["current_owner_roster_id"],
+                                   original_roster_id=p["original_roster_id"],
+                                   via_team_name=None),
+                    PICK_VALUE_CURVE, current_season=lg.season, round_size=lg.num_teams)
+                for p in entry.picks_to_a)
+            current_picks_b = sum(
+                pick_value_mod.slot_value(
+                    DraftPickAsset(season=p["season"], round=p["round"],
+                                   projected_slot=p["projected_slot"],
+                                   current_owner_roster_id=p["current_owner_roster_id"],
+                                   original_roster_id=p["original_roster_id"],
+                                   via_team_name=None),
+                    PICK_VALUE_CURVE, current_season=lg.season, round_size=lg.num_teams)
+                for p in entry.picks_to_b)
+            out.append({
+                "transaction_id": entry.transaction_id, "week": entry.week,
+                "roster_a_id": entry.roster_a_id, "roster_b_id": entry.roster_b_id,
+                "roster_a_gets": entry.roster_a_gets, "roster_b_gets": entry.roster_b_gets,
+                "side_a_value_at_trade": round(entry.side_a_value_at_trade, 1),
+                "side_b_value_at_trade": round(entry.side_b_value_at_trade, 1),
+                "current_player_points_delta_a": round(current_a_delta, 1),
+                "current_player_points_delta_b": round(current_b_delta, 1),
+                "current_pick_value_a": round(current_picks_a, 1),
+                "current_pick_value_b": round(current_picks_b, 1),
+            })
+        return {"trades": out}
 
     # Static mounts MUST be registered last: StaticFiles("/") matches any
     # path under it, so routes declared after this point would be shadowed.
