@@ -198,3 +198,90 @@ def test_cross_format_guard_same_roster_different_values(monkeypatch, tmp_path):
     r_vals = {p["player_id"]: p["value"] for p in redraft["your_roster"]["players"]}
     d_vals = {p["player_id"]: p["value"] for p in dynasty["your_roster"]["players"]}
     assert r_vals != d_vals    # resolved_format actually threads through roster_value
+
+
+def test_dynasty_league_fetches_player_history_and_uses_the_real_curve(monkeypatch, tmp_path):
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_tracked(fmt="dynasty"))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+
+    stats_2025 = {"p_rb": {"gp": 16, "rush_yd": 1200.0}}
+    resp = {
+        f"{V1}/state/nfl": _STATE,
+        f"{V1}/league/L1/rosters": _ROSTERS,
+        f"{V1}/league/L1/users": _USERS,
+        f"{V1}/league/L1/traded_picks": [],
+        f"{V1}/players/nfl": _PLAYERS,
+        "/projections/": _PROJ,
+        "/matchups/": _MATCHUPS,
+        f"{V1}/stats/nfl/regular/2025": stats_2025,
+    }
+
+    class _DynastyClient:
+        def __init__(self, *a, **k): pass
+        def get_json(self, url, *a, **k):
+            for key, val in resp.items():
+                if key in url:
+                    return val
+            if "/stats/nfl/regular/" in url:
+                return {}   # every other historical season -- no data, that's fine
+            return [] if "/matchups/" in url or "/projections/" in url else {}
+        def close(self): pass
+
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _DynastyClient)
+    res_dynasty = TestClient(create_app()).get("/api/leagues/sleeper:L1:2026/season")
+    assert res_dynasty.status_code == 200
+
+    store2 = LeagueStore(tmp_path / "ffdo2.db")
+    store2.upsert(_tracked(fmt="redraft"))
+    monkeypatch.setattr(app_mod, "_STORE", store2)
+    res_redraft = TestClient(create_app()).get("/api/leagues/sleeper:L1:2026/season")
+    assert res_redraft.status_code == 200
+
+    dynasty_val = next(p["value"] for p in res_dynasty.json()["your_roster"]["players"]
+                       if p["player_id"] == "p_rb")
+    redraft_val = next(p["value"] for p in res_redraft.json()["your_roster"]["players"]
+                       if p["player_id"] == "p_rb")
+    # p_rb has real banked actuals in _MATCHUPS (90.0), so redraft's
+    # max(0, current_full - banked) is strictly below current_full, while
+    # dynasty's annuity_value degrades gracefully toward current_full when
+    # the real DYNASTY_AGE_CURVE has no entry at this exact age -- the two
+    # must differ regardless of the curve's precise fitted values, since a
+    # real multi-year adjustment coincidentally landing on exactly +90.0 is
+    # not a real risk.
+    assert dynasty_val != redraft_val
+
+
+def test_redraft_league_never_calls_the_stats_endpoint(monkeypatch, tmp_path):
+    """A redraft league must not fetch player history at all -- no wasted
+    calls for the common case."""
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_tracked(fmt="redraft"))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+
+    resp = {
+        f"{V1}/state/nfl": _STATE,
+        f"{V1}/league/L1/rosters": _ROSTERS,
+        f"{V1}/league/L1/users": _USERS,
+        f"{V1}/league/L1/traded_picks": [],
+        f"{V1}/players/nfl": _PLAYERS,
+        "/projections/": _PROJ,
+        "/matchups/": _MATCHUPS,
+    }
+    calls: list[str] = []
+
+    class _RecordingClient:
+        def __init__(self, *a, **k): pass
+        def get_json(self, url, *a, **k):
+            calls.append(url)
+            for key, val in resp.items():
+                if key in url:
+                    return val
+            return [] if "/matchups/" in url or "/projections/" in url else {}
+        def close(self): pass
+
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _RecordingClient)
+    res = TestClient(create_app()).get("/api/leagues/sleeper:L1:2026/season")
+    assert res.status_code == 200
+    assert not any("/stats/nfl/regular/" in c for c in calls), (
+        f"redraft league must never fetch player history: {calls}")

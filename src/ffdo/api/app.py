@@ -183,7 +183,7 @@ def create_app() -> FastAPI:
 
     from ffdo.api import board as board_mod
     from ffdo.domain import models as models_mod
-    from ffdo.domain.constants import NFL_BYE_WEEKS, SEASON_LENGTH
+    from ffdo.domain.constants import DYNASTY_AGE_CURVE, NFL_BYE_WEEKS, SEASON_LENGTH
     from ffdo.engine import auction, scoring, vor
     from ffdo.engine import power_ranking as power_ranking_mod
     from ffdo.engine import ros_value as ros_value_mod
@@ -208,6 +208,7 @@ def create_app() -> FastAPI:
     from ffdo.ingest.espn import league as espn_league_mod
     from ffdo.ingest.espn import rosters as espn_rosters_mod
     from ffdo.ingest.espn import teams as espn_teams_mod
+    from ffdo.ingest.sleeper import player_history as player_history_mod
     from ffdo.ingest.sleeper import traded_picks as traded_picks_mod
     from ffdo.ingest.sleeper import weekly_projections as weekly_projections_mod
     from ffdo.ingest.sleeper import schedule as schedule_mod
@@ -267,6 +268,7 @@ def create_app() -> FastAPI:
     # short enough to matter at kickoff, the one moment this feature exists
     # to get right.
     schedule_caches: dict[tuple[int, int], _TTLCache] = {}
+    player_history_caches: dict[int, _TTLCache] = {}
 
     def _projections_cache_for(season: int) -> _TTLCache:
         return projections_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
@@ -282,6 +284,11 @@ def create_app() -> FastAPI:
 
     def _schedule_cache_for(season: int, week: int) -> _TTLCache:
         return schedule_caches.setdefault((season, week), _TTLCache(ttl_seconds=60))
+
+    def _player_history_cache_for(season: int) -> _TTLCache:
+        # A week, not the hour/day TTLs used elsewhere in this file --
+        # finished-season stats never change, so this can cache far longer.
+        return player_history_caches.setdefault(season, _TTLCache(ttl_seconds=7 * 24 * 3600))
 
     def _espn_player_pool_cache_for(season: int) -> _TTLCache:
         return espn_player_pool_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
@@ -1097,7 +1104,7 @@ def create_app() -> FastAPI:
         return out
 
     def _assemble_season(lg, nfl, through_week, rosters, profiles, proj_anchor,
-                         actuals, standings_rank, capital) -> dict:
+                         actuals, standings_rank, capital, history) -> dict:
         """The one payload builder both providers end in. Everything above
         this point is provider-specific fetching; everything from here down
         is the same code for Sleeper and ESPN, because both branches have
@@ -1113,7 +1120,9 @@ def create_app() -> FastAPI:
             profiles=profiles,
             actuals=actuals,
             weeks_played=through_week,
-            season_weeks=_season_weeks(lg.season))
+            season_weeks=_season_weeks(lg.season),
+            history=history,
+            age_curve=DYNASTY_AGE_CURVE if history is not None else None)
 
         # Warms the `needs_attention` signal the `/api/leagues` switcher
         # reads -- best-effort and side-effect-only: this endpoint's own
@@ -1187,6 +1196,18 @@ def create_app() -> FastAPI:
             profiles, espn_id_index = players_cache.get(lambda: _load_players(sleeper))
             proj_anchor = _season_proj_anchor_for(lg.season).get(
                 lambda: _load_projection_anchor(sleeper, lg.season))
+            # Fetched here, while `sleeper` is still open -- ESPN's own
+            # rosters (and thus the player ids `history_for` needs to filter
+            # to) aren't known until later in this function, but the raw
+            # per-season stat lines are cacheable and player-agnostic, so
+            # there's no reason to defer the fetch itself, only the filter.
+            season_stats = None
+            if lg.resolved_format == "dynasty":
+                season_stats = {
+                    season: _player_history_cache_for(season).get(
+                        lambda season=season: player_history_mod.fetch_season(sleeper, season))
+                    for season in range(2021, lg.season)
+                }
         except (httpx.HTTPError, RuntimeError) as exc:
             # `RuntimeError` for the same exhausted-retry reason as
             # `_sleeper_discover`'s arm -- ffdo.ingest.http raises a plain
@@ -1223,8 +1244,15 @@ def create_app() -> FastAPI:
         # capital panel is absent for ESPN leagues of every format -- an
         # honest gap rather than an implicit-ownership table that would be
         # silently wrong the moment anyone traded a pick.
+        # `history_for` is a pure reshaping step, so it's computed here, now
+        # that ESPN's own roster player-ids are finally known, rather than
+        # up where `season_stats` was fetched (`sleeper` is closed by now).
+        history = None
+        if season_stats is not None:
+            all_pids_for_history = {pid for r in rosters for pid in r.player_ids}
+            history = player_history_mod.history_for(all_pids_for_history, season_stats)
         return _assemble_season(lg, nfl, through_week, rosters, profiles,
-                                proj_anchor, actuals, _standings_rank(rosters), None)
+                                proj_anchor, actuals, _standings_rank(rosters), None, history)
 
     @app.get("/api/leagues/{league_key}/season")
     def get_season(league_key: str) -> dict:
@@ -1276,6 +1304,16 @@ def create_app() -> FastAPI:
                     logging.getLogger("ffdo.api").warning(
                         "season: traded-picks fetch failed for %s, "
                         "draft_capital omitted", lg.league_key)
+
+            history = None
+            if lg.resolved_format == "dynasty":
+                season_stats = {
+                    season: _player_history_cache_for(season).get(
+                        lambda season=season: player_history_mod.fetch_season(sleeper, season))
+                    for season in range(2021, lg.season)
+                }
+                all_pids_for_history = {pid for r in rosters for pid in r.player_ids}
+                history = player_history_mod.history_for(all_pids_for_history, season_stats)
         except (httpx.HTTPError, RuntimeError) as exc:
             # Both halves are load-bearing: `ffdo.ingest.http.
             # get_json_with_retry` raises a plain `RuntimeError` once retries
@@ -1289,7 +1327,7 @@ def create_app() -> FastAPI:
 
         return _assemble_season(lg, nfl, through_week, rosters, profiles,
                                 proj_anchor, actuals, _standings_rank(rosters),
-                                capital)
+                                capital, history)
 
     @app.get("/api/leagues/{league_key}/lineup")
     def get_lineup(league_key: str) -> dict:
