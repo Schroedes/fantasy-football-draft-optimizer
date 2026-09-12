@@ -217,9 +217,12 @@ def test_dynasty_league_fetches_player_history_and_uses_the_real_curve(monkeypat
         f"{V1}/stats/nfl/regular/2025": stats_2025,
     }
 
+    calls: list[str] = []
+
     class _DynastyClient:
         def __init__(self, *a, **k): pass
         def get_json(self, url, *a, **k):
+            calls.append(url)
             for key, val in resp.items():
                 if key in url:
                     return val
@@ -231,6 +234,17 @@ def test_dynasty_league_fetches_player_history_and_uses_the_real_curve(monkeypat
     monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _DynastyClient)
     res_dynasty = TestClient(create_app()).get("/api/leagues/sleeper:L1:2026/season")
     assert res_dynasty.status_code == 200
+
+    # The value comparison below cannot by itself prove the history fetch
+    # happened -- annuity_value returns exactly current_full when the curve
+    # has no entry for this player's ages, which already differs from
+    # redraft's max(0, current_full - banked) whether or not history was ever
+    # fetched. So assert the wiring directly, mirroring
+    # test_redraft_league_never_calls_the_stats_endpoint's recording pattern:
+    # one call per finished season in range(2021, lg.season).
+    history_calls = sorted(c for c in calls if "/stats/nfl/regular/" in c)
+    assert history_calls == [f"{V1}/stats/nfl/regular/{season}"
+                             for season in range(2021, 2026)], history_calls
 
     store2 = LeagueStore(tmp_path / "ffdo2.db")
     store2.upsert(_tracked(fmt="redraft"))

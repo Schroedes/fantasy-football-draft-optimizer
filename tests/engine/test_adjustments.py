@@ -29,6 +29,19 @@ def test_age_weight_defaults_to_zero():
     assert adjustments.AGE_WEIGHT == 0.0
 
 
+def test_durability_weight_pins_the_promoted_backtest_value():
+    """DURABILITY_WEIGHT is not a tunable knob -- it is the output of a
+    mechanical promotion procedure run against real out-of-sample data
+    (sub-project #4, Task 8: the smallest weight with positive improvement
+    in EVERY tested season of 2023/2024/2025 that also passed a
+    neighbour-stability check). Changing it silently re-prices every
+    redraft/keeper valuation in the app on no evidence, so it is pinned
+    here: a deliberate change means re-running the sweep and updating this
+    assertion alongside the ledger's ruling, never editing the constant
+    alone."""
+    assert adjustments.DURABILITY_WEIGHT == 0.25
+
+
 def test_durable_player_has_lower_expected_games_missed():
     durable = [_line(2023, 17), _line(2024, 18), _line(2025, 18)]
     fragile = [_line(2023, 9), _line(2024, 11), _line(2025, 10)]
