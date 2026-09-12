@@ -223,11 +223,26 @@ def test_lineup_ledger_is_written_on_first_view_and_not_overwritten_on_second(
 
 
 def test_lineup_ledger_resolves_once_the_week_is_fully_locked(monkeypatch, tmp_path):
+    # The schedule fetch sits behind a 60s `_TTLCache` (see app.py) so
+    # `/lineup` doesn't hit Sleeper's unofficial full-season schedule feed
+    # on every request. That cache instance is constructed lazily, inside
+    # `create_app()`'s closure, on the FIRST call below -- and `_TTLCache`
+    # binds `self._now = time.monotonic` by value at construction time, not
+    # by dynamic lookup. So the fake clock must be installed BEFORE that
+    # first call (same idiom as
+    # test_app.py::test_ttlcache_serves_cached_value_within_ttl_without_refetching
+    # / test_ttlcache_refetches_after_ttl_elapses), then advanced past the
+    # TTL before the second call to force a real refetch of the
+    # now-fully-locked schedule.
+    fake_now = [0.0]
+    monkeypatch.setattr(app_mod.time, "monotonic", lambda: fake_now[0])
+
     all_locked = [{**g, "status": "complete"} for g in _SCHEDULE_2026]
     _seed(monkeypatch, tmp_path, _tracked())
     client = TestClient(create_app())
     client.get("/api/leagues/sleeper:L1:2026/lineup")   # first view -- records the row
 
+    fake_now[0] = 61.0   # past the 60s TTL -- forces a real refetch
     monkeypatch.setattr("ffdo.ingest.client.SleeperClient",
                         _recording_client({f"{SCHEDULE}/2026": all_locked}))
     resolved = client.get("/api/leagues/sleeper:L1:2026/lineup").json()

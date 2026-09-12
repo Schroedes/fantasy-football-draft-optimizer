@@ -258,6 +258,15 @@ def create_app() -> FastAPI:
     # season view re-opened every few minutes to stay accurate.
     roster_count_caches: dict[str, _TTLCache] = {}
     weekly_proj_caches: dict[tuple[int, int], _TTLCache] = {}
+    # A short TTL, not the 900s the other weekly-scoped cache above uses:
+    # `schedule_mod.week_games` fetches Sleeper's ENTIRE season schedule
+    # (unofficial, undocumented) and filters to this week client-side, so
+    # leaving it wholly uncached would hit that endpoint on every single
+    # `/lineup` request/refresh. 60s still meaningfully throttles that,
+    # while bounding worst-case lock-status staleness to about a minute --
+    # short enough to matter at kickoff, the one moment this feature exists
+    # to get right.
+    schedule_caches: dict[tuple[int, int], _TTLCache] = {}
 
     def _projections_cache_for(season: int) -> _TTLCache:
         return projections_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
@@ -270,6 +279,9 @@ def create_app() -> FastAPI:
 
     def _weekly_proj_cache_for(season: int, week: int) -> _TTLCache:
         return weekly_proj_caches.setdefault((season, week), _TTLCache(ttl_seconds=900))
+
+    def _schedule_cache_for(season: int, week: int) -> _TTLCache:
+        return schedule_caches.setdefault((season, week), _TTLCache(ttl_seconds=60))
 
     def _espn_player_pool_cache_for(season: int) -> _TTLCache:
         return espn_player_pool_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
@@ -1314,14 +1326,8 @@ def create_app() -> FastAPI:
                 lambda: weekly_projections_mod.fetch(sleeper, nfl.season, nfl.week))
 
             try:
-                # Deliberately NOT behind a `_TTLCache` like the feeds
-                # above: this is the live lock signal (see
-                # `ffdo.ingest.sleeper.schedule`'s docstring), the same
-                # category as `get_board_live`'s picks/nomination fetch,
-                # which this codebase also always re-fetches uncached --
-                # a stale "week_locked" would tell a user they can still
-                # swap a player whose game already started.
-                games = schedule_mod.week_games(sleeper, nfl.season, nfl.week)
+                games = _schedule_cache_for(nfl.season, nfl.week).get(
+                    lambda: schedule_mod.week_games(sleeper, nfl.season, nfl.week))
             except (httpx.HTTPError, RuntimeError) as exc:
                 # Unofficial, undocumented endpoint -- degrade to "nothing
                 # is locked" rather than fail the whole request.
