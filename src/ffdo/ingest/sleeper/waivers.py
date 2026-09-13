@@ -40,7 +40,8 @@ def fetch_waivers(
 def remaining_budget(
     claims: Sequence[WaiverClaim], *, waiver_budget: float,
 ) -> dict[int, float]:
+    """Sum each roster's bid amounts across all claims and subtract from waiver_budget."""
     spent: dict[int, float] = {}
-    for claim in sorted(claims, key=lambda c: c.created_ms):
+    for claim in claims:
         spent[claim.roster_id] = spent.get(claim.roster_id, 0.0) + claim.bid_amount
     return {roster_id: waiver_budget - total for roster_id, total in spent.items()}

@@ -75,20 +75,21 @@ def test_fetch_waivers_scans_every_week_through_the_given_week():
     assert {c.transaction_id for c in result} == {"w1", "w2"}
 
 
-def test_remaining_budget_walks_claims_in_chronological_order_not_feed_order():
-    """The single most important property of this function: claims are
-    fed in REVERSED chronological order here (created=3000 first,
-    created=1000 second) -- if remaining_budget sorted by feed order
-    instead of created_ms, the running total would be computed wrong."""
+def test_remaining_budget_sums_every_claim_for_a_roster_regardless_of_order():
+    """remaining_budget computes a final cumulative sum per roster --
+    addition is commutative, so this deliberately feeds claims in an
+    arbitrary (not necessarily chronological) order and confirms the
+    total is still correct. This function does NOT need chronological
+    ordering to be correct (unlike scripts/fit_faab_curve.py's own walk,
+    which needs each claim's INTERMEDIATE remaining-before state, not
+    just a final total -- a genuinely different, order-sensitive need)."""
     claims = [
-        WaiverClaim(transaction_id="later", season=2026, week=2, roster_id=5,
+        WaiverClaim(transaction_id="b", season=2026, week=2, roster_id=5,
                    player_id="p2", bid_amount=30.0, created_ms=3000),
-        WaiverClaim(transaction_id="earlier", season=2026, week=1, roster_id=5,
+        WaiverClaim(transaction_id="a", season=2026, week=1, roster_id=5,
                    player_id="p1", bid_amount=10.0, created_ms=1000),
     ]
     result = waivers.remaining_budget(claims, waiver_budget=100.0)
-    # After both claims, roster 5 has spent 10 + 30 = 40 total, regardless
-    # of the order they were passed in -- the function must sort them.
     assert result[5] == 60.0
 
 
