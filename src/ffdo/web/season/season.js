@@ -245,18 +245,28 @@ function renderTrades() {
   if (_tradesData.trades.length === 0) {
     return `<div class="lineup-empty">No trades in this league yet</div>`;
   }
+  // Players and picks are both "what a side got" -- rendered as one
+  // comma-joined list of names/labels rather than two separate lists, since
+  // a trade is naturally described as "got X, Y, and pick Z" in one breath.
+  const side = (players, picks) => {
+    const parts = [
+      ...players.map(p => escapeHtml(p.name)),
+      ...picks.map(p => escapeHtml(p.label)),
+    ];
+    return parts.join(", ") || "(nothing)";
+  };
   const rows = _tradesData.trades.map(t => {
-    const gotA = t.roster_a_gets.join(", ") || "(nothing)";
-    const gotB = t.roster_b_gets.join(", ") || "(nothing)";
+    const gotA = side(t.roster_a_gets, t.roster_a_picks);
+    const gotB = side(t.roster_b_gets, t.roster_b_picks);
     return `<div class="lineup-row trade-row">
-      <div>Week ${t.week}: Roster ${t.roster_a_id} got ${escapeHtml(gotA)}
+      <div>Week ${t.week}: ${escapeHtml(t.roster_a_team_name)} got ${gotA}
         (value at trade ${t.side_a_value_at_trade}, since then
         ${t.current_player_points_delta_a > 0 ? "+" : ""}${t.current_player_points_delta_a} pts
-        ${t.current_pick_value_a ? `, pick value now ${t.current_pick_value_a}` : ""})</div>
-      <div>Roster ${t.roster_b_id} got ${escapeHtml(gotB)}
+        ${t.roster_a_picks.length ? `, pick value now ${t.current_pick_value_a}` : ""})</div>
+      <div>${escapeHtml(t.roster_b_team_name)} got ${gotB}
         (value at trade ${t.side_b_value_at_trade}, since then
         ${t.current_player_points_delta_b > 0 ? "+" : ""}${t.current_player_points_delta_b} pts
-        ${t.current_pick_value_b ? `, pick value now ${t.current_pick_value_b}` : ""})</div>
+        ${t.roster_b_picks.length ? `, pick value now ${t.current_pick_value_b}` : ""})</div>
     </div>`;
   }).join("");
   return `<div class="lineup-list">${rows}</div>`;

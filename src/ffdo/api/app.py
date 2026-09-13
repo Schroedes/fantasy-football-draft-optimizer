@@ -1542,6 +1542,28 @@ def create_app() -> FastAPI:
             profiles=profiles, actuals=actuals, weeks_played=through_week,
             season_weeks=_season_weeks(lg.season))
 
+        # A trade can be years old -- a player long since dropped/traded
+        # again has no live roster to be found on, but still has a Sleeper
+        # profile (profiles is the full player pool, not just what's
+        # currently rostered), so name resolution here is independent of
+        # `rosters`/`valued` above.
+        def _player_brief(pid: str) -> dict:
+            prof = profiles.get(pid)
+            return {"player_id": pid, "name": prof.full_name if prof else pid,
+                    "position": prof.position if prof else None}
+
+        def _pick_brief(p: dict) -> dict:
+            asset = DraftPickAsset(
+                season=p["season"], round=p["round"], projected_slot=p["projected_slot"],
+                current_owner_roster_id=p["current_owner_roster_id"],
+                original_roster_id=p["original_roster_id"], via_team_name=None)
+            return {"label": asset.label,
+                    "value": round(pick_value_mod.slot_value(
+                        asset, PICK_VALUE_CURVE, current_season=lg.season,
+                        round_size=lg.num_teams), 1)}
+
+        names = {r.roster_id: r.team_name for r in rosters}
+
         for trade in real_trades:
             side_a = {"player_ids": trade.roster_a_gets, "picks": trade.picks_to_a}
             side_b = {"player_ids": trade.roster_b_gets, "picks": trade.picks_to_b}
@@ -1563,34 +1585,22 @@ def create_app() -> FastAPI:
             current_b_delta = sum(
                 actuals.get(pid, 0.0) - entry.banked_b_at_trade.get(pid, 0.0)
                 for pid in entry.roster_b_gets)
-            current_picks_a = sum(
-                pick_value_mod.slot_value(
-                    DraftPickAsset(season=p["season"], round=p["round"],
-                                   projected_slot=p["projected_slot"],
-                                   current_owner_roster_id=p["current_owner_roster_id"],
-                                   original_roster_id=p["original_roster_id"],
-                                   via_team_name=None),
-                    PICK_VALUE_CURVE, current_season=lg.season, round_size=lg.num_teams)
-                for p in entry.picks_to_a)
-            current_picks_b = sum(
-                pick_value_mod.slot_value(
-                    DraftPickAsset(season=p["season"], round=p["round"],
-                                   projected_slot=p["projected_slot"],
-                                   current_owner_roster_id=p["current_owner_roster_id"],
-                                   original_roster_id=p["original_roster_id"],
-                                   via_team_name=None),
-                    PICK_VALUE_CURVE, current_season=lg.season, round_size=lg.num_teams)
-                for p in entry.picks_to_b)
+            picks_a = [_pick_brief(p) for p in entry.picks_to_a]
+            picks_b = [_pick_brief(p) for p in entry.picks_to_b]
             out.append({
                 "transaction_id": entry.transaction_id, "week": entry.week,
                 "roster_a_id": entry.roster_a_id, "roster_b_id": entry.roster_b_id,
-                "roster_a_gets": entry.roster_a_gets, "roster_b_gets": entry.roster_b_gets,
+                "roster_a_team_name": names.get(entry.roster_a_id, f"Team {entry.roster_a_id}"),
+                "roster_b_team_name": names.get(entry.roster_b_id, f"Team {entry.roster_b_id}"),
+                "roster_a_gets": [_player_brief(pid) for pid in entry.roster_a_gets],
+                "roster_b_gets": [_player_brief(pid) for pid in entry.roster_b_gets],
+                "roster_a_picks": picks_a, "roster_b_picks": picks_b,
                 "side_a_value_at_trade": round(entry.side_a_value_at_trade, 1),
                 "side_b_value_at_trade": round(entry.side_b_value_at_trade, 1),
                 "current_player_points_delta_a": round(current_a_delta, 1),
                 "current_player_points_delta_b": round(current_b_delta, 1),
-                "current_pick_value_a": round(current_picks_a, 1),
-                "current_pick_value_b": round(current_picks_b, 1),
+                "current_pick_value_a": round(sum(p["value"] for p in picks_a), 1),
+                "current_pick_value_b": round(sum(p["value"] for p in picks_b), 1),
             })
         return {"trades": out}
 
