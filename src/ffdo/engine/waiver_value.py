@@ -92,7 +92,7 @@ def recommend_adds(
         baseline = valued[drop_id].vor if drop_id is not None else 0.0
 
         vor_gain = vp.vor - baseline
-        if vor_gain < min_vor_gain:
+        if vor_gain <= min_vor_gain:
             continue
 
         out.append(WaiverRecommendation(

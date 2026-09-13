@@ -217,6 +217,22 @@ def test_no_existing_players_at_all_means_a_pure_add_with_no_drop():
     assert result[0].vor_gain == pytest.approx(20.0)
 
 
+def test_vor_gain_exactly_at_min_threshold_is_excluded():
+    """Regression: min_vor_gain is an exclusive threshold -- a free agent
+    must clear the comparison pool's worst player by a real margin, not
+    exactly tie it. vor_gain == min_vor_gain (5.0 here) must be excluded,
+    not recommended."""
+    profiles = {"fa1": _profile("fa1", "WR"), "bench1": _profile("bench1", "RB")}
+    valued = {"fa1": _valued("fa1", "WR", 10.0), "bench1": _valued("bench1", "RB", 5.0)}
+    league = _league(("QB", "RB", "WR", "BN"))
+    result = waiver_value.recommend_adds(
+        ["fa1"], ["bench1"], valued, profiles, league,
+        faab_curve={0: 0.1}, remaining_budget=100.0, min_vor_gain=5.0)
+    # fa1's vor_gain is exactly 10.0 - 5.0 = 5.0, equal to min_vor_gain --
+    # must be excluded (strictly greater than the threshold is required).
+    assert result == []
+
+
 def test_sorted_by_vor_gain_descending_and_capped_at_top_n():
     profiles = {f"fa{i}": _profile(f"fa{i}", "WR") for i in range(3)}
     profiles["bench1"] = _profile("bench1", "RB")
