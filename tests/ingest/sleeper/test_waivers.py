@@ -108,3 +108,46 @@ def test_remaining_budget_tracks_each_roster_independently():
 def test_remaining_budget_defaults_untouched_rosters_to_the_full_budget():
     result = waivers.remaining_budget([], waiver_budget=150.0)
     assert result == {}
+
+
+def test_fetch_all_claims_includes_both_wins_and_losses():
+    client = _FakeClient({
+        1: [
+            {"type": "waiver", "status": "complete", "transaction_id": "w1",
+             "roster_ids": [3], "adds": {"p1": 3},
+             "settings": {"waiver_bid": 12}, "created": 1000},
+            {"type": "waiver", "status": "failed", "transaction_id": "w2",
+             "roster_ids": [4], "adds": {"p2": 4},
+             "settings": {"waiver_bid": 5}, "created": 1100},
+            {"type": "trade", "status": "complete", "transaction_id": "t1",
+             "roster_ids": [2, 3], "adds": {"p9": 2}, "created": 900},
+        ],
+    })
+    result = waivers.fetch_all_claims(client, "L1", season=2026, through_week=1)
+    assert {c.transaction_id for c in result} == {"w1", "w2"}
+    won_by_id = {c.transaction_id: c.won for c in result}
+    assert won_by_id["w1"] is True
+    assert won_by_id["w2"] is False
+
+
+def test_fetch_all_claims_scans_every_week_through_the_given_week():
+    client = _FakeClient({
+        1: [{"type": "waiver", "status": "complete", "transaction_id": "w1",
+             "roster_ids": [3], "adds": {"p1": 3},
+             "settings": {"waiver_bid": 1}, "created": 1000}],
+        2: [{"type": "waiver", "status": "failed", "transaction_id": "w2",
+             "roster_ids": [3], "adds": {"p2": 3},
+             "settings": {"waiver_bid": 2}, "created": 2000}],
+    })
+    result = waivers.fetch_all_claims(client, "L1", season=2026, through_week=2)
+    assert {c.transaction_id for c in result} == {"w1", "w2"}
+
+
+def test_fetch_waivers_claims_default_won_to_true():
+    client = _FakeClient({
+        1: [{"type": "waiver", "status": "complete", "transaction_id": "w1",
+             "roster_ids": [3], "adds": {"p1": 3},
+             "settings": {"waiver_bid": 12}, "created": 1000}],
+    })
+    result = waivers.fetch_waivers(client, "L1", season=2026, through_week=1)
+    assert result[0].won is True

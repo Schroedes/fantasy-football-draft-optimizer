@@ -5,12 +5,15 @@ computes each roster's current remaining FAAB budget from a list of claims
 via a simple order-independent sum (waiver_budget minus total bid amount
 spent) -- the order the claims are summed in doesn't matter here.
 
-A separate, future piece of code -- the offline scripts/fit_faab_curve.py
-fitting script -- has a genuinely different need: it must walk a season's
-claims in chronological order to recover each claim's intermediate
-remaining-before state, which this module's remaining_budget does not
-need and does not provide.
-"""
+fetch_waivers only returns WON claims (status == "complete"): a lost claim
+never spends FAAB budget, so remaining_budget's only caller has no use for
+them. api.waiver_ledger needs BOTH outcomes to compute a win rate -- that's
+what fetch_all_claims is for.
+
+A separate, genuinely different need -- the offline scripts/fit_faab_curve.py
+fitting script -- must walk a season's claims in chronological order to
+recover each claim's intermediate remaining-before state, which neither
+function here provides."""
 
 from __future__ import annotations
 
@@ -38,7 +41,35 @@ def fetch_waivers(
             out.append(WaiverClaim(
                 transaction_id=raw["transaction_id"], season=season, week=week,
                 roster_id=roster_id, player_id=player_id,
-                bid_amount=float(bid), created_ms=int(raw["created"])))
+                bid_amount=float(bid), created_ms=int(raw["created"]), won=True))
+    return out
+
+
+def fetch_all_claims(
+    sleeper: SleeperClient, league_id: str, *, season: int, through_week: int,
+) -> list[WaiverClaim]:
+    """Every FAAB waiver-type transaction, win or loss -- for
+    api.waiver_ledger, which needs to know about losses too. Scan only
+    through nfl.week (never a stats-final through_week -- the #5 lesson):
+    any non-"complete" status seen for an already-processed week is a real,
+    final loss, not a still-pending claim."""
+    out: list[WaiverClaim] = []
+    for week in range(1, through_week + 1):
+        raw_list = sleeper.get_json(f"{V1}/league/{league_id}/transactions/{week}")
+        for raw in raw_list:
+            if raw.get("type") != "waiver":
+                continue
+            adds = raw.get("adds") or {}
+            if not adds:
+                continue
+            roster_id = int(raw["roster_ids"][0])
+            player_id = next(iter(adds))
+            bid = ((raw.get("settings") or {}).get("waiver_bid")) or 0.0
+            out.append(WaiverClaim(
+                transaction_id=raw["transaction_id"], season=season, week=week,
+                roster_id=roster_id, player_id=player_id,
+                bid_amount=float(bid), created_ms=int(raw["created"]),
+                won=raw.get("status") == "complete"))
     return out
 
 
