@@ -269,3 +269,25 @@ class SlotDiff:
     current_player_id: str | None
     optimal_player_id: str | None
     delta: float                      # optimal value - current value; 0.0 when status == "match"
+
+
+@dataclass(frozen=True, slots=True)
+class TradeEvaluation:
+    side_a_value: float
+    side_b_value: float
+    differential: float          # side_a_value - side_b_value
+    differential_pct: float | None   # None when either side's value is 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class TradeTransaction:
+    transaction_id: str
+    season: int
+    week: int
+    roster_a_id: int
+    roster_b_id: int
+    roster_a_gets: list[str]
+    roster_b_gets: list[str]
+    picks_to_a: list[DraftPickAsset]
+    picks_to_b: list[DraftPickAsset]
+    traded_at_ms: int   # Sleeper's raw `created` epoch-millis timestamp

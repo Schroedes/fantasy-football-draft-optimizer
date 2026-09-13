@@ -15,6 +15,11 @@ data (not a hand-authored guess), discounted for both time and
 injury/durability risk, and collapsed back into a single season-scale
 number.
 
+The **Trades** tab shows every real trade in the league (not just yours),
+each with its value at the moment it happened and how that trade has
+played out since -- draft picks included, valued from real historical
+rookie-draft outcomes rather than a guessed chart.
+
 ## Running it
 
 Install dependencies:

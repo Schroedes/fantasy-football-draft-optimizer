@@ -154,6 +154,18 @@ DYNASTY_AGE_CURVE: Final[dict[str, dict[int, float]]] = {
     },
 }
 
+# Fit from Task 2's real run -- paste the EXACT printed output here,
+# including its leading comment line recording which leagues/seasons/
+# MIN_SAMPLE it was fit from. Do not hand-edit the pasted values.
+# Fit from 2026-09-12, leagues ['1312210128811872256', '1312145369592766464'], seasons [2025, 2026], MIN_SAMPLE=3
+PICK_VALUE_CURVE: Final[dict[int, dict]] = {
+    1: {'exact': {1: 37.4, 2: -11.55, 3: 15.3, 4: 17.1, 5: 7.99, 6: 8.25, 7: 16.98, 8: -53.6, 9: 14.45, 10: 15.58, 11: -32.85, 12: 21.22}, 'early': 14.51, 'mid': -5.99, 'late': 4.6, 'round_avg': 4.38},
+    2: {'exact': {1: -20.9, 2: -18.9, 3: -34.22, 4: 9.42, 5: -17.57, 6: -38.47, 7: -46.08, 8: -35.0, 9: -26.98, 10: -23.1, 11: -51.95, 12: -52.42}, 'early': -16.15, 'mid': -34.28, 'late': -38.61, 'round_avg': -29.68},
+    3: {'exact': {1: -80.03, 2: -14.48, 3: -27.43, 4: -48.65, 5: -19.2, 6: -36.45, 7: -51.8, 8: -43.77, 9: -56.1, 10: -16.6, 11: -33.15, 12: -40.27}, 'early': -42.65, 'mid': -37.81, 'late': -36.53, 'round_avg': -39.0},
+    4: {'exact': {}, 'early': -26.42, 'mid': -60.37, 'late': -69.29, 'round_avg': -52.03},
+    5: {'exact': {}, 'early': -46.47, 'mid': -51.75, 'late': -47.35, 'round_avg': -48.53},
+}
+
 # Scoring keys excluded from offense classification even when they match an
 # offense-vocabulary prefix or bare key. `fum_rec`/`fum_rec_td` are credited
 # to defensive/special-teams units, never to an offensive player. `pass_int_td`

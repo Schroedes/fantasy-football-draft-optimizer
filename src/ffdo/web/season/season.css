@@ -316,3 +316,12 @@
 .lineup-missed-label { color: var(--muted); font-size: 12px; }
 .lineup-team { color: var(--muted); font-size: 12px; }
 .lineup-loading, .lineup-empty, .lineup-error { color: var(--muted); padding: 20px 0; }
+
+/* ---- trades tab ---- */
+/* Reuses .lineup-row's border/padding/radius for the same "bordered row in
+   a list" shape as the Lineup tab, but overrides its 4-column grid (sized
+   for the Lineup tab's slot-chip/current/arrow/delta cells) -- a trade row
+   is two lines of running prose, not four discrete columns, so a plain
+   stacked block is the correct layout here. */
+.lineup-row.trade-row { display: block; }
+.lineup-row.trade-row > div + div { margin-top: 4px; }

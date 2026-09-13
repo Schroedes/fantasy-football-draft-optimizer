@@ -17,3 +17,26 @@ def test_dynasty_age_curve_values_are_finite_and_plausible():
             assert isinstance(age, int)
             assert 15 < age < 50   # a sanity bound, not a hard business rule
             assert -50.0 < delta < 50.0   # PPG deltas this large would indicate a scoring bug upstream
+
+
+from ffdo.domain.constants import PICK_VALUE_CURVE
+
+
+def test_pick_value_curve_every_round_has_a_round_avg_fallback():
+    for rnd, tiers in PICK_VALUE_CURVE.items():
+        assert "round_avg" in tiers, f"round {rnd} has no round_avg fallback"
+
+
+def test_pick_value_curve_values_are_plausible_vor_magnitudes():
+    for tiers in PICK_VALUE_CURVE.values():
+        for key, val in tiers.items():
+            if key == "exact":
+                for v in val.values():
+                    assert -100.0 < v < 400.0
+            else:
+                assert -100.0 < val < 400.0
+
+
+def test_pick_value_curve_rounds_are_positive_integers():
+    for rnd in PICK_VALUE_CURVE:
+        assert isinstance(rnd, int) and rnd >= 1

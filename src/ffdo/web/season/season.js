@@ -15,6 +15,7 @@ function escapeHtml(s) {
 let _c, _key, _meta, _data;
 let _panel = "lineup", _pos = "OVR", _scope = "starters";
 let _lineupData = null;   // null until the Lineup tab has been opened at least once
+let _tradesData = null;   // null until the Trades tab has been opened at least once
 
 // Sub-strip (week context + refresh) above a two-panel skeleton. #season-body
 // itself is deliberately left empty here -- render() populates it (and
@@ -56,6 +57,7 @@ export async function mountSeason(container, leagueKey, meta) {
   _pos = "OVR";
   _scope = "starters";
   _lineupData = null;
+  _tradesData = null;
 
   container.innerHTML = SHELL;
   container.querySelector("#season-refresh").addEventListener("click", load);
@@ -110,6 +112,7 @@ function renderRightPanel() {
       <button data-panel-tab="lineup" class="${_panel === "lineup" ? "on" : ""}">Lineup</button>
       <button data-panel-tab="power" class="${_panel === "power" ? "on" : ""}">Power ranking</button>
       ${showCapital ? `<button data-panel-tab="capital" class="${_panel === "capital" ? "on" : ""}">Draft capital</button>` : ""}
+      <button data-panel-tab="trades" class="${_panel === "trades" ? "on" : ""}">Trades</button>
     </div>`;
   if (_panel === "lineup") {
     if (_lineupData === null) {
@@ -117,6 +120,13 @@ function renderRightPanel() {
       return tabBar + `<div class="lineup-loading">Loading this week's lineup&hellip;</div>`;
     }
     return tabBar + renderLineup();
+  }
+  if (_panel === "trades") {
+    if (_tradesData === null) {
+      loadTrades();
+      return tabBar + `<div class="lineup-loading">Loading trades&hellip;</div>`;
+    }
+    return tabBar + renderTrades();
   }
   return tabBar + (_panel === "capital" ? renderCapital() : renderPower());
 }
@@ -192,6 +202,57 @@ function renderLineup() {
   }).join("");
 
   return `<div class="lineup-header">${escapeHtml(header)}</div><div class="lineup-list">${rows}</div>`;
+}
+
+async function loadTrades() {
+  // Same stale-response guard as loadLineup() above -- capture _key before
+  // the first await and bail if the user has switched leagues by the time
+  // any await resolves, so a slow response for a league the user has left
+  // can't clobber the newly-reset (or still-loading) _tradesData.
+  const myKey = _key;
+  let result;
+  try {
+    const res = await fetch(`/api/leagues/${encodeURIComponent(myKey)}/trades`);
+    if (_key !== myKey) return;
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      if (_key !== myKey) return;
+      result = { error: body.detail || "Couldn't load trades" };
+    } else {
+      const data = await res.json();
+      if (_key !== myKey) return;
+      result = data;
+    }
+  } catch (e) {
+    if (_key !== myKey) return;
+    result = { error: "Couldn't load trades" };
+  }
+  _tradesData = result;
+  render();
+}
+
+function renderTrades() {
+  if (_tradesData.error) {
+    return `<div class="lineup-error">${escapeHtml(_tradesData.error)}</div>`;
+  }
+  if (_tradesData.trades.length === 0) {
+    return `<div class="lineup-empty">No trades in this league yet</div>`;
+  }
+  const rows = _tradesData.trades.map(t => {
+    const gotA = t.roster_a_gets.join(", ") || "(nothing)";
+    const gotB = t.roster_b_gets.join(", ") || "(nothing)";
+    return `<div class="lineup-row trade-row">
+      <div>Week ${t.week}: Roster ${t.roster_a_id} got ${escapeHtml(gotA)}
+        (value at trade ${t.side_a_value_at_trade}, since then
+        ${t.current_player_points_delta_a > 0 ? "+" : ""}${t.current_player_points_delta_a} pts
+        ${t.current_pick_value_a ? `, pick value now ${t.current_pick_value_a}` : ""})</div>
+      <div>Roster ${t.roster_b_id} got ${escapeHtml(gotB)}
+        (value at trade ${t.side_b_value_at_trade}, since then
+        ${t.current_player_points_delta_b > 0 ? "+" : ""}${t.current_player_points_delta_b} pts
+        ${t.current_pick_value_b ? `, pick value now ${t.current_pick_value_b}` : ""})</div>
+    </div>`;
+  }).join("");
+  return `<div class="lineup-list">${rows}</div>`;
 }
 
 function renderPower() {
