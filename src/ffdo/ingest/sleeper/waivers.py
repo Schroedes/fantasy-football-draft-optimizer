@@ -1,10 +1,15 @@
 """Real completed FAAB waiver claims, from /league/<id>/transactions/<week>
 -- the sibling of ingest.sleeper.transactions.fetch_trades, filtered to
-type == "waiver" instead of "trade". Also provides the chronological
-running-FAAB-spend walk shared by scripts/fit_faab_curve.py (historical
-fitting) and the live /waivers endpoint (current remaining budget) --
-both need "walk this season's waiver claims in order, track cumulative
-spend per roster," so it lives here once rather than being duplicated.
+type == "waiver" instead of "trade". Also provides remaining_budget, which
+computes each roster's current remaining FAAB budget from a list of claims
+via a simple order-independent sum (waiver_budget minus total bid amount
+spent) -- the order the claims are summed in doesn't matter here.
+
+A separate, future piece of code -- the offline scripts/fit_faab_curve.py
+fitting script -- has a genuinely different need: it must walk a season's
+claims in chronological order to recover each claim's intermediate
+remaining-before state, which this module's remaining_budget does not
+need and does not provide.
 """
 
 from __future__ import annotations
