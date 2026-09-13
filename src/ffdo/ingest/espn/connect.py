@@ -1,11 +1,12 @@
-"""Resolves an ESPN league ID + season + cookies into a connected Session.
+"""Resolves an ESPN league ID + season + cookies into a TrackedLeague.
 
 Mirrors ffdo.ingest.connect's Sleeper flow: one-time orchestration when the
 main screen's connect form is submitted, not run on every board poll.
 Unlike the Sleeper flow (which receives an already-constructed,
 credential-free SleeperClient), this module owns constructing its own
-EspnClient internally, since it also needs the raw espn_s2/swid strings to
-persist into the returned Session for later board polls to reuse.
+EspnClient internally, since it needs the raw espn_s2/swid strings to
+perform the lookup. The credentials are NOT returned on the TrackedLeague
+-- the connect endpoint persists them separately into provider_credential.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from typing import Callable
 
 import httpx
 
-from ffdo.domain.models import PlayerProfile, Session
+from ffdo.domain.models import PlayerProfile, TrackedLeague, make_league_key
 from ffdo.ingest.espn import crosswalk as crosswalk_mod
 from ffdo.ingest.espn import draft as draft_mod
 from ffdo.ingest.espn import league as league_mod
@@ -24,7 +25,7 @@ from ffdo.ingest.espn.client import BASE, PLAYER_POOL_FILTER_HEADER, EspnClient
 
 
 class ConnectError(Exception):
-    """A user-facing reason resolve() could not connect an ESPN league."""
+    """A user-facing reason track() could not connect an ESPN league."""
 
 
 def normalize_swid(swid: str) -> str:
@@ -40,7 +41,7 @@ def normalize_swid(swid: str) -> str:
     return swid
 
 
-def resolve(
+def track(
     league_id: str,
     season: int,
     espn_s2: str,
@@ -50,7 +51,7 @@ def resolve(
     *,
     now: Callable[[], datetime] | None = None,
     transport: httpx.BaseTransport | None = None,
-) -> Session:
+) -> TrackedLeague:
     now = now or (lambda: datetime.now(timezone.utc))
     swid = normalize_swid(swid)
 
@@ -93,24 +94,27 @@ def resolve(
     finally:
         espn.close()
 
-    return Session(
-        username="",
-        user_id=swid,
-        league_id=league.league_id,
-        draft_id=league.league_id,
-        roster_id=roster_id,
-        league_name=league.name,
+    stamp = now().isoformat()
+    return TrackedLeague(
+        league_key=make_league_key("espn", league.league_id, league.season),
+        provider="espn",
+        provider_league_id=league.league_id,
         season=league.season,
-        num_teams=league.num_teams,
-        budget=league.budget,
-        roster_positions=league.roster_positions,
-        scoring_settings=league.scoring_settings,
+        name=league.name,
+        user_id=swid,
+        roster_id=roster_id,
+        draft_id=league.league_id,
         draft_type=state.draft_type,
         draft_status=state.status,
+        num_teams=league.num_teams,
+        budget=league.budget,
         rounds=state.rounds,
-        connected_at=now().isoformat(),
+        roster_positions=league.roster_positions,
+        scoring_settings=league.scoring_settings,
+        fmt=league_mod.detect_format(raw),
+        format_override=None,
+        raw_settings=raw.get("settings") or {},
         is_mock=False,
-        provider="espn",
-        espn_s2=espn_s2,
-        swid=swid,
+        tracked_at=stamp,
+        last_refreshed_at=stamp,
     )

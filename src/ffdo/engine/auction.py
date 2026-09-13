@@ -180,7 +180,7 @@ def positional_budget(
     already claimed their share -- so FLEX (a real starting spot that
     scores every week) gets a real market price, not a floor. Bench slots
     carry no positional preference and score nothing, so they stay a flat
-    $1/slot reserve. `roster_id=None` (FFDO_ROSTER_ID unset) is treated as
+    $1/slot reserve. `roster_id=None` (unresolved on the tracked league) is
     a fresh roster -- zero drafted -- the same fallback the board applies
     to max-bid elsewhere.
     """

@@ -20,9 +20,9 @@ Start the server for draft day:
 uv run uvicorn ffdo.api.app:app --port 8000
 ```
 
-Then open `http://localhost:8000` in a browser.
+Then open `http://localhost:8000` in a browser and connect a provider
+(Sleeper username, or ESPN `espn_s2` / `SWID` cookies), then pick which
+leagues to track.
 
-By default the board points at the pinned 2026 auction league/draft. To
-point it elsewhere (e.g. a snake league), set `FFDO_LEAGUE_ID` /
-`FFDO_DRAFT_ID` before starting the server; set `FFDO_ROSTER_ID` to see
-your own max-bid and budget numbers instead of a fresh-roster estimate.
+For a zero-config dev league, run `uv run python scripts/seed_dev_league.py`
+to track the pinned 2026 auction league into `data/ffdo.db`.

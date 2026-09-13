@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +73,69 @@ class LeagueProfile:
         return len(self.roster_positions)
 
 
+def make_league_key(provider: str, provider_league_id: str, season: int) -> str:
+    return f"{provider}:{provider_league_id}:{season}"
+
+
+@dataclass(frozen=True, slots=True)
+class TrackedLeague:
+    league_key: str
+    provider: str
+    provider_league_id: str
+    season: int
+    name: str
+    user_id: str
+    roster_id: int | None
+    draft_id: str
+    draft_type: str
+    draft_status: str
+    num_teams: int
+    budget: int | None
+    rounds: int
+    roster_positions: tuple[str, ...]
+    scoring_settings: Mapping[str, float]
+    fmt: str
+    format_override: str | None
+    raw_settings: Mapping[str, Any]
+    is_mock: bool
+    tracked_at: str
+    last_refreshed_at: str
+
+    @property
+    def resolved_format(self) -> str:
+        return self.format_override or self.fmt
+
+    @property
+    def starting_slots(self) -> tuple[str, ...]:
+        return tuple(p for p in self.roster_positions if p != "BN")
+
+    @property
+    def roster_size(self) -> int:
+        return len(self.roster_positions)
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderCredential:
+    provider: str
+    user_identifier: str
+    espn_s2: str | None
+    swid: str | None
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveredLeague:
+    provider: str
+    provider_league_id: str
+    season: int
+    name: str
+    num_teams: int
+    draft_type: str
+    fmt: str
+    draft_status: str
+    already_tracked: bool
+
+
 @dataclass(frozen=True, slots=True)
 class DraftPick:
     pick_no: int
@@ -135,31 +199,3 @@ class ValuedPlayer:
 class TeamProfile:
     roster_id: int
     display_name: str
-
-
-@dataclass(frozen=True, slots=True)
-class Session:
-    """A connected league/user/draft, as resolved by one of
-    `ffdo.ingest.connect.resolve()` (Sleeper) or
-    `ffdo.ingest.espn.connect.resolve()` (ESPN), and persisted by
-    `ffdo.api.session.SessionStore`.
-    """
-    username: str
-    user_id: str
-    league_id: str
-    draft_id: str
-    roster_id: int | None
-    league_name: str
-    season: int
-    num_teams: int
-    budget: int | None
-    roster_positions: tuple[str, ...]
-    scoring_settings: Mapping[str, float]
-    draft_type: str
-    draft_status: str
-    rounds: int
-    connected_at: str
-    is_mock: bool
-    provider: str = "sleeper"
-    espn_s2: str | None = None
-    swid: str | None = None

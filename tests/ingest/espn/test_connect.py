@@ -54,47 +54,52 @@ def _handler(league_response=None):
     return handler
 
 
-def test_resolve_returns_a_fully_populated_session_for_the_real_pre_draft_league():
-    session = connect.resolve(
+def test_track_returns_a_fully_populated_tracked_league_for_the_real_pre_draft_league():
+    lg = connect.track(
         "1882997948", 2026, "s2value", YOUR_SWID,
         profiles={}, espn_id_index={},
         transport=httpx.MockTransport(_handler()),
         now=lambda: datetime(2026, 8, 23, tzinfo=timezone.utc))
 
-    assert session.provider == "espn"
-    assert session.league_id == "1882997948"
-    assert session.draft_id == "1882997948"
-    assert session.roster_id == 7
-    assert session.league_name == "Pigskin Pricing Experts"
-    assert session.num_teams == 10
-    assert session.draft_type == "snake"
-    assert session.draft_status == "pre_draft"
-    assert session.rounds == 15
-    assert session.espn_s2 == "s2value"
-    assert session.swid == YOUR_SWID
-    assert session.connected_at == "2026-08-23T00:00:00+00:00"
+    assert lg.provider == "espn"
+    assert lg.league_key == "espn:1882997948:2026"
+    assert lg.provider_league_id == "1882997948"
+    assert lg.draft_id == "1882997948"
+    assert lg.roster_id == 7
+    assert lg.name == "Pigskin Pricing Experts"
+    assert lg.num_teams == 10
+    assert lg.draft_type == "snake"
+    assert lg.draft_status == "pre_draft"
+    assert lg.rounds == 15
+    assert lg.fmt in ("redraft", "keeper")
+    assert lg.format_override is None
+    assert lg.is_mock is False
+    assert lg.tracked_at == "2026-08-23T00:00:00+00:00"
+    assert lg.last_refreshed_at == "2026-08-23T00:00:00+00:00"
+    assert not hasattr(lg, "espn_s2")
+    assert not hasattr(lg, "swid")
 
 
-def test_resolve_normalizes_a_swid_pasted_without_braces():
+def test_track_normalizes_a_swid_pasted_without_braces():
     bare_swid = YOUR_SWID.strip("{}")
-    session = connect.resolve(
+    lg = connect.track(
         "1882997948", 2026, "s2value", bare_swid,
         profiles={}, espn_id_index={},
         transport=httpx.MockTransport(_handler()))
-    assert session.roster_id == 7
-    assert session.swid == YOUR_SWID
+    assert lg.roster_id == 7
+    assert lg.user_id == YOUR_SWID
 
 
-def test_resolve_raises_when_the_league_is_not_found():
+def test_track_raises_when_the_league_is_not_found():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"error": "not found"})
 
     with pytest.raises(connect.ConnectError, match="League not found"):
-        connect.resolve("bad-league", 2026, "s2", YOUR_SWID, {}, {},
-                        transport=httpx.MockTransport(handler))
+        connect.track("bad-league", 2026, "s2", YOUR_SWID, {}, {},
+                      transport=httpx.MockTransport(handler))
 
 
-def test_resolve_raises_when_the_draft_type_is_not_snake():
+def test_track_raises_when_the_draft_type_is_not_snake():
     raw = _combined_league_response()
     auction_raw = {
         **raw,
@@ -102,27 +107,27 @@ def test_resolve_raises_when_the_draft_type_is_not_snake():
                     {**raw["settings"]["draftSettings"], "type": "AUCTION"}},
     }
     with pytest.raises(connect.ConnectError, match="auction"):
-        connect.resolve("1882997948", 2026, "s2", YOUR_SWID, {}, {},
-                        transport=httpx.MockTransport(_handler(auction_raw)))
+        connect.track("1882997948", 2026, "s2", YOUR_SWID, {}, {},
+                      transport=httpx.MockTransport(_handler(auction_raw)))
 
 
-def test_resolve_raises_when_the_swid_matches_no_team():
+def test_track_raises_when_the_swid_matches_no_team():
     unknown_swid = "{ffffffff-0000-0000-0000-000000000000}"
     with pytest.raises(connect.ConnectError, match="not a member"):
-        connect.resolve("1882997948", 2026, "s2", unknown_swid, {}, {},
-                        transport=httpx.MockTransport(_handler()))
+        connect.track("1882997948", 2026, "s2", unknown_swid, {}, {},
+                      transport=httpx.MockTransport(_handler()))
 
 
-def test_resolve_raises_a_cookie_expired_message_on_401():
+def test_track_raises_a_cookie_expired_message_on_401():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": "unauthorized"})
 
     with pytest.raises(connect.ConnectError, match="cookies look expired"):
-        connect.resolve("1882997948", 2026, "s2", YOUR_SWID, {}, {},
-                        transport=httpx.MockTransport(handler))
+        connect.track("1882997948", 2026, "s2", YOUR_SWID, {}, {},
+                      transport=httpx.MockTransport(handler))
 
 
-def test_resolve_raises_when_the_player_pool_fetch_fails(monkeypatch):
+def test_track_raises_when_the_player_pool_fetch_fails(monkeypatch):
     monkeypatch.setattr("ffdo.ingest.espn.client.time.sleep", lambda *_a, **_kw: None)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -134,8 +139,8 @@ def test_resolve_raises_when_the_player_pool_fetch_fails(monkeypatch):
         raise AssertionError(f"unexpected URL: {url}")
 
     with pytest.raises(connect.ConnectError, match="player pool"):
-        connect.resolve("1882997948", 2026, "s2", YOUR_SWID, {}, {},
-                        transport=httpx.MockTransport(handler))
+        connect.track("1882997948", 2026, "s2", YOUR_SWID, {}, {},
+                      transport=httpx.MockTransport(handler))
 
 
 def test_normalize_swid_adds_missing_braces():

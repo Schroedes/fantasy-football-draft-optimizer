@@ -1,4 +1,4 @@
-"""Resolves a Sleeper league ID + username into a connected Session.
+"""Resolves a Sleeper league ID + username into a tracked league.
 
 Orchestrates the handful of Sleeper calls needed to go from "league ID and
 username" to a fully-identified league/draft/roster -- the one-time lookup
@@ -9,12 +9,11 @@ board poll.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
 from datetime import datetime, timezone
 
 import httpx
 
-from ffdo.domain.models import Session
+from ffdo.domain.models import TrackedLeague, make_league_key
 from ffdo.ingest import draft as draft_mod
 from ffdo.ingest import league as league_mod
 from ffdo.ingest import mock_draft
@@ -23,16 +22,16 @@ from ffdo.ingest.client import V1, SleeperClient
 
 
 class ConnectError(Exception):
-    """A user-facing reason `resolve()` could not connect a league."""
+    """A user-facing reason `track()` could not connect a league."""
 
 
-def resolve(
+def track(
     sleeper: SleeperClient,
     league_id: str,
     username: str,
     *,
     now: Callable[[], datetime] | None = None,
-) -> Session:
+) -> TrackedLeague:
     now = now or (lambda: datetime.now(timezone.utc))
 
     try:
@@ -51,15 +50,20 @@ def resolve(
 
     # Some leagues carry the auction budget on the draft object rather than
     # the league's own settings -- same fallback ffdo.api.app.get_board()
-    # already applies, kept consistent here so a connected Session's budget
-    # is never spuriously None for a league this app already supports.
-    if league.budget is None:
-        league = replace(league, budget=state.budget)
+    # already applies, kept consistent here so a tracked league's budget is
+    # never spuriously None for a league this app already supports.
+    budget = league.budget if league.budget is not None else state.budget
 
     try:
         user_raw = sleeper.get_json(f"{V1}/user/{username}")
     except httpx.HTTPStatusError as exc:
         raise ConnectError("Username not found") from exc
+    # Sleeper answers an unknown username with `200 null`, not a 404 -- so the
+    # except arm above never fires and `user_mod.parse(None)` would raise a
+    # bare TypeError, surfacing as a 500 instead of the same clean, user-facing
+    # "Username not found" a real 404 already produces.
+    if not user_raw:
+        raise ConnectError("Username not found")
     user_id, _display_name = user_mod.parse(user_raw)
 
     rosters_raw = sleeper.get_json(f"{V1}/league/{league_id}/rosters")
@@ -67,33 +71,39 @@ def resolve(
     if roster_id is None:
         raise ConnectError("This user is not a member of that league")
 
-    return Session(
-        username=username,
-        user_id=user_id,
-        league_id=league.league_id,
-        draft_id=draft_id,
-        roster_id=roster_id,
-        league_name=league.name,
+    stamp = now().isoformat()
+    return TrackedLeague(
+        league_key=make_league_key("sleeper", league.league_id, league.season),
+        provider="sleeper",
+        provider_league_id=league.league_id,
         season=league.season,
-        num_teams=league.num_teams,
-        budget=league.budget,
-        roster_positions=league.roster_positions,
-        scoring_settings=league.scoring_settings,
+        name=league.name,
+        user_id=user_id,
+        roster_id=roster_id,
+        draft_id=draft_id,
         draft_type=state.draft_type,
         draft_status=state.status,
+        num_teams=league.num_teams,
+        budget=budget,
         rounds=state.rounds,
-        connected_at=now().isoformat(),
+        roster_positions=league.roster_positions,
+        scoring_settings=league.scoring_settings,
+        fmt=league_mod.detect_format(league_raw),
+        format_override=None,
+        raw_settings=league_raw.get("settings") or {},
         is_mock=False,
+        tracked_at=stamp,
+        last_refreshed_at=stamp,
     )
 
 
-def resolve_mock(
+def track_mock(
     sleeper: SleeperClient,
     draft_id: str,
     username: str,
     *,
     now: Callable[[], datetime] | None = None,
-) -> Session:
+) -> TrackedLeague:
     now = now or (lambda: datetime.now(timezone.utc))
 
     try:
@@ -125,26 +135,36 @@ def resolve_mock(
         user_raw = sleeper.get_json(f"{V1}/user/{username}")
     except httpx.HTTPStatusError as exc:
         raise ConnectError("Username not found") from exc
+    # Same `200 null` guard as `track()` above -- an unknown username is not a
+    # 404 from Sleeper, and `user_mod.parse(None)` is a TypeError/500.
+    if not user_raw:
+        raise ConnectError("Username not found")
     user_id, _display_name = user_mod.parse(user_raw)
 
     roster_id = mock_draft.resolve_roster_id(draft_raw, user_id)
     settings = draft_raw.get("settings") or {}
 
-    return Session(
-        username=username,
-        user_id=user_id,
-        league_id="",
-        draft_id=draft_id,
-        roster_id=roster_id,
-        league_name=lg.name,
+    stamp = now().isoformat()
+    return TrackedLeague(
+        league_key=make_league_key("sleeper-mock", draft_id, lg.season),
+        provider="sleeper-mock",
+        provider_league_id=draft_id,
         season=lg.season,
-        num_teams=lg.num_teams,
-        budget=lg.budget,
-        roster_positions=lg.roster_positions,
-        scoring_settings=lg.scoring_settings,
+        name=lg.name,
+        user_id=user_id,
+        roster_id=roster_id,
+        draft_id=draft_id,
         draft_type=draft_raw["type"],
         draft_status=draft_raw["status"],
+        num_teams=lg.num_teams,
+        budget=lg.budget,
         rounds=int(settings.get("rounds", 0)),
-        connected_at=now().isoformat(),
+        roster_positions=lg.roster_positions,
+        scoring_settings=lg.scoring_settings,
+        fmt="redraft",
+        format_override=None,
+        raw_settings=settings,
         is_mock=True,
+        tracked_at=stamp,
+        last_refreshed_at=stamp,
     )

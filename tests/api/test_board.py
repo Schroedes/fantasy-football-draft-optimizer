@@ -84,9 +84,10 @@ def test_max_bid_reflects_the_users_roster_state():
 
 
 def test_max_bid_falls_back_to_a_fresh_roster_when_roster_id_is_unknown():
-    """FFDO_ROSTER_ID is optional. Without it, `roster_id` is None and the
-    board must show an honestly-labeled 'starting fresh' max bid rather
-    than silently attributing another roster's spend to the user.
+    """`roster_id` is optional on a tracked league (a mock the user hasn't
+    taken a slot in yet, a league whose roster couldn't be resolved). When it
+    is None, the board must show an honestly-labeled 'starting fresh' max bid
+    rather than silently attributing another roster's spend to the user.
     """
     league = _league()
     state = draft.parse({"draft_id": "d", "type": "auction", "status": "drafting",
@@ -158,6 +159,22 @@ def test_build_live_nomination_returns_none_when_nothing_is_on_the_block():
     state = DraftState(draft_id="d", draft_type="auction", status="drafting",
                        num_teams=12, rounds=14, budget=200, picks=())
     assert board.build_live_nomination(state) is None
+
+
+def test_auction_board_includes_the_live_draft_status():
+    league = _league()
+    state = draft.parse({"draft_id": "d", "type": "auction", "status": "complete",
+                         "settings": {"teams": 12, "rounds": 14, "budget": 200}}, [])
+    out = board.build_auction_board(league, state, {}, {})
+    assert out["draft_status"] == "complete"
+
+
+def test_snake_board_includes_the_live_draft_status():
+    league = _league()
+    state = draft.parse({"draft_id": "d", "type": "snake", "status": "drafting",
+                         "settings": {"teams": 12, "rounds": 14}}, [])
+    out = board.build_snake_board(league, state, {}, {}, {})
+    assert out["draft_status"] == "drafting"
 
 
 def test_healthz_returns_ok():

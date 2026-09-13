@@ -5,3 +5,5 @@ __pycache__/
 .coverage
 *.sqlite
 data/session.json
+data/ffdo.db
+data/session.json.migrated

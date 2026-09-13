@@ -286,9 +286,10 @@ def test_flex_pool_excludes_players_already_claimed_by_dedicated_slots():
 
 
 def test_none_roster_id_falls_back_to_fresh_roster():
-    """FFDO_ROSTER_ID unset must show 'as if starting fresh' need, ignoring
-    what anyone (including roster 1) has actually drafted -- same fallback
-    board.py already applies to max_bid/spent/slots_filled."""
+    """`roster_id=None` (unresolved on the tracked league) must show 'as if
+    starting fresh' need, ignoring what anyone (including roster 1) has
+    actually drafted -- same fallback board.py already applies to
+    max_bid/spent/slots_filled."""
     league = _league_multi(("RB", "BN"))
     picks = (
         DraftPick(pick_no=1, round=1, draft_slot=1, roster_id=1, picked_by="u1",

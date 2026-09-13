@@ -161,7 +161,7 @@ def build_auction_board(
     spent = state.spent_by_roster()
 
     # "Your" roster state, for the max-bid ceiling and budget strip. When
-    # `roster_id` is unknown (FFDO_ROSTER_ID unset), fall back to a fresh
+    # `roster_id` is unknown (the tracked league has none yet), fall back to a fresh
     # 0-spent/0-filled roster rather than guessing -- an honestly-labeled
     # "as if starting from scratch" number beats a silently wrong one.
     your_spent = spent.get(roster_id, 0) if roster_id is not None else 0
@@ -210,6 +210,7 @@ def build_auction_board(
 
     return {
         "format": "auction",
+        "draft_status": state.status,
         "live_nomination": build_live_nomination(state),
         "inflation": round(factor, 3),
         "budget": {
@@ -245,7 +246,7 @@ def build_snake_board(
 ) -> dict:
     drafted = state.drafted_player_ids()
 
-    # `roster_id=None` (FFDO_ROSTER_ID unset) is treated as a fresh roster --
+    # `roster_id=None` (unresolved on the tracked league) is a fresh roster --
     # zero drafted -- the same fallback auction.positional_budget applies;
     # filtering picks by `p.roster_id == roster_id` without this guard would
     # otherwise match commissioner/keeper picks, which also carry
@@ -285,6 +286,7 @@ def build_snake_board(
     rows.sort(key=lambda r: r["vor"], reverse=True)
     return {
         "format": "snake",
+        "draft_status": state.status,
         "cost_of_waiting": dict(cost_of_waiting),
         "snake_plan": snake_plan,
         "picks_made": len(state.picks),

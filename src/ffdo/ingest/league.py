@@ -7,6 +7,20 @@ from typing import Any
 from ffdo.domain.models import LeagueProfile
 
 
+def detect_format(raw: dict[str, Any]) -> str:
+    """Best-effort redraft / keeper / dynasty classification from a Sleeper
+    league object. Not authoritative — the user can override it — but right
+    for most real leagues."""
+    settings = raw.get("settings") or {}
+    if settings.get("type") == 2:
+        return "dynasty"
+    if (settings.get("type") == 1
+            or (settings.get("max_keepers") or 0) > 0
+            or raw.get("previous_league_id")):
+        return "keeper"
+    return "redraft"
+
+
 def parse(raw: dict[str, Any]) -> LeagueProfile:
     settings = raw.get("settings") or {}
     return LeagueProfile(

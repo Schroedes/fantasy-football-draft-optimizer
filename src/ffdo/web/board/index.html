@@ -10,169 +10,19 @@
 <link rel="stylesheet" href="board.css">
 </head>
 <body>
-<header id="strip">
-  <div class="brand">
-    <span class="brand-name">FFDO</span>
-    <span id="brand-tag" class="brand-tag">/ AUCTION</span>
-    <span id="mock-badge" class="mock-badge" hidden>MOCK</span>
-  </div>
-  <div class="strip-stats">
-    <div><span class="label">Inflation</span><b id="inflation">&mdash;</b></div>
-    <div><span class="label">Spent</span><b id="spent">&mdash;</b></div>
-    <div id="your-dollars-stat"><span class="label">Your $ left</span><b id="your-dollars">&mdash;</b></div>
-    <div id="your-slots-stat"><span class="label">Your slots left</span><b id="your-slots">&mdash;</b></div>
-    <div id="your-per-slot-stat"><span class="label">$/slot vs avg</span><b id="your-per-slot">&mdash;</b></div>
-    <div><span class="label">Picks</span><b id="picks">&mdash;</b></div>
-    <div><span class="label">Updated</span><b id="updated">&mdash;</b></div>
-  </div>
-</header>
-
-<section id="cow" hidden>
-  <div class="cow-head">
-    <h2>Cost of waiting</h2>
-    <span class="cow-sub">what you give up per position if you pass now and take it at your next pick instead</span>
-  </div>
-  <div id="cow-rows"></div>
-</section>
-
-<section id="position-budget" hidden>
-  <div class="posbudget-head">
-    <h2>Position budget</h2>
-    <span class="posbudget-sub">recommended split of your remaining dollars to fill every slot</span>
-  </div>
-  <div id="posbudget-rows"></div>
-</section>
-
-<div id="layout">
-  <div id="sidebar">
-  <aside id="nominated" class="empty">
-    <div class="nom-empty-msg">Click a player row to pin them here while they're on the block.</div>
-    <div class="nom-body" hidden>
-      <div class="nom-head">
-        <span id="nom-kicker" class="nom-kicker">On the block</span>
-        <span id="nom-tier" class="tier-chip"></span>
-      </div>
-      <div class="nom-name-block">
-        <span id="nom-name" class="nom-name"></span>
-        <span id="nom-meta" class="nom-meta"></span>
-      </div>
-      <div class="nom-stats">
-        <div class="nom-stat">
-          <span id="nom-baseline-label" class="label">Baseline</span>
-          <b id="nom-baseline">&mdash;</b>
-        </div>
-        <div class="nom-stat">
-          <span id="nom-adjusted-label" class="label">Adjusted</span>
-          <b id="nom-adjusted" class="accent">&mdash;</b>
-        </div>
-        <div class="nom-stat">
-          <span class="label">VOR</span>
-          <b id="nom-vor">&mdash;</b>
-        </div>
-        <div class="nom-stat" id="nom-maxbid-stat" hidden>
-          <span class="label">Your max</span>
-          <b id="nom-maxbid" class="accent">&mdash;</b>
-        </div>
-        <div class="nom-stat" id="nom-posbudget-stat" hidden>
-          <span class="label">Pos budget</span>
-          <b id="nom-posbudget">&mdash;</b>
-        </div>
-      </div>
-      <div id="nom-next-best" class="nom-next-best" hidden>
-        <span class="label">Next best available</span>
-        <div class="nom-next-best-row">
-          <span id="nom-next-best-name" class="nom-next-best-name">&mdash;</span>
-          <span id="nom-next-best-gap" class="nom-next-best-gap"></span>
-        </div>
-      </div>
-      <button id="lean-badge" class="lean-badge" disabled title="This board never names a pick — you decide.">
-        MODEL LEAN &middot; DISABLED
-      </button>
-      <div id="nom-hr" class="hr"></div>
-      <div id="bid-block" class="bid-block">
-        <div class="bid-head">
-          <span class="label">Your bid</span>
-          <span id="nom-surplus" class="surplus"></span>
-        </div>
-        <div class="bid-controls">
-          <button data-step="-5">&minus;5</button>
-          <button data-step="-1">&minus;1</button>
-          <span id="nom-bid" class="bid-amount">$0</span>
-          <button data-step="1">+1</button>
-          <button data-step="5">+5</button>
-        </div>
-      </div>
-    </div>
-  </aside>
-
-  <aside id="rosters">
-    <div class="rosters-head">
-      <h2>Roster power rankings</h2>
-      <span class="rosters-sub">starting-lineup VOR, live as rosters are built</span>
-    </div>
-    <div id="rosters-rows"></div>
-  </aside>
-
-  <aside id="history">
-    <div class="history-head">
-      <h2>Pick history</h2>
-      <span class="history-sub">grades how each pick's value compared to what was still on the board</span>
-    </div>
-    <div id="history-rows"></div>
-  </aside>
-
-  <aside id="optimal-plan">
-    <div class="plan-head">
-      <h2>Optimal plan</h2>
-      <span class="plan-sub">the best affordable roster within your remaining budget</span>
-    </div>
-    <div class="plan-totals">
-      <span><b id="plan-vor">&mdash;</b> VOR</span>
-      <span><b id="plan-cost">&mdash;</b> spent</span>
-      <span><b id="plan-left">&mdash;</b> left</span>
-    </div>
-    <div id="plan-rows"></div>
-  </aside>
-
-  <aside id="snake-plan">
-    <div class="snakeplan-head">
-      <h2>Draft plan</h2>
-      <span class="snakeplan-sub">most likely pick at each of your remaining turns, simulated forward</span>
-    </div>
-    <div class="snakeplan-totals">
-      <span><b id="snakeplan-vor">&mdash;</b> expected starting VOR</span>
-    </div>
-    <div id="snakeplan-rows"></div>
-  </aside>
-  </div>
-
-  <main id="board-panel">
-    <nav id="filters">
-      <button data-pos="ALL" class="on">All</button>
-      <button data-pos="QB">QB</button>
-      <button data-pos="RB">RB</button>
-      <button data-pos="WR">WR</button>
-      <button data-pos="TE">TE</button>
-      <button data-pos="DEF">DEF</button>
-      <button data-pos="K">K</button>
-      <label class="hide-drafted"><input type="checkbox" id="hide-drafted" checked> Hide drafted</label>
-      <input id="search" type="search" placeholder="Search players&hellip;" autocomplete="off">
-    </nav>
-    <div id="board-scroll">
-      <table id="board">
-        <thead><tr>
-          <th></th><th>Player</th><th>Pos</th><th>Tm</th><th>Age</th>
-          <th data-sort="tier">Tier</th><th data-sort="vor">VOR</th>
-          <th id="th-lineup-value" data-sort="lineup_value" hidden title="How much this player would add to your starting lineup right now, given who you've already drafted">Lineup Val</th>
-          <th id="th-baseline" data-sort="baseline">Fair $</th>
-          <th id="th-money" data-sort="adjusted">Adj $</th>
-        </tr></thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </main>
-</div>
-
-<script src="board.js"></script>
+<div id="board-root"></div>
+<script type="module">
+import { mount } from "./board.js";
+const key = new URLSearchParams(location.search).get("league");
+if (!key) { document.getElementById("board-root").textContent = "No league specified — open this board from the app."; }
+else {
+  const res = await fetch(`/api/leagues/${encodeURIComponent(key)}`);
+  if (!res.ok) { document.getElementById("board-root").textContent = "League not found."; }
+  else {
+    const meta = await res.json();
+    mount(document.getElementById("board-root"), key, meta);
+  }
+}
+</script>
 </body>
 </html>

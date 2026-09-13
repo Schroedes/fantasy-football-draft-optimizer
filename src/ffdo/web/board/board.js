@@ -1,56 +1,273 @@
-let state = {
-  pos: "ALL",
-  hideDrafted: true,
-  search: "",
-  sortKey: "vor",
-  sortDir: "desc",
-  // True until the user manually clicks a sort header. While true, the
-  // snake board's default sort follows lineup_value instead of raw vor --
-  // the nudge toward whatever position you're actually thin at -- without
-  // permanently overriding a sort the user picked for themselves.
-  sortKeyIsDefault: true,
-  nominatedId: null,
-  bid: 0,
-  // The player_id of the last live nomination we auto-applied from Sleeper
-  // (distinct from `nominatedId`, which also changes on a manual row click).
-  // Lets us tell "a new nomination just happened" from "still the same one".
-  liveNominatedId: null,
-  // True while `bid` should keep following Sleeper's live high offer on
-  // every poll. A manual bid nudge (or inspecting a different player) sets
-  // this false; it resumes once the next real nomination comes in.
-  bidIsLive: true,
-  expandedRoster: null,
-  data: null,
-};
+// The board's own DOM. Lifted verbatim out of board/index.html so the shell
+// (src/ffdo/web/app.js) can mount the board into #league-body without loading
+// a second HTML document. index.html is now just a thin host that imports
+// mount() and calls it.
+const BOARD_MARKUP = `
+<header id="strip">
+  <div class="brand">
+    <span class="brand-name">FFDO</span>
+    <span id="brand-tag" class="brand-tag">/ AUCTION</span>
+    <span id="mock-badge" class="mock-badge" hidden>MOCK</span>
+  </div>
+  <div class="strip-stats">
+    <div><span class="label">Inflation</span><b id="inflation">&mdash;</b></div>
+    <div><span class="label">Spent</span><b id="spent">&mdash;</b></div>
+    <div id="your-dollars-stat"><span class="label">Your $ left</span><b id="your-dollars">&mdash;</b></div>
+    <div id="your-slots-stat"><span class="label">Your slots left</span><b id="your-slots">&mdash;</b></div>
+    <div id="your-per-slot-stat"><span class="label">$/slot vs avg</span><b id="your-per-slot">&mdash;</b></div>
+    <div><span class="label">Picks</span><b id="picks">&mdash;</b></div>
+    <div><span class="label">Updated</span><b id="updated">&mdash;</b></div>
+  </div>
+</header>
+
+<section id="cow" hidden>
+  <div class="cow-head">
+    <h2>Cost of waiting</h2>
+    <span class="cow-sub">what you give up per position if you pass now and take it at your next pick instead</span>
+  </div>
+  <div id="cow-rows"></div>
+</section>
+
+<section id="position-budget" hidden>
+  <div class="posbudget-head">
+    <h2>Position budget</h2>
+    <span class="posbudget-sub">recommended split of your remaining dollars to fill every slot</span>
+  </div>
+  <div id="posbudget-rows"></div>
+</section>
+
+<div id="layout">
+  <div id="sidebar">
+  <aside id="nominated" class="empty">
+    <div class="nom-empty-msg">Click a player row to pin them here while they're on the block.</div>
+    <div class="nom-body" hidden>
+      <div class="nom-head">
+        <span id="nom-kicker" class="nom-kicker">On the block</span>
+        <span id="nom-tier" class="tier-chip"></span>
+      </div>
+      <div class="nom-name-block">
+        <span id="nom-name" class="nom-name"></span>
+        <span id="nom-meta" class="nom-meta"></span>
+      </div>
+      <div class="nom-stats">
+        <div class="nom-stat">
+          <span id="nom-baseline-label" class="label">Baseline</span>
+          <b id="nom-baseline">&mdash;</b>
+        </div>
+        <div class="nom-stat">
+          <span id="nom-adjusted-label" class="label">Adjusted</span>
+          <b id="nom-adjusted" class="accent">&mdash;</b>
+        </div>
+        <div class="nom-stat">
+          <span class="label">VOR</span>
+          <b id="nom-vor">&mdash;</b>
+        </div>
+        <div class="nom-stat" id="nom-maxbid-stat" hidden>
+          <span class="label">Your max</span>
+          <b id="nom-maxbid" class="accent">&mdash;</b>
+        </div>
+        <div class="nom-stat" id="nom-posbudget-stat" hidden>
+          <span class="label">Pos budget</span>
+          <b id="nom-posbudget">&mdash;</b>
+        </div>
+      </div>
+      <div id="nom-next-best" class="nom-next-best" hidden>
+        <span class="label">Next best available</span>
+        <div class="nom-next-best-row">
+          <span id="nom-next-best-name" class="nom-next-best-name">&mdash;</span>
+          <span id="nom-next-best-gap" class="nom-next-best-gap"></span>
+        </div>
+      </div>
+      <button id="lean-badge" class="lean-badge" disabled title="This board never names a pick — you decide.">
+        MODEL LEAN &middot; DISABLED
+      </button>
+      <div id="nom-hr" class="hr"></div>
+      <div id="bid-block" class="bid-block">
+        <div class="bid-head">
+          <span class="label">Your bid</span>
+          <span id="nom-surplus" class="surplus"></span>
+        </div>
+        <div class="bid-controls">
+          <button data-step="-5">&minus;5</button>
+          <button data-step="-1">&minus;1</button>
+          <span id="nom-bid" class="bid-amount">$0</span>
+          <button data-step="1">+1</button>
+          <button data-step="5">+5</button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <aside id="rosters">
+    <div class="rosters-head">
+      <h2>Roster power rankings</h2>
+      <span class="rosters-sub">starting-lineup VOR, live as rosters are built</span>
+    </div>
+    <div id="rosters-rows"></div>
+  </aside>
+
+  <aside id="history">
+    <div class="history-head">
+      <h2>Pick history</h2>
+      <span class="history-sub">grades how each pick's value compared to what was still on the board</span>
+    </div>
+    <div id="history-rows"></div>
+  </aside>
+
+  <aside id="optimal-plan">
+    <div class="plan-head">
+      <h2>Optimal plan</h2>
+      <span class="plan-sub">the best affordable roster within your remaining budget</span>
+    </div>
+    <div class="plan-totals">
+      <span><b id="plan-vor">&mdash;</b> VOR</span>
+      <span><b id="plan-cost">&mdash;</b> spent</span>
+      <span><b id="plan-left">&mdash;</b> left</span>
+    </div>
+    <div id="plan-rows"></div>
+  </aside>
+
+  <aside id="snake-plan">
+    <div class="snakeplan-head">
+      <h2>Draft plan</h2>
+      <span class="snakeplan-sub">most likely pick at each of your remaining turns, simulated forward</span>
+    </div>
+    <div class="snakeplan-totals">
+      <span><b id="snakeplan-vor">&mdash;</b> expected starting VOR</span>
+    </div>
+    <div id="snakeplan-rows"></div>
+  </aside>
+  </div>
+
+  <main id="board-panel">
+    <nav id="filters">
+      <button data-pos="ALL" class="on">All</button>
+      <button data-pos="QB">QB</button>
+      <button data-pos="RB">RB</button>
+      <button data-pos="WR">WR</button>
+      <button data-pos="TE">TE</button>
+      <button data-pos="DEF">DEF</button>
+      <button data-pos="K">K</button>
+      <label class="hide-drafted"><input type="checkbox" id="hide-drafted" checked> Hide drafted</label>
+      <input id="search" type="search" placeholder="Search players&hellip;" autocomplete="off">
+    </nav>
+    <div id="board-scroll">
+      <table id="board">
+        <thead><tr>
+          <th></th><th>Player</th><th>Pos</th><th>Tm</th><th>Age</th>
+          <th data-sort="tier">Tier</th><th data-sort="vor">VOR</th>
+          <th id="th-lineup-value" data-sort="lineup_value" hidden title="How much this player would add to your starting lineup right now, given who you've already drafted">Lineup Val</th>
+          <th id="th-baseline" data-sort="baseline">Fair $</th>
+          <th id="th-money" data-sort="adjusted">Adj $</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </main>
+</div>`;
+
+// Set by mount(); every league-scoped fetch and the season-mode switch read
+// these. Only one board is mounted at a time (the shell tears #league-body
+// down on route change), so module-level singletons are safe.
+let _leagueKey = null;
+let _container = null;
+let _meta = null;
+
+// Every mutable bit of board UI state, rebuilt from scratch on each mount() so
+// a league switch in the shell (which re-imports this cached module and calls
+// mount again) never inherits the previous league's filter/sort/nomination/
+// data -- `data: null` in particular closes a stale-render flash where
+// refreshLive's `if (!state.data) return` guard would pass on the old
+// league's payload before the new league's first refresh() resolves.
+function freshState() {
+  return {
+    pos: "ALL",
+    hideDrafted: true,
+    search: "",
+    sortKey: "vor",
+    sortDir: "desc",
+    // True until the user manually clicks a sort header. While true, the
+    // snake board's default sort follows lineup_value instead of raw vor --
+    // the nudge toward whatever position you're actually thin at -- without
+    // permanently overriding a sort the user picked for themselves.
+    sortKeyIsDefault: true,
+    nominatedId: null,
+    bid: 0,
+    // The player_id of the last live nomination we auto-applied from Sleeper
+    // (distinct from `nominatedId`, which also changes on a manual row click).
+    // Lets us tell "a new nomination just happened" from "still the same one".
+    liveNominatedId: null,
+    // True while `bid` should keep following Sleeper's live high offer on
+    // every poll. A manual bid nudge (or inspecting a different player) sets
+    // this false; it resumes once the next real nomination comes in.
+    bidIsLive: true,
+    expandedRoster: null,
+    data: null,
+    // setInterval handles, owned by mount(); cleared when the draft completes
+    // and the screen switches to season mode.
+    pollId: null,
+    livePollId: null,
+  };
+}
+
+let state = freshState();
+
+// Bumped by every mount(). Both pollers capture it before their first await
+// and bail the moment it moves, because mount() reassigns `state` and installs
+// new interval ids SYNCHRONOUSLY on a league switch while an in-flight fetch
+// for the previous league is still outstanding. Without this, league A's late
+// response resumes against league B's `state` -- clearing B's fresh interval
+// ids (permanently killing its pollers), or forcing B into season mode off A's
+// `draft_status: "complete"`, with no path back short of a reload.
+let _epoch = 0;
 
 async function refresh() {
+  const myEpoch = _epoch;
   try {
-    const res = await fetch("/api/board");
+    const res = await fetch(`/api/leagues/${encodeURIComponent(_leagueKey)}/board`);
+    if (myEpoch !== _epoch) return;
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    state.data = await res.json();
+    const data = await res.json();
+    if (myEpoch !== _epoch) return;
+    state.data = data;
+    // The draft finished: stop polling the board and hand the screen to the
+    // season-mode placeholder. Only the heavy refresh() poll carries
+    // draft_status (see Ruling 1) -- refreshLive() never does -- so this is
+    // the one place the switch can happen.
+    if (state.data.draft_status === "complete") {
+      clearInterval(state.pollId); clearInterval(state.livePollId);
+      renderSeasonMode(_container, _meta);
+      return;
+    }
     applyLiveNomination();
     document.getElementById("updated").textContent = new Date().toLocaleTimeString();
     render();
   } catch (err) {
+    // Same epoch guard: a stale league's failed fetch must not stamp "error"
+    // over the league the user is now actually looking at.
+    if (myEpoch !== _epoch) return;
     document.getElementById("updated").textContent = "error";
     console.error("board refresh failed", err);
   }
 }
 
-// `/api/board` recomputes VOR/baseline/rosters for the whole player pool on
-// every call, which is too slow to poll at auction speed -- see `refresh`
-// above, kept on its own slower interval for that data. Nomination and bid
-// don't need any of that: they come straight off Sleeper's draft metadata,
-// so `/api/board/live` fetches just that and this poll can run fast without
-// paying for the heavy rebuild. Skipped until the first full `refresh()`
-// lands, since it only patches fields onto `state.data` rather than
-// populating it.
+// `/api/leagues/{key}/board` recomputes VOR/baseline/rosters for the whole
+// player pool on every call, which is too slow to poll at auction speed -- see
+// `refresh` above, kept on its own slower interval for that data. Nomination
+// and bid don't need any of that: they come straight off Sleeper's draft
+// metadata, so `/api/leagues/{key}/board/live` fetches just that and this poll
+// can run fast without paying for the heavy rebuild. Skipped until the first
+// full `refresh()` lands, since it only patches fields onto `state.data`
+// rather than populating it.
 async function refreshLive() {
   if (!state.data) return;
+  const myEpoch = _epoch;
   try {
-    const res = await fetch("/api/board/live");
+    const res = await fetch(`/api/leagues/${encodeURIComponent(_leagueKey)}/board/live`);
+    if (myEpoch !== _epoch) return;
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const live = await res.json();
+    if (myEpoch !== _epoch) return;
     state.data.live_nomination = live.live_nomination;
     state.data.picks_made = live.picks_made;
     applyLiveNomination();
@@ -518,80 +735,169 @@ function escapeHtml(s) {
   }[c]));
 }
 
-// Event delegation: ONE listener on the stable tbody ancestor, rather than
-// one per row re-attached on every render() call (every 3s poll, every
-// keystroke, every filter/sort click). The row's data-id is read off
-// whichever <tr> was actually clicked via e.target.closest.
-document.querySelector("#board tbody").addEventListener("click", e => {
-  const tr = e.target.closest("tr[data-id]");
-  if (!tr || !state.data) return;
-  const p = state.data.players.find(x => x.player_id === tr.dataset.id);
-  if (!p || p.drafted) return;
-  nominate(p);
-});
+// Swaps the whole board out for the post-draft placeholder once the draft
+// completes. `meta` is the tracked-league record from
+// GET /api/leagues/{key}; its provider-set `name`, `resolved_format` and
+// roster-slot labels are escaped with the same helper the rest of this module
+// uses (the numeric stats need none), and the format <option> values are
+// literals, safe unescaped.
+//
+// The stat grid and roster-slot chips are spec §6.3's "components already
+// rendered on today's connected view" -- they moved here verbatim in spirit
+// from the deleted web/main.js when the connected view was absorbed into this
+// screen.
+function renderSeasonMode(container, meta) {
+  const positions = meta.roster_positions || [];
+  const chips =
+    positions.filter(p => p !== "BN")
+      .map(p => `<span class="chip">${escapeHtml(p)}</span>`).join("") +
+    positions.filter(p => p === "BN")
+      .map(p => `<span class="chip bn">${escapeHtml(p)}</span>`).join("");
+  const scoringKeys = Object.keys(meta.scoring_settings || {}).length;
 
-document.querySelectorAll("#filters button[data-pos]").forEach(b =>
-  b.addEventListener("click", () => {
-    document.querySelectorAll("#filters button[data-pos]").forEach(x => x.classList.remove("on"));
-    b.classList.add("on");
-    state.pos = b.dataset.pos;
+  container.innerHTML = `
+    <section class="card season-mode">
+      <span class="badge">DRAFT COMPLETE</span>
+      <h1>Season mode</h1>
+      <p>${escapeHtml(meta.name)} has drafted. Roster analysis, standings, weekly lineups
+         and waivers arrive in upcoming releases — each reads this league's
+         own scoring and format.</p>
+      <div class="stat-grid">
+        <div class="stat"><span class="label">Teams</span><b>${meta.num_teams}</b></div>
+        <div class="stat"><span class="label">Format</span><b>${escapeHtml(meta.resolved_format)}</b></div>
+        <div class="stat"><span class="label">Scoring keys</span><b>${scoringKeys}</b></div>
+        <div class="stat"><span class="label">Budget</span><b>${meta.budget != null ? "$" + meta.budget : "—"}</b></div>
+      </div>
+      <div class="chip-row">${chips}</div>
+      <div class="format-override">
+        <label>Format
+          <select id="fmt-override">
+            ${["redraft", "keeper", "dynasty"].map(f =>
+              `<option value="${f}"${meta.resolved_format === f ? " selected" : ""}>${f}</option>`).join("")}
+          </select>
+        </label>
+      </div>
+    </section>`;
+  container.querySelector("#fmt-override").onchange = (e) => {
+    // Fire-and-forget by design -- the switcher label is app.js's concern, not
+    // this placeholder's -- but a failure shouldn't vanish silently.
+    fetch(`/api/leagues/${encodeURIComponent(meta.league_key)}`, {
+      method: "PATCH", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ format_override: e.target.value }),
+    })
+      .then(r => { if (!r.ok) console.warn("format override failed", r.status); })
+      .catch(err => console.warn("format override failed", err));
+  };
+}
+
+// All the board's DOM wiring. Split out of module top-level so it runs
+// against the markup mount() just injected, not at import time. The
+// document.getElementById / querySelector calls stay document-scoped: the
+// injected markup lives in the document, its IDs are unique, and only one
+// board mounts at a time.
+function wireBoard() {
+  // Event delegation: ONE listener on the stable tbody ancestor, rather than
+  // one per row re-attached on every render() call (every 3s poll, every
+  // keystroke, every filter/sort click). The row's data-id is read off
+  // whichever <tr> was actually clicked via e.target.closest.
+  document.querySelector("#board tbody").addEventListener("click", e => {
+    const tr = e.target.closest("tr[data-id]");
+    if (!tr || !state.data) return;
+    const p = state.data.players.find(x => x.player_id === tr.dataset.id);
+    if (!p || p.drafted) return;
+    nominate(p);
+  });
+
+  document.querySelectorAll("#filters button[data-pos]").forEach(b =>
+    b.addEventListener("click", () => {
+      document.querySelectorAll("#filters button[data-pos]").forEach(x => x.classList.remove("on"));
+      b.classList.add("on");
+      state.pos = b.dataset.pos;
+      render();
+    }));
+
+  document.getElementById("hide-drafted").addEventListener("change", e => {
+    state.hideDrafted = e.target.checked;
     render();
-  }));
+  });
 
-document.getElementById("hide-drafted").addEventListener("change", e => {
-  state.hideDrafted = e.target.checked;
-  render();
-});
-
-document.getElementById("search").addEventListener("input", e => {
-  state.search = e.target.value;
-  render();
-});
-
-document.querySelectorAll("#board th[data-sort]").forEach(th =>
-  th.addEventListener("click", () => {
-    state.sortKeyIsDefault = false;
-    const key = th.dataset.sort;
-    if (state.sortKey === key) {
-      state.sortDir = state.sortDir === "desc" ? "asc" : "desc";
-    } else {
-      state.sortKey = key;
-      state.sortDir = "desc";
-    }
+  document.getElementById("search").addEventListener("input", e => {
+    state.search = e.target.value;
     render();
-  }));
+  });
 
-document.querySelectorAll(".bid-controls button[data-step]").forEach(b =>
-  b.addEventListener("click", () => {
-    const delta = Number(b.dataset.step);
-    state.bid = Math.max(1, state.bid + delta);
-    state.bidIsLive = false;
-    renderNominated();
-  }));
+  document.querySelectorAll("#board th[data-sort]").forEach(th =>
+    th.addEventListener("click", () => {
+      state.sortKeyIsDefault = false;
+      const key = th.dataset.sort;
+      if (state.sortKey === key) {
+        state.sortDir = state.sortDir === "desc" ? "asc" : "desc";
+      } else {
+        state.sortKey = key;
+        state.sortDir = "desc";
+      }
+      render();
+    }));
 
-document.getElementById("rosters-rows").addEventListener("click", e => {
-  const row = e.target.closest(".roster-row");
-  if (!row) return;
-  const rid = Number(row.dataset.rosterId);
-  state.expandedRoster = state.expandedRoster === rid ? null : rid;
-  renderRosters();
-});
+  document.querySelectorAll(".bid-controls button[data-step]").forEach(b =>
+    b.addEventListener("click", () => {
+      const delta = Number(b.dataset.step);
+      state.bid = Math.max(1, state.bid + delta);
+      state.bidIsLive = false;
+      renderNominated();
+    }));
 
-refresh();
-setInterval(refresh, 3000);
-setInterval(refreshLive, 1000);
+  document.getElementById("rosters-rows").addEventListener("click", e => {
+    const row = e.target.closest(".roster-row");
+    if (!row) return;
+    const rid = Number(row.dataset.rosterId);
+    state.expandedRoster = state.expandedRoster === rid ? null : rid;
+    renderRosters();
+  });
 
-// Chrome/Edge/Firefox all clamp setInterval hard in a background tab (often
-// to a small fraction of the real rate, sometimes far less) to save power --
-// this board is typically backgrounded behind Sleeper's own draft room, so
-// the two intervals above silently crawl while it's hidden. There's no way
-// to lift that throttling from a normal tab, but the moment it's looked at
-// is exactly when a bid decision is being made, so catch up immediately on
-// regaining focus rather than waiting for the next (possibly minutes-away)
-// throttled tick.
-document.addEventListener("visibilitychange", () => {
+  // Named (not an inline arrow) so re-mounting -- e.g. switching leagues in
+  // the shell, which calls mount() again -- re-registers the *same* handler
+  // reference and the DOM dedupes it, rather than stacking a new closure per
+  // mount on the document.
+  document.addEventListener("visibilitychange", onVisibilityChange);
+}
+
+// Chrome/Edge/Firefox all clamp setInterval hard in a background tab (often to
+// a small fraction of the real rate, sometimes far less) to save power -- this
+// board is typically backgrounded behind Sleeper's own draft room, so the two
+// intervals silently crawl while it's hidden. There's no way to lift that
+// throttling from a normal tab, but the moment it's looked at is exactly when
+// a bid decision is being made, so catch up immediately on regaining focus
+// rather than waiting for the next (possibly minutes-away) throttled tick.
+function onVisibilityChange() {
   if (document.visibilityState === "visible") {
     refresh();
     refreshLive();
   }
-});
+}
+
+// Entry point. The shell (src/ffdo/web/app.js) calls this after routing to a
+// league; board/index.html calls it too, as a thin standalone host.
+export function mount(container, leagueKey, meta) {
+  if (!document.querySelector('link[href$="board/board.css"]')) {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "/board/board.css";
+    document.head.appendChild(link);
+  }
+  // If a previous board is still mounted (the shell swapped leagues without a
+  // full reload), stop its pollers, then wipe every carried-over bit of UI
+  // state so league B never opens wearing league A's filter/sort/nomination.
+  clearInterval(state.pollId);
+  clearInterval(state.livePollId);
+  state = freshState();
+  _epoch++;
+  _leagueKey = leagueKey;
+  _container = container;
+  _meta = meta;
+  container.innerHTML = BOARD_MARKUP;
+  wireBoard();
+  refresh();
+  state.pollId = setInterval(refresh, 3000);
+  state.livePollId = setInterval(refreshLive, 1000);
+}
