@@ -1,0 +1,12 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 90, "w": 1440, "h": 900, "title": "Season screen — redraft" },
+    { "file": "Dynasty.dc.html", "x": 1560, "y": 90, "w": 1440, "h": 900, "title": "Season screen — dynasty (tabbed right panel)" }
+  ],
+  "annotations": [
+    { "id": "note-intro", "x": 0, "y": -110, "w": 720, "text": "Sub-project #2 — Roster & standings. Replaces the foundation's 'Season mode — coming soon' placeholder as the #/league/{key} view for a drafted league. Player value: redraft = rest-of-season VOR; dynasty = blended full-season projection x age curve. Both track real performance (preseason projection blended with season-to-date pace, weight shifting to pace as weeks progress). Swappable seed #4 replaces." },
+    { "id": "note-main", "x": 0, "y": 1010, "w": 660, "text": "REDRAFT: two-panel. LEFT = your team (power-rank vs standings, positional-strength bars ranked /12, roster by slot with ROS VOR, a 'thin at X' callout). RIGHT = power ranking only — Overall/QB/RB/WR/TE sub-tabs, Starters-only vs Full-roster toggle (re-ranks every tab), Delta column = power-rank spot minus standings spot." },
+    { "id": "note-dynasty", "x": 1560, "y": 1010, "w": 660, "text": "DYNASTY: same left panel. RIGHT gets a top-level tab row [Power ranking | Draft capital] — a tab, not a stack, so two big tables never fight for height. Draft capital: per-year pick chips, traded picks amber ('via <team>'), slot = original team's projected finish (reverse standings). 2027 shows round only. Blended power+capital score is the marked fast-follow. Sleeper dynasty/keeper only; the tab is absent otherwise." }
+  ],
+  "launch": { "view": "canvas" }
+}

@@ -1,5 +1,11 @@
 # fantasy-football-draft-optimizer
 
+Once a league's draft is complete, its page becomes the **season view** —
+a luck-adjusted power ranking (overall and by position, starters or full
+roster), your roster with rest-of-season / dynasty values, the league
+standings, and — for Sleeper dynasty/keeper leagues — a draft-capital
+ranking.
+
 ## Running it
 
 Install dependencies:

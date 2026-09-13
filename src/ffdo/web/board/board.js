@@ -231,12 +231,18 @@ async function refresh() {
     if (myEpoch !== _epoch) return;
     state.data = data;
     // The draft finished: stop polling the board and hand the screen to the
-    // season-mode placeholder. Only the heavy refresh() poll carries
-    // draft_status (see Ruling 1) -- refreshLive() never does -- so this is
-    // the one place the switch can happen.
+    // season screen (src/ffdo/web/season/season.js). Only the heavy
+    // refresh() poll carries draft_status (see Ruling 1) -- refreshLive()
+    // never does -- so this is the one place the switch can happen.
     if (state.data.draft_status === "complete") {
       clearInterval(state.pollId); clearInterval(state.livePollId);
-      renderSeasonMode(_container, _meta);
+      try {
+        const m = await import("../season/season.js");
+        await m.mountSeason(_container, _leagueKey, _meta);
+      } catch (e) {
+        _container.textContent = "Couldn't load the season view — check the console.";
+        console.error("season module failed to load", e);
+      }
       return;
     }
     applyLiveNomination();
@@ -246,6 +252,26 @@ async function refresh() {
     // Same epoch guard: a stale league's failed fetch must not stamp "error"
     // over the league the user is now actually looking at.
     if (myEpoch !== _epoch) return;
+    // /board can fail for reasons unrelated to the draft itself (e.g. a
+    // contaminated post-kickoff projections feed) even though the draft is
+    // actually complete -- the cheap /leagues/{key} endpoint doesn't load
+    // projections at all, so it's a reliable fallback signal to hand off to
+    // the season screen instead of stamping "error" over a working season.
+    try {
+      const metaRes = await fetch(`/api/leagues/${encodeURIComponent(_leagueKey)}`);
+      if (metaRes.ok) {
+        const metaData = await metaRes.json();
+        if (myEpoch !== _epoch) return;
+        if (metaData.draft_status === "complete") {
+          clearInterval(state.pollId); clearInterval(state.livePollId);
+          const m = await import("../season/season.js");
+          await m.mountSeason(_container, _leagueKey, _meta);
+          return;
+        }
+      }
+    } catch (fallbackErr) {
+      console.error("season fallback check failed", fallbackErr);
+    }
     document.getElementById("updated").textContent = "error";
     console.error("board refresh failed", err);
   }
@@ -733,61 +759,6 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
-}
-
-// Swaps the whole board out for the post-draft placeholder once the draft
-// completes. `meta` is the tracked-league record from
-// GET /api/leagues/{key}; its provider-set `name`, `resolved_format` and
-// roster-slot labels are escaped with the same helper the rest of this module
-// uses (the numeric stats need none), and the format <option> values are
-// literals, safe unescaped.
-//
-// The stat grid and roster-slot chips are spec §6.3's "components already
-// rendered on today's connected view" -- they moved here verbatim in spirit
-// from the deleted web/main.js when the connected view was absorbed into this
-// screen.
-function renderSeasonMode(container, meta) {
-  const positions = meta.roster_positions || [];
-  const chips =
-    positions.filter(p => p !== "BN")
-      .map(p => `<span class="chip">${escapeHtml(p)}</span>`).join("") +
-    positions.filter(p => p === "BN")
-      .map(p => `<span class="chip bn">${escapeHtml(p)}</span>`).join("");
-  const scoringKeys = Object.keys(meta.scoring_settings || {}).length;
-
-  container.innerHTML = `
-    <section class="card season-mode">
-      <span class="badge">DRAFT COMPLETE</span>
-      <h1>Season mode</h1>
-      <p>${escapeHtml(meta.name)} has drafted. Roster analysis, standings, weekly lineups
-         and waivers arrive in upcoming releases — each reads this league's
-         own scoring and format.</p>
-      <div class="stat-grid">
-        <div class="stat"><span class="label">Teams</span><b>${meta.num_teams}</b></div>
-        <div class="stat"><span class="label">Format</span><b>${escapeHtml(meta.resolved_format)}</b></div>
-        <div class="stat"><span class="label">Scoring keys</span><b>${scoringKeys}</b></div>
-        <div class="stat"><span class="label">Budget</span><b>${meta.budget != null ? "$" + meta.budget : "—"}</b></div>
-      </div>
-      <div class="chip-row">${chips}</div>
-      <div class="format-override">
-        <label>Format
-          <select id="fmt-override">
-            ${["redraft", "keeper", "dynasty"].map(f =>
-              `<option value="${f}"${meta.resolved_format === f ? " selected" : ""}>${f}</option>`).join("")}
-          </select>
-        </label>
-      </div>
-    </section>`;
-  container.querySelector("#fmt-override").onchange = (e) => {
-    // Fire-and-forget by design -- the switcher label is app.js's concern, not
-    // this placeholder's -- but a failure shouldn't vanish silently.
-    fetch(`/api/leagues/${encodeURIComponent(meta.league_key)}`, {
-      method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ format_override: e.target.value }),
-    })
-      .then(r => { if (!r.ok) console.warn("format override failed", r.status); })
-      .catch(err => console.warn("format override failed", err));
-  };
 }
 
 // All the board's DOM wiring. Split out of module top-level so it runs
