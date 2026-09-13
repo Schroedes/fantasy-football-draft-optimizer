@@ -9,6 +9,12 @@ The season screen's **Lineup** tab shows this week's optimal starting
 lineup against what you actually have set, lock-aware (a player whose
 game has already started is never suggested as a swap).
 
+Dynasty values are a real, multi-year model: this week's projected value
+is projected forward using an age curve fit from real historical Sleeper
+data (not a hand-authored guess), discounted for both time and
+injury/durability risk, and collapsed back into a single season-scale
+number.
+
 ## Running it
 
 Install dependencies:

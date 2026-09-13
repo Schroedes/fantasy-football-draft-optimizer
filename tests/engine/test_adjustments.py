@@ -17,10 +17,29 @@ def _profile(pid="p", pos="RB", age=26):
                          injury_status=None, active=True)
 
 
-def test_weights_default_to_zero():
-    """Unvalidated adjustments must not reach a live board."""
+def test_age_weight_defaults_to_zero():
+    """Unvalidated adjustments must not reach a live board.
+
+    DURABILITY_WEIGHT is deliberately excluded from this guardrail as of
+    sub-project #4 Task 8: it graduated from "unvalidated" to "live" via a
+    real backtest sweep and a mechanical promotion procedure (see the SDD
+    ledger's Task 8 ruling), so a fixed 0.0 assertion on it here would just
+    assert against this task's own validated outcome. AGE_WEIGHT has not
+    been through that process and must stay at 0.0 until it is."""
     assert adjustments.AGE_WEIGHT == 0.0
-    assert adjustments.DURABILITY_WEIGHT == 0.0
+
+
+def test_durability_weight_pins_the_promoted_backtest_value():
+    """DURABILITY_WEIGHT is not a tunable knob -- it is the output of a
+    mechanical promotion procedure run against real out-of-sample data
+    (sub-project #4, Task 8: the smallest weight with positive improvement
+    in EVERY tested season of 2023/2024/2025 that also passed a
+    neighbour-stability check). Changing it silently re-prices every
+    redraft/keeper valuation in the app on no evidence, so it is pinned
+    here: a deliberate change means re-running the sweep and updating this
+    assertion alongside the ledger's ruling, never editing the constant
+    alone."""
+    assert adjustments.DURABILITY_WEIGHT == 0.25
 
 
 def test_durable_player_has_lower_expected_games_missed():
@@ -57,10 +76,15 @@ def test_availability_cost_uses_the_gap_to_replacement_not_raw_points():
 
 
 def test_build_returns_empty_adjustments_when_weights_are_zero():
+    """Weights are passed explicitly here (rather than relying on build's
+    defaults) since DURABILITY_WEIGHT's default is no longer 0.0 as of
+    Task 8's promotion -- this test's own invariant (both weights at zero
+    produce no adjustments) is unaffected either way."""
     profiles = {"p": _profile()}
     history = {"p": [_line(2025, 4)]}
     built = adjustments.build(profiles, history, points={"p": 180.0},
-                              replacement_ppg={"RB": 8.0})
+                              replacement_ppg={"RB": 8.0},
+                              age_weight=0.0, durability_weight=0.0)
     assert built["p"] == {}
 
 

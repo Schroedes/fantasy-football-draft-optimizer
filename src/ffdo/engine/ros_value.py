@@ -1,26 +1,32 @@
 """Per-player value for the season screen -- THE SWAPPABLE SEAM.
 
-Sub-project #4 (post-draft valuation model) replaces this whole function
-with a multi-year model, keeping the exact signature and the
-`dict[str, ValuedPlayer]` return so the swap is drop-in. Everything
-downstream (`engine.power_ranking`, the /season endpoint) imports
-`roster_value` by name and never looks inside.
+Sub-project #4 replaced dynasty_curve.py's hand-authored multiplier with a
+real, data-driven multi-year model (engine.dynasty_value.annuity_value)
+while keeping this function's external call shape backward compatible:
+`history`/`age_curve` default to `None`, so every existing redraft/keeper
+call site is unaffected.
 
 What it does today:
   current_full = blend(preseason projection, season-to-date pace),
                  weight shifting toward pace as weeks_played grows
   redraft/keeper: value = max(0, current_full - banked)   [rest of season]
-  dynasty:        value = current_full * dynasty_curve.multiplier(...)
-Then engine.vor.compute puts it on a value-over-replacement scale.
+  dynasty:        value = dynasty_value.annuity_value(current_full, ...)
+                          [a real multi-year, discounted, data-driven model]
+Then engine.vor.compute puts it on a value-over-replacement scale
+(redraft/keeper also folds in a durability adjustment once promoted --
+see engine/adjustments.py -- via vor.compute's existing `adjustments` kwarg).
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 
 from ffdo.domain.constants import INJURY_OUT_STATUSES
-from ffdo.domain.models import PlayerProfile, SeasonProjection, ValuedPlayer
-from ffdo.engine import dynasty_curve, vor
+from ffdo.domain.models import (
+    PlayerProfile, SeasonProjection, SeasonStatLine, ValuedPlayer,
+)
+from ffdo.engine import adjustments, dynasty_value, vor
+from ffdo.engine.replacement import replacement_levels
 from ffdo.engine.scoring import score_stats
 
 K = 4  # pace-blend half-life: at weeks_played == K, pace and preseason weigh equally
@@ -46,6 +52,8 @@ def roster_value(
     actuals: Mapping[str, float],
     weeks_played: int,
     season_weeks: int = 18,
+    history: Mapping[str, Sequence[SeasonStatLine]] | None = None,
+    age_curve: Mapping[str, Mapping[int, float]] | None = None,
 ) -> dict[str, ValuedPlayer]:
     is_dynasty = resolved_format == "dynasty"
     value_pts: dict[str, float] = {}
@@ -63,9 +71,21 @@ def roster_value(
         if not profile.active or profile.injury_status in INJURY_OUT_STATUSES:
             value_pts[pid] = 0.0
         elif is_dynasty:
-            value_pts[pid] = current_full * dynasty_curve.multiplier(
-                profile.position, profile.age, profile.years_exp)
+            value_pts[pid] = dynasty_value.annuity_value(
+                current_full, profile,
+                (history or {}).get(pid, ()), age_curve or {},
+                current_season=league.season)
         else:
             value_pts[pid] = max(0.0, current_full - banked)
+
+    if not is_dynasty and adjustments.DURABILITY_WEIGHT:
+        positions = {pid: profiles[pid].position for pid in value_pts if pid in profiles}
+        season_replacement = replacement_levels(value_pts, positions, league)
+        replacement_ppg = {pos: level / season_weeks for pos, level in season_replacement.items()}
+        built = adjustments.build(
+            profiles, history or {}, value_pts, replacement_ppg,
+            durability_weight=adjustments.DURABILITY_WEIGHT,
+            current_season=league.season)
+        return vor.compute(value_pts, profiles, league, adjustments=built)
 
     return vor.compute(value_pts, profiles, league)
