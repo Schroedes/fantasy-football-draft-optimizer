@@ -1837,3 +1837,34 @@ def test_board_snake_survival_cache_uses_update_not_assignment():
     assert "_DRAFT_SURVIVAL_CACHE.setdefault(state.draft_id, {}).update(survival)" in source, (
         "the survival cache must be merged via dict.update(), never replaced "
         "wholesale via assignment")
+
+
+# -- (i) GET /scorecard ------------------------------------------------------
+
+
+def test_get_scorecard_returns_all_four_metrics_for_an_empty_league(monkeypatch, tmp_path):
+    from ffdo.api.lineup_ledger import LineupLedger
+    from ffdo.api.trade_ledger import TradeLedger
+    from ffdo.api.waiver_ledger import WaiverLedger
+    from ffdo.api.draft_pick_ledger import DraftPickLedger
+
+    app_mod._STORE.upsert(_tracked())
+    monkeypatch.setattr(app_mod, "_LINEUP_LEDGER", LineupLedger(tmp_path / "ledger.db"))
+    monkeypatch.setattr(app_mod, "_TRADE_LEDGER", TradeLedger(tmp_path / "ledger.db"))
+    monkeypatch.setattr(app_mod, "_WAIVER_LEDGER", WaiverLedger(tmp_path / "ledger.db"))
+    monkeypatch.setattr(app_mod, "_DRAFT_PICK_LEDGER", DraftPickLedger(tmp_path / "ledger.db"))
+
+    res = TestClient(create_app()).get("/api/leagues/sleeper:L123:2025/scorecard")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["lineup"]["weeks_resolved"] == 0
+    assert body["trade"]["total_trades_in_league"] == 0
+    assert body["waiver"]["recommended_claims"] == 0
+    assert body["draft"]["picks_graded"] == 0
+
+
+def test_get_scorecard_is_sleeper_only():
+    app_mod._STORE.upsert(_tracked(
+        league_key="espn:E1:2026", provider="espn", provider_league_id="E1"))
+    res = TestClient(create_app()).get("/api/leagues/espn:E1:2026/scorecard")
+    assert res.status_code == 400

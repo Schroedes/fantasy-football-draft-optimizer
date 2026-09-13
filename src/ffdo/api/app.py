@@ -206,6 +206,7 @@ def create_app() -> FastAPI:
     from ffdo.engine import pick_value as pick_value_mod
     from ffdo.engine import power_ranking as power_ranking_mod
     from ffdo.engine import ros_value as ros_value_mod
+    from ffdo.engine import scorecard as scorecard_mod
     from ffdo.engine import trade_value as trade_value_mod
     from ffdo.ingest import actuals as actuals_mod
     from ffdo.ingest import client as client_mod
@@ -228,6 +229,7 @@ def create_app() -> FastAPI:
     from ffdo.ingest.espn import league as espn_league_mod
     from ffdo.ingest.espn import rosters as espn_rosters_mod
     from ffdo.ingest.espn import teams as espn_teams_mod
+    from ffdo.ingest.sleeper import historical_weekly_stats as historical_weekly_stats_mod
     from ffdo.ingest.sleeper import player_history as player_history_mod
     from ffdo.ingest.sleeper import traded_picks as traded_picks_mod
     from ffdo.ingest.sleeper import transactions as transactions_mod
@@ -1758,6 +1760,96 @@ def create_app() -> FastAPI:
                  "vor_gain": round(r.vor_gain, 1), "suggested_bid": r.suggested_bid}
                 for r in recommendations
             ],
+        }
+
+    @app.get("/api/leagues/{league_key}/scorecard")
+    def get_scorecard(league_key: str) -> dict:
+        """How good FFDO's recommendations have actually been, across all
+        four recommendation types this app makes. Each metric degrades
+        independently rather than failing the whole request -- a league
+        with no waiver/trade/draft history yet still gets a 200 with
+        whatever subset is computable."""
+        lg = _load_league(league_key)
+        if lg.provider != "sleeper":
+            raise HTTPException(status_code=400, detail="Scorecard is Sleeper-only for now")
+
+        lineup_records = _LINEUP_LEDGER.list_for_league(lg.league_key)
+        resolved_lineup = [r for r in lineup_records if r.followed is not None]
+
+        # Only fetch the specific (season, week) pairs the resolved ledger
+        # rows actually need -- never the whole season's history.
+        weekly_points: dict[tuple[int, int], dict[str, dict[str, float]]] = {}
+        if resolved_lineup:
+            sleeper = client_mod.SleeperClient()
+            try:
+                for season, week in {(r.season, r.week) for r in resolved_lineup}:
+                    weekly_points[(season, week)] = historical_weekly_stats_mod.fetch(
+                        sleeper, season, week)
+            except (httpx.HTTPError, RuntimeError):
+                # A stats-feed outage degrades this one metric's
+                # points-left figure to 0.0 rather than failing the whole
+                # scorecard -- the weeks-followed counts above are
+                # unaffected, since they don't need this data.
+                weekly_points = {}
+            finally:
+                sleeper.close()
+
+        lineup_outcomes = [
+            scorecard_mod.LineupOutcome(
+                season=r.season, week=r.week, recommended=r.recommended,
+                actual=r.actual, followed=r.followed)
+            for r in resolved_lineup
+        ]
+        lineup_result = scorecard_mod.lineup_metric(
+            lineup_outcomes, weekly_points, lg.scoring_settings)
+
+        trade_entries = _TRADE_LEDGER.list_for_league(lg.league_key)
+        trade_outcomes = []
+        if trade_entries:
+            sleeper = client_mod.SleeperClient()
+            try:
+                nfl = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
+                through_week = _through_week(nfl)
+                actuals = actuals_mod.points_so_far(sleeper, lg.provider_league_id, through_week)
+            except (httpx.HTTPError, RuntimeError):
+                actuals = {}
+            finally:
+                sleeper.close()
+            for entry in trade_entries:
+                current_a_delta = sum(
+                    actuals.get(pid, 0.0) - entry.banked_a_at_trade.get(pid, 0.0)
+                    for pid in entry.roster_a_gets)
+                current_b_delta = sum(
+                    actuals.get(pid, 0.0) - entry.banked_b_at_trade.get(pid, 0.0)
+                    for pid in entry.roster_b_gets)
+                trade_outcomes.append(scorecard_mod.TradeOutcome(
+                    transaction_id=entry.transaction_id,
+                    roster_a_id=entry.roster_a_id, roster_b_id=entry.roster_b_id,
+                    side_a_value_at_trade=entry.side_a_value_at_trade,
+                    side_b_value_at_trade=entry.side_b_value_at_trade,
+                    side_a_current_value=entry.side_a_value_at_trade + current_a_delta,
+                    side_b_current_value=entry.side_b_value_at_trade + current_b_delta))
+        trade_result = scorecard_mod.trade_metric(
+            trade_outcomes, your_roster_id=lg.roster_id if lg.roster_id is not None else -1)
+
+        waiver_entries = _WAIVER_LEDGER.list_for_league(lg.league_key)
+        waiver_outcomes = [
+            scorecard_mod.WaiverOutcome(
+                won=e.won, recommended_bid=e.recommended_bid, actual_bid=e.actual_bid)
+            for e in waiver_entries
+        ]
+        waiver_result = scorecard_mod.waiver_metric(waiver_outcomes)
+
+        draft_entries = _DRAFT_PICK_LEDGER.list_for_league(lg.league_key)
+        your_draft_entries = (
+            [e for e in draft_entries if e.roster_id == lg.roster_id]
+            if lg.roster_id is not None else [])
+        draft_outcomes = [scorecard_mod.DraftOutcome(grade=e.grade) for e in your_draft_entries]
+        draft_result = scorecard_mod.draft_metric(draft_outcomes)
+
+        return {
+            "lineup": lineup_result, "trade": trade_result,
+            "waiver": waiver_result, "draft": draft_result,
         }
 
     # Static mounts MUST be registered last: StaticFiles("/") matches any
