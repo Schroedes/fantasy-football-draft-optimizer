@@ -1434,6 +1434,111 @@ def create_app() -> FastAPI:
             "ledger": {"recorded_at": record.recorded_at, "followed": record.followed},
         }
 
+    @app.get("/api/leagues/{league_key}/lineup")
+    def get_lineup(league_key: str) -> dict:
+        """This week's optimal-lineup recommendation vs. your actual
+        current starters, lock-aware. Sleeper-only: the weekly-projections
+        and schedule/lock feeds this endpoint depends on have no ESPN
+        equivalent in this codebase (see the plan's Global Constraints) --
+        an ESPN league gets an honest 400 rather than a recommendation
+        silently built on data that was never fetched for it.
+        """
+        lg = _load_league(league_key)
+        if lg.provider != "sleeper":
+            raise HTTPException(
+                status_code=400, detail="Weekly lineup is Sleeper-only for now")
+
+        sleeper = client_mod.SleeperClient()
+        try:
+            nfl = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
+
+            if lg.roster_id is None:
+                # A league the user only observes -- nothing personal to
+                # recommend, same posture as #2's `your_roster: null`.
+                return {
+                    "nfl_week": {"season": nfl.season, "week": nfl.week},
+                    "week_locked": False, "swaps_suggested": 0, "diff": [],
+                    "ledger": None,
+                }
+
+            profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            rosters = rosters_mod.fetch(sleeper, lg.provider_league_id)
+            current_starters = rosters_mod.raw_starters(
+                sleeper, lg.provider_league_id, lg.roster_id)
+            weekly_proj = _weekly_proj_cache_for(nfl.season, nfl.week).get(
+                lambda: weekly_projections_mod.fetch(sleeper, nfl.season, nfl.week))
+
+            try:
+                games = _schedule_cache_for(nfl.season, nfl.week).get(
+                    lambda: schedule_mod.week_games(sleeper, nfl.season, nfl.week))
+            except (httpx.HTTPError, RuntimeError) as exc:
+                # Unofficial, undocumented endpoint -- degrade to "nothing
+                # is locked" rather than fail the whole request.
+                logging.getLogger("ffdo.api").warning(
+                    "lineup: schedule fetch failed for %s week %s (%s) -- "
+                    "treating nothing as locked", lg.league_key, nfl.week, exc)
+                games = []
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=502, detail="Couldn't reach Sleeper, try again") from exc
+        finally:
+            sleeper.close()
+
+        all_teams = frozenset(p.team for p in profiles.values() if p.team)
+        bye_teams = schedule_mod.bye_teams(games, all_teams) if games else frozenset()
+        locked_teams = schedule_mod.locked_teams(games)
+        locked_now = schedule_mod.week_locked(games)
+
+        all_pids = {pid for r in rosters for pid in r.player_ids}
+        valued = weekly_lineup_mod.weekly_value(
+            all_pids, lg, weekly_points=weekly_proj, profiles=profiles,
+            bye_teams=bye_teams)
+        # `valued` spans the WHOLE league (needed for `weekly_value`'s
+        # VOR/replacement-level baseline, same as power_ranking.py's
+        # league-wide pool) -- but the lineup solve itself must only pick
+        # from the tracked user's own roster, or it can recommend starting
+        # another team's player. Same scoping `power_ranking._team_value`
+        # already does for the season view's per-team lineup solve.
+        you_roster = next((r for r in rosters if r.roster_id == lg.roster_id), None)
+        your_valued = ({pid: valued[pid] for pid in you_roster.player_ids if pid in valued}
+                      if you_roster is not None else {})
+        optimal = weekly_lineup_mod.optimal_slots(your_valued, lg)
+        diff_rows = weekly_lineup_mod.diff(
+            current_starters, optimal, locked_teams, valued, profiles, lg)
+
+        record = _LINEUP_LEDGER.record_if_absent(
+            lg.league_key, nfl.season, nfl.week, optimal, current_starters)
+        if record.followed is None and locked_now:
+            _LINEUP_LEDGER.resolve(lg.league_key, nfl.season, nfl.week, current_starters)
+            record = _LINEUP_LEDGER.get(lg.league_key, nfl.season, nfl.week)
+
+        def _player_json(pid: str | None) -> dict | None:
+            if pid is None:
+                return None
+            prof = profiles.get(pid)
+            vp = valued.get(pid)
+            return {
+                "player_id": pid,
+                "name": prof.full_name if prof else pid,
+                "team": prof.team if prof else None,
+                "value": round(vp.vor, 1) if vp is not None else 0.0,
+            }
+
+        return {
+            "nfl_week": {"season": nfl.season, "week": nfl.week},
+            "week_locked": locked_now,
+            "swaps_suggested": sum(1 for d in diff_rows if d.status == "suggested_swap"),
+            "diff": [
+                {"slot_index": d.slot_index, "slot_label": d.slot_label,
+                 "status": d.status,
+                 "current": _player_json(d.current_player_id),
+                 "optimal": _player_json(d.optimal_player_id),
+                 "delta": d.delta}
+                for d in diff_rows
+            ],
+            "ledger": {"recorded_at": record.recorded_at, "followed": record.followed},
+        }
+
     # Static mounts MUST be registered last: StaticFiles("/") matches any
     # path under it, so routes declared after this point would be shadowed.
     # `/board` is mounted before `/` so the board's own files aren't
