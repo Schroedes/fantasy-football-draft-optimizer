@@ -42,6 +42,19 @@ def test_custom_bucket_width_is_respected():
     assert result == pytest.approx(50.0)
 
 
+def test_bucket_floor_handles_negative_fractional_vor_gain_correctly():
+    """Regression: int(vor_gain) // bucket_width truncates toward zero for
+    negative inputs (int(-100.5) == -100), which is NOT the same as
+    floor(-100.5 / 10) == -11 -- the old buggy formula put -100.5 in
+    bucket -100 (one bucket_width too HIGH) instead of the correct -110.
+    Since real VOR values are essentially never exact integers, this bug
+    affected the majority of real negative observations during fitting."""
+    curve = {-110: 0.05, -100: 0.20}
+    result = waiver_value.suggested_bid(-100.5, 100.0, curve)
+    # Correct bucket for -100.5 is floor(-100.5/10)*10 = -110, not -100
+    assert result == pytest.approx(5.0)
+
+
 def test_real_curve_higher_vor_gain_bucket_never_suggests_less_than_the_lowest_bucket():
     """Real-magnitude check against the actual fitted curve (Global
     Constraints: the curve-fitting-derived module needs at least one test

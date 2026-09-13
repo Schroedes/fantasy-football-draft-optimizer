@@ -14,6 +14,7 @@ included, not just the current-season id).
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 
 from ffdo.domain.constants import STANDARD_HALF_PPR, SEASON_LENGTH
@@ -117,7 +118,7 @@ def main() -> None:
 
     buckets: dict[int, list[float]] = {}
     for vor_gain, bid_pct in observations:
-        bucket = (int(vor_gain) // BUCKET_WIDTH) * BUCKET_WIDTH
+        bucket = math.floor(vor_gain / BUCKET_WIDTH) * BUCKET_WIDTH
         buckets.setdefault(bucket, []).append(bid_pct)
 
     curve = {

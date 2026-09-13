@@ -5,6 +5,7 @@ engine/trade_value.py were for #5.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Final
 
@@ -22,7 +23,7 @@ def suggested_bid(
 ) -> float:
     if not curve:
         return 0.0
-    bucket = (int(vor_gain) // bucket_width) * bucket_width
+    bucket = math.floor(vor_gain / bucket_width) * bucket_width
     candidates = [b for b in curve if b <= bucket]
     if not candidates:
         return 0.0
