@@ -856,6 +856,11 @@ export function mount(container, leagueKey, meta) {
     link.href = "/board/board.css";
     document.head.appendChild(link);
   }
+  // Claims the fixed-viewport, no-scroll layout board.css's body.board-mode
+  // rule provides -- see that rule's comment. season.js's mountSeason()
+  // removes this the moment a draft completes and hands the screen over;
+  // re-adding it here covers switching back to a still-drafting league.
+  document.body.classList.add("board-mode");
   // If a previous board is still mounted (the shell swapped leagues without a
   // full reload), stop its pollers, then wipe every carried-over bit of UI
   // state so league B never opens wearing league A's filter/sort/nomination.
