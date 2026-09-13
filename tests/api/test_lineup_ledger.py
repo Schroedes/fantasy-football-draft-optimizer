@@ -93,3 +93,20 @@ def test_two_different_weeks_are_independent_rows(tmp_path):
 
     assert ledger.get("sleeper:L1:2026", 2026, 9).recommended == {0: "wk9"}
     assert ledger.get("sleeper:L1:2026", 2026, 10).recommended == {0: "wk10"}
+
+
+def test_list_for_league_scopes_to_the_given_league(tmp_path):
+    ledger = LineupLedger(tmp_path / "test.db")
+    ledger.record_if_absent("league1", 2026, 1, {0: "p1"}, ("p1",))
+    ledger.record_if_absent("league2", 2026, 1, {0: "p9"}, ("p9",))
+    result = ledger.list_for_league("league1")
+    assert len(result) == 1
+    assert result[0].league_key == "league1"
+
+
+def test_list_for_league_orders_by_season_then_week(tmp_path):
+    ledger = LineupLedger(tmp_path / "test.db")
+    ledger.record_if_absent("league1", 2026, 3, {0: "p1"}, ("p1",))
+    ledger.record_if_absent("league1", 2026, 1, {0: "p2"}, ("p2",))
+    result = ledger.list_for_league("league1")
+    assert [r.week for r in result] == [1, 3]
