@@ -283,6 +283,7 @@ def create_app() -> FastAPI:
     def _schedule_cache_for(season: int, week: int) -> _TTLCache:
         return schedule_caches.setdefault((season, week), _TTLCache(ttl_seconds=60))
 
+
     def _espn_player_pool_cache_for(season: int) -> _TTLCache:
         return espn_player_pool_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
 
