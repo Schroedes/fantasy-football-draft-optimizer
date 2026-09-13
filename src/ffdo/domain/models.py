@@ -251,3 +251,43 @@ class DraftPickAsset:
         if self.projected_slot is not None:
             return f"{self.round}.{self.projected_slot:02d}"
         return f"R{self.round}"
+
+
+@dataclass(frozen=True, slots=True)
+class WeeklyProjection:
+    player_id: str
+    season: int
+    week: int
+    stats: Mapping[str, float]
+
+
+@dataclass(frozen=True, slots=True)
+class SlotDiff:
+    slot_index: int                   # index into league.starting_slots (NOT roster_positions)
+    slot_label: str                   # "RB", "FLEX", etc. -- starting_slots[slot_index]
+    status: str                       # "match" | "suggested_swap" | "missed"
+    current_player_id: str | None
+    optimal_player_id: str | None
+    delta: float                      # optimal value - current value; 0.0 when status == "match"
+
+
+@dataclass(frozen=True, slots=True)
+class TradeEvaluation:
+    side_a_value: float
+    side_b_value: float
+    differential: float          # side_a_value - side_b_value
+    differential_pct: float | None   # None when either side's value is 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class TradeTransaction:
+    transaction_id: str
+    season: int
+    week: int
+    roster_a_id: int
+    roster_b_id: int
+    roster_a_gets: list[str]
+    roster_b_gets: list[str]
+    picks_to_a: list[DraftPickAsset]
+    picks_to_b: list[DraftPickAsset]
+    traded_at_ms: int   # Sleeper's raw `created` epoch-millis timestamp

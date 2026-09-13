@@ -246,3 +246,17 @@ def test_nfl_bye_weeks_has_current_season():
     assert 2026 in NFL_BYE_WEEKS
     assert NFL_BYE_WEEKS[2026]["ATL"] in range(4, 15)   # a real bye week
     assert len(NFL_BYE_WEEKS[2026]) == 32               # all teams
+
+
+def test_weekly_projection_constructs():
+    from ffdo.domain.models import WeeklyProjection
+    p = WeeklyProjection(player_id="p1", season=2026, week=10,
+                         stats={"pass_yd": 260.0})
+    assert p.week == 10 and p.stats["pass_yd"] == 260.0
+
+
+def test_slot_diff_constructs():
+    from ffdo.domain.models import SlotDiff
+    d = SlotDiff(slot_index=2, slot_label="FLEX", status="suggested_swap",
+                current_player_id="p1", optimal_player_id="p2", delta=5.2)
+    assert d.status == "suggested_swap" and d.delta == 5.2

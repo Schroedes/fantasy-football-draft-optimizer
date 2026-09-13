@@ -15,7 +15,9 @@ import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
+from ffdo.api.lineup_ledger import LineupLedger
 from ffdo.api.store import LeagueStore
+from ffdo.api.trade_ledger import TradeLedger
 from ffdo.domain.models import DiscoveredLeague, TrackedLeague
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -33,6 +35,8 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 # fixture -- production startup is the only place that migration belongs.
 _STORE = LeagueStore(Path("data") / "ffdo.db",
                      legacy_session_path=Path("data") / "session.json")
+_LINEUP_LEDGER = LineupLedger(Path("data") / "ffdo.db")
+_TRADE_LEDGER = TradeLedger(Path("data") / "ffdo.db")
 
 _FORMATS = ("redraft", "keeper", "dynasty")
 
@@ -181,10 +185,13 @@ def create_app() -> FastAPI:
 
     from ffdo.api import board as board_mod
     from ffdo.domain import models as models_mod
-    from ffdo.domain.constants import NFL_BYE_WEEKS, SEASON_LENGTH
+    from ffdo.domain.constants import DYNASTY_AGE_CURVE, NFL_BYE_WEEKS, PICK_VALUE_CURVE, SEASON_LENGTH
+    from ffdo.domain.models import DraftPickAsset
     from ffdo.engine import auction, scoring, vor
+    from ffdo.engine import pick_value as pick_value_mod
     from ffdo.engine import power_ranking as power_ranking_mod
     from ffdo.engine import ros_value as ros_value_mod
+    from ffdo.engine import trade_value as trade_value_mod
     from ffdo.ingest import actuals as actuals_mod
     from ffdo.ingest import client as client_mod
     from ffdo.ingest import connect as connect_mod
@@ -206,7 +213,12 @@ def create_app() -> FastAPI:
     from ffdo.ingest.espn import league as espn_league_mod
     from ffdo.ingest.espn import rosters as espn_rosters_mod
     from ffdo.ingest.espn import teams as espn_teams_mod
+    from ffdo.ingest.sleeper import player_history as player_history_mod
     from ffdo.ingest.sleeper import traded_picks as traded_picks_mod
+    from ffdo.ingest.sleeper import transactions as transactions_mod
+    from ffdo.ingest.sleeper import weekly_projections as weekly_projections_mod
+    from ffdo.ingest.sleeper import schedule as schedule_mod
+    from ffdo.engine import weekly_lineup as weekly_lineup_mod
 
     players_cache = _TTLCache(ttl_seconds=24 * 3600)
     # Keyed by season rather than a single shared cache: the projections feed
@@ -252,6 +264,17 @@ def create_app() -> FastAPI:
     # long enough that a page of switcher rows doesn't need every league's
     # season view re-opened every few minutes to stay accurate.
     roster_count_caches: dict[str, _TTLCache] = {}
+    weekly_proj_caches: dict[tuple[int, int], _TTLCache] = {}
+    # A short TTL, not the 900s the other weekly-scoped cache above uses:
+    # `schedule_mod.week_games` fetches Sleeper's ENTIRE season schedule
+    # (unofficial, undocumented) and filters to this week client-side, so
+    # leaving it wholly uncached would hit that endpoint on every single
+    # `/lineup` request/refresh. 60s still meaningfully throttles that,
+    # while bounding worst-case lock-status staleness to about a minute --
+    # short enough to matter at kickoff, the one moment this feature exists
+    # to get right.
+    schedule_caches: dict[tuple[int, int], _TTLCache] = {}
+    player_history_caches: dict[int, _TTLCache] = {}
 
     def _projections_cache_for(season: int) -> _TTLCache:
         return projections_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
@@ -261,6 +284,17 @@ def create_app() -> FastAPI:
 
     def _roster_count_cache_for(league_key: str) -> _TTLCache:
         return roster_count_caches.setdefault(league_key, _TTLCache(ttl_seconds=24 * 3600))
+
+    def _weekly_proj_cache_for(season: int, week: int) -> _TTLCache:
+        return weekly_proj_caches.setdefault((season, week), _TTLCache(ttl_seconds=900))
+
+    def _schedule_cache_for(season: int, week: int) -> _TTLCache:
+        return schedule_caches.setdefault((season, week), _TTLCache(ttl_seconds=60))
+
+    def _player_history_cache_for(season: int) -> _TTLCache:
+        # A week, not the hour/day TTLs used elsewhere in this file --
+        # finished-season stats never change, so this can cache far longer.
+        return player_history_caches.setdefault(season, _TTLCache(ttl_seconds=7 * 24 * 3600))
 
     def _espn_player_pool_cache_for(season: int) -> _TTLCache:
         return espn_player_pool_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
@@ -1076,7 +1110,7 @@ def create_app() -> FastAPI:
         return out
 
     def _assemble_season(lg, nfl, through_week, rosters, profiles, proj_anchor,
-                         actuals, standings_rank, capital) -> dict:
+                         actuals, standings_rank, capital, history) -> dict:
         """The one payload builder both providers end in. Everything above
         this point is provider-specific fetching; everything from here down
         is the same code for Sleeper and ESPN, because both branches have
@@ -1092,7 +1126,9 @@ def create_app() -> FastAPI:
             profiles=profiles,
             actuals=actuals,
             weeks_played=through_week,
-            season_weeks=_season_weeks(lg.season))
+            season_weeks=_season_weeks(lg.season),
+            history=history,
+            age_curve=DYNASTY_AGE_CURVE if history is not None else None)
 
         # Warms the `needs_attention` signal the `/api/leagues` switcher
         # reads -- best-effort and side-effect-only: this endpoint's own
@@ -1166,6 +1202,18 @@ def create_app() -> FastAPI:
             profiles, espn_id_index = players_cache.get(lambda: _load_players(sleeper))
             proj_anchor = _season_proj_anchor_for(lg.season).get(
                 lambda: _load_projection_anchor(sleeper, lg.season))
+            # Fetched here, while `sleeper` is still open -- ESPN's own
+            # rosters (and thus the player ids `history_for` needs to filter
+            # to) aren't known until later in this function, but the raw
+            # per-season stat lines are cacheable and player-agnostic, so
+            # there's no reason to defer the fetch itself, only the filter.
+            season_stats = None
+            if lg.resolved_format == "dynasty":
+                season_stats = {
+                    season: _player_history_cache_for(season).get(
+                        lambda season=season: player_history_mod.fetch_season(sleeper, season))
+                    for season in range(2021, lg.season)
+                }
         except (httpx.HTTPError, RuntimeError) as exc:
             # `RuntimeError` for the same exhausted-retry reason as
             # `_sleeper_discover`'s arm -- ffdo.ingest.http raises a plain
@@ -1202,8 +1250,15 @@ def create_app() -> FastAPI:
         # capital panel is absent for ESPN leagues of every format -- an
         # honest gap rather than an implicit-ownership table that would be
         # silently wrong the moment anyone traded a pick.
+        # `history_for` is a pure reshaping step, so it's computed here, now
+        # that ESPN's own roster player-ids are finally known, rather than
+        # up where `season_stats` was fetched (`sleeper` is closed by now).
+        history = None
+        if season_stats is not None:
+            all_pids_for_history = {pid for r in rosters for pid in r.player_ids}
+            history = player_history_mod.history_for(all_pids_for_history, season_stats)
         return _assemble_season(lg, nfl, through_week, rosters, profiles,
-                                proj_anchor, actuals, _standings_rank(rosters), None)
+                                proj_anchor, actuals, _standings_rank(rosters), None, history)
 
     @app.get("/api/leagues/{league_key}/season")
     def get_season(league_key: str) -> dict:
@@ -1255,6 +1310,16 @@ def create_app() -> FastAPI:
                     logging.getLogger("ffdo.api").warning(
                         "season: traded-picks fetch failed for %s, "
                         "draft_capital omitted", lg.league_key)
+
+            history = None
+            if lg.resolved_format == "dynasty":
+                season_stats = {
+                    season: _player_history_cache_for(season).get(
+                        lambda season=season: player_history_mod.fetch_season(sleeper, season))
+                    for season in range(2021, lg.season)
+                }
+                all_pids_for_history = {pid for r in rosters for pid in r.player_ids}
+                history = player_history_mod.history_for(all_pids_for_history, season_stats)
         except (httpx.HTTPError, RuntimeError) as exc:
             # Both halves are load-bearing: `ffdo.ingest.http.
             # get_json_with_retry` raises a plain `RuntimeError` once retries
@@ -1268,7 +1333,252 @@ def create_app() -> FastAPI:
 
         return _assemble_season(lg, nfl, through_week, rosters, profiles,
                                 proj_anchor, actuals, _standings_rank(rosters),
-                                capital)
+                                capital, history)
+
+    @app.get("/api/leagues/{league_key}/lineup")
+    def get_lineup(league_key: str) -> dict:
+        """This week's optimal-lineup recommendation vs. your actual
+        current starters, lock-aware. Sleeper-only: the weekly-projections
+        and schedule/lock feeds this endpoint depends on have no ESPN
+        equivalent in this codebase (see the plan's Global Constraints) --
+        an ESPN league gets an honest 400 rather than a recommendation
+        silently built on data that was never fetched for it.
+        """
+        lg = _load_league(league_key)
+        if lg.provider != "sleeper":
+            raise HTTPException(
+                status_code=400, detail="Weekly lineup is Sleeper-only for now")
+
+        sleeper = client_mod.SleeperClient()
+        try:
+            nfl = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
+
+            if lg.roster_id is None:
+                # A league the user only observes -- nothing personal to
+                # recommend, same posture as #2's `your_roster: null`.
+                return {
+                    "nfl_week": {"season": nfl.season, "week": nfl.week},
+                    "week_locked": False, "swaps_suggested": 0, "diff": [],
+                    "ledger": None,
+                }
+
+            profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            rosters = rosters_mod.fetch(sleeper, lg.provider_league_id)
+            current_starters = rosters_mod.raw_starters(
+                sleeper, lg.provider_league_id, lg.roster_id)
+            weekly_proj = _weekly_proj_cache_for(nfl.season, nfl.week).get(
+                lambda: weekly_projections_mod.fetch(sleeper, nfl.season, nfl.week))
+
+            try:
+                games = _schedule_cache_for(nfl.season, nfl.week).get(
+                    lambda: schedule_mod.week_games(sleeper, nfl.season, nfl.week))
+            except (httpx.HTTPError, RuntimeError) as exc:
+                # Unofficial, undocumented endpoint -- degrade to "nothing
+                # is locked" rather than fail the whole request.
+                logging.getLogger("ffdo.api").warning(
+                    "lineup: schedule fetch failed for %s week %s (%s) -- "
+                    "treating nothing as locked", lg.league_key, nfl.week, exc)
+                games = []
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=502, detail="Couldn't reach Sleeper, try again") from exc
+        finally:
+            sleeper.close()
+
+        all_teams = frozenset(p.team for p in profiles.values() if p.team)
+        bye_teams = schedule_mod.bye_teams(games, all_teams) if games else frozenset()
+        locked_teams = schedule_mod.locked_teams(games)
+        locked_now = schedule_mod.week_locked(games)
+
+        all_pids = {pid for r in rosters for pid in r.player_ids}
+        valued = weekly_lineup_mod.weekly_value(
+            all_pids, lg, weekly_points=weekly_proj, profiles=profiles,
+            bye_teams=bye_teams)
+        # `valued` spans the WHOLE league (needed for `weekly_value`'s
+        # VOR/replacement-level baseline, same as power_ranking.py's
+        # league-wide pool) -- but the lineup solve itself must only pick
+        # from the tracked user's own roster, or it can recommend starting
+        # another team's player. Same scoping `power_ranking._team_value`
+        # already does for the season view's per-team lineup solve.
+        you_roster = next((r for r in rosters if r.roster_id == lg.roster_id), None)
+        your_valued = ({pid: valued[pid] for pid in you_roster.player_ids if pid in valued}
+                      if you_roster is not None else {})
+        optimal = weekly_lineup_mod.optimal_slots(your_valued, lg)
+        diff_rows = weekly_lineup_mod.diff(
+            current_starters, optimal, locked_teams, valued, profiles, lg)
+
+        record = _LINEUP_LEDGER.record_if_absent(
+            lg.league_key, nfl.season, nfl.week, optimal, current_starters)
+        if record.followed is None and locked_now:
+            _LINEUP_LEDGER.resolve(lg.league_key, nfl.season, nfl.week, current_starters)
+            record = _LINEUP_LEDGER.get(lg.league_key, nfl.season, nfl.week)
+
+        def _player_json(pid: str | None) -> dict | None:
+            if pid is None:
+                return None
+            prof = profiles.get(pid)
+            vp = valued.get(pid)
+            return {
+                "player_id": pid,
+                "name": prof.full_name if prof else pid,
+                "team": prof.team if prof else None,
+                "value": round(vp.vor, 1) if vp is not None else 0.0,
+            }
+
+        return {
+            "nfl_week": {"season": nfl.season, "week": nfl.week},
+            "week_locked": locked_now,
+            "swaps_suggested": sum(1 for d in diff_rows if d.status == "suggested_swap"),
+            "diff": [
+                {"slot_index": d.slot_index, "slot_label": d.slot_label,
+                 "status": d.status,
+                 "current": _player_json(d.current_player_id),
+                 "optimal": _player_json(d.optimal_player_id),
+                 "delta": d.delta}
+                for d in diff_rows
+            ],
+            "ledger": {"recorded_at": record.recorded_at, "followed": record.followed},
+        }
+
+    @app.post("/api/leagues/{league_key}/trade/evaluate")
+    def evaluate_trade_endpoint(league_key: str, payload: dict) -> dict:
+        """Hypothetical trade evaluator. side_a is always the tracked
+        user's own roster (spec §7) -- partner_roster_id names the other
+        team side_b's players/picks are assumed to belong to."""
+        lg = _load_league(league_key)
+        if lg.provider != "sleeper":
+            raise HTTPException(status_code=400, detail="Trade evaluator is Sleeper-only for now")
+
+        sleeper = client_mod.SleeperClient()
+        try:
+            nfl = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
+            profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            proj_anchor = _season_proj_anchor_for(lg.season).get(
+                lambda: _load_projection_anchor(sleeper, lg.season))
+            rosters = rosters_mod.fetch(sleeper, lg.provider_league_id)
+            through_week = _through_week(nfl)
+            actuals = actuals_mod.points_so_far(sleeper, lg.provider_league_id, through_week)
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(status_code=502, detail="Couldn't reach Sleeper, try again") from exc
+        finally:
+            sleeper.close()
+
+        all_pids = {pid for r in rosters for pid in r.player_ids}
+        valued = ros_value_mod.roster_value(
+            all_pids, lg, resolved_format=lg.resolved_format, season_proj=proj_anchor,
+            profiles=profiles, actuals=actuals, weeks_played=through_week,
+            season_weeks=_season_weeks(lg.season))
+
+        side_a = payload.get("side_a") or {}
+        side_b = payload.get("side_b") or {}
+
+        def _picks_from_payload(raw_picks: list) -> list:
+            return [DraftPickAsset(
+                season=int(p["season"]), round=int(p["round"]),
+                projected_slot=p.get("projected_slot"),
+                current_owner_roster_id=int(p.get("current_owner_roster_id", 0)),
+                original_roster_id=int(p.get("original_roster_id", 0)),
+                via_team_name=None) for p in raw_picks]
+
+        result = trade_value_mod.evaluate_trade(
+            {"player_ids": side_a.get("player_ids", []),
+             "picks": _picks_from_payload(side_a.get("picks", []))},
+            {"player_ids": side_b.get("player_ids", []),
+             "picks": _picks_from_payload(side_b.get("picks", []))},
+            valued_players=valued, pick_curve=PICK_VALUE_CURVE,
+            current_season=lg.season, round_size=lg.num_teams)
+        return {
+            "side_a_value": round(result.side_a_value, 1),
+            "side_b_value": round(result.side_b_value, 1),
+            "differential": round(result.differential, 1),
+            "differential_pct": (round(result.differential_pct, 3)
+                                 if result.differential_pct is not None else None),
+        }
+
+    @app.get("/api/leagues/{league_key}/trades")
+    def get_trades(league_key: str) -> dict:
+        """The real-trade decision ledger. Detects any new completed trade
+        (every trade in the league, not only the tracked user's -- spec
+        §6.1) as a side effect, then returns every recorded trade with a
+        freshly recomputed current value (spec §6.3 -- never a one-time
+        resolution)."""
+        lg = _load_league(league_key)
+        if lg.provider != "sleeper":
+            raise HTTPException(status_code=400, detail="Trade ledger is Sleeper-only for now")
+
+        sleeper = client_mod.SleeperClient()
+        try:
+            nfl = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
+            profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            proj_anchor = _season_proj_anchor_for(lg.season).get(
+                lambda: _load_projection_anchor(sleeper, lg.season))
+            rosters = rosters_mod.fetch(sleeper, lg.provider_league_id)
+            through_week = _through_week(nfl)
+            actuals = actuals_mod.points_so_far(sleeper, lg.provider_league_id, through_week)
+            real_trades = transactions_mod.fetch_trades(
+                sleeper, lg.provider_league_id, season=lg.season, through_week=nfl.week)
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(status_code=502, detail="Couldn't reach Sleeper, try again") from exc
+        finally:
+            sleeper.close()
+
+        all_pids = {pid for r in rosters for pid in r.player_ids}
+        valued = ros_value_mod.roster_value(
+            all_pids, lg, resolved_format=lg.resolved_format, season_proj=proj_anchor,
+            profiles=profiles, actuals=actuals, weeks_played=through_week,
+            season_weeks=_season_weeks(lg.season))
+
+        for trade in real_trades:
+            side_a = {"player_ids": trade.roster_a_gets, "picks": trade.picks_to_a}
+            side_b = {"player_ids": trade.roster_b_gets, "picks": trade.picks_to_b}
+            evaluation = trade_value_mod.evaluate_trade(
+                side_a, side_b, valued_players=valued, pick_curve=PICK_VALUE_CURVE,
+                current_season=lg.season, round_size=lg.num_teams)
+            banked_a = {pid: actuals.get(pid, 0.0) for pid in trade.roster_a_gets}
+            banked_b = {pid: actuals.get(pid, 0.0) for pid in trade.roster_b_gets}
+            _TRADE_LEDGER.record_if_absent(
+                lg.league_key, trade, side_a_value=evaluation.side_a_value,
+                side_b_value=evaluation.side_b_value, banked_a=banked_a, banked_b=banked_b)
+
+        entries = _TRADE_LEDGER.list_for_league(lg.league_key)
+        out = []
+        for entry in entries:
+            current_a_delta = sum(
+                actuals.get(pid, 0.0) - entry.banked_a_at_trade.get(pid, 0.0)
+                for pid in entry.roster_a_gets)
+            current_b_delta = sum(
+                actuals.get(pid, 0.0) - entry.banked_b_at_trade.get(pid, 0.0)
+                for pid in entry.roster_b_gets)
+            current_picks_a = sum(
+                pick_value_mod.slot_value(
+                    DraftPickAsset(season=p["season"], round=p["round"],
+                                   projected_slot=p["projected_slot"],
+                                   current_owner_roster_id=p["current_owner_roster_id"],
+                                   original_roster_id=p["original_roster_id"],
+                                   via_team_name=None),
+                    PICK_VALUE_CURVE, current_season=lg.season, round_size=lg.num_teams)
+                for p in entry.picks_to_a)
+            current_picks_b = sum(
+                pick_value_mod.slot_value(
+                    DraftPickAsset(season=p["season"], round=p["round"],
+                                   projected_slot=p["projected_slot"],
+                                   current_owner_roster_id=p["current_owner_roster_id"],
+                                   original_roster_id=p["original_roster_id"],
+                                   via_team_name=None),
+                    PICK_VALUE_CURVE, current_season=lg.season, round_size=lg.num_teams)
+                for p in entry.picks_to_b)
+            out.append({
+                "transaction_id": entry.transaction_id, "week": entry.week,
+                "roster_a_id": entry.roster_a_id, "roster_b_id": entry.roster_b_id,
+                "roster_a_gets": entry.roster_a_gets, "roster_b_gets": entry.roster_b_gets,
+                "side_a_value_at_trade": round(entry.side_a_value_at_trade, 1),
+                "side_b_value_at_trade": round(entry.side_b_value_at_trade, 1),
+                "current_player_points_delta_a": round(current_a_delta, 1),
+                "current_player_points_delta_b": round(current_b_delta, 1),
+                "current_pick_value_a": round(current_picks_a, 1),
+                "current_pick_value_b": round(current_picks_b, 1),
+            })
+        return {"trades": out}
 
     # Static mounts MUST be registered last: StaticFiles("/") matches any
     # path under it, so routes declared after this point would be shadowed.

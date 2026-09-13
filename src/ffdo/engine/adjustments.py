@@ -15,7 +15,7 @@ from ffdo.engine.scoring import score_stats
 
 # Promoted above zero only on out-of-sample improvement (Task 14).
 AGE_WEIGHT: float = 0.0
-DURABILITY_WEIGHT: float = 0.0
+DURABILITY_WEIGHT: float = 0.25
 
 # Beta-Binomial prior strength, in pseudo-seasons. A player with one season of
 # history stays close to the positional prior; five seasons dominate it.

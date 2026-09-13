@@ -5,6 +5,20 @@ a luck-adjusted power ranking (overall and by position, starters or full
 roster), your roster with rest-of-season / dynasty values, the league
 standings, and — for Sleeper dynasty/keeper leagues — a draft-capital
 ranking.
+The season screen's **Lineup** tab shows this week's optimal starting
+lineup against what you actually have set, lock-aware (a player whose
+game has already started is never suggested as a swap).
+
+Dynasty values are a real, multi-year model: this week's projected value
+is projected forward using an age curve fit from real historical Sleeper
+data (not a hand-authored guess), discounted for both time and
+injury/durability risk, and collapsed back into a single season-scale
+number.
+
+The **Trades** tab shows every real trade in the league (not just yours),
+each with its value at the moment it happened and how that trade has
+played out since -- draft picks included, valued from real historical
+rookie-draft outcomes rather than a guessed chart.
 
 ## Running it
 

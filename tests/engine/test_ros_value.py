@@ -1,4 +1,6 @@
-from ffdo.domain.models import LeagueProfile, PlayerProfile, SeasonProjection
+from ffdo.domain.models import (
+    LeagueProfile, PlayerProfile, SeasonProjection, SeasonStatLine,
+)
 from ffdo.engine import ros_value
 
 
@@ -74,3 +76,86 @@ def test_player_without_a_projection_is_omitted():
         ["rb", "ghost"], _league(), resolved_format="redraft", season_proj={"rb": _proj("rb", _RB_STATS)},
         profiles=profiles, actuals={}, weeks_played=0)
     assert "ghost" not in valued
+
+
+def test_dynasty_uses_the_real_age_curve_when_provided():
+    profiles = {"rb": _profile("rb", "RB", age=24)}
+    proj = {"rb": _proj("rb", _RB_STATS)}
+    kw = dict(season_proj=proj, profiles=profiles, actuals={}, weeks_played=0)
+    no_curve = ros_value.roster_value(["rb"], _league(), resolved_format="dynasty", **kw)
+    curve = {"RB": {25: 10.0, 26: 10.0, 27: 10.0, 28: 10.0, 29: 10.0}}
+    with_curve = ros_value.roster_value(
+        ["rb"], _league(), resolved_format="dynasty", age_curve=curve, **kw)
+    assert with_curve["rb"].projected_points > no_curve["rb"].projected_points
+
+
+def test_dynasty_with_no_curve_or_history_matches_current_full_not_double_it():
+    """Regression for the dynasty_value doubling bug (see Task 4) --
+    verified end-to-end through roster_value, not just in dynasty_value's
+    own unit tests."""
+    profiles = {"rb": _profile("rb", "RB", age=24)}
+    proj = {"rb": _proj("rb", _RB_STATS)}
+    valued = ros_value.roster_value(
+        ["rb"], _league(), resolved_format="dynasty", season_proj=proj,
+        profiles=profiles, actuals={}, weeks_played=0)
+    # _RB_STATS scores ~250 pts under _league()'s scoring (see the existing
+    # comment on _RB_STATS in this file) -- with no curve/history, dynasty
+    # value must equal that ~250, not ~500.
+    assert valued["rb"].projected_points < 300.0
+
+
+def test_redraft_branch_ignores_history_and_age_curve_entirely():
+    profiles = {"rb": _profile("rb", "RB", age=24)}
+    proj = {"rb": _proj("rb", _RB_STATS)}
+    kw = dict(season_proj=proj, profiles=profiles, actuals={"rb": 50.0}, weeks_played=5)
+    without = ros_value.roster_value(["rb"], _league(), resolved_format="redraft", **kw)
+    with_extra = ros_value.roster_value(
+        ["rb"], _league(), resolved_format="redraft",
+        history={"rb": []}, age_curve={"RB": {25: 999.0}}, **kw)
+    assert without["rb"].projected_points == with_extra["rb"].projected_points
+
+
+def test_durability_adjustment_applies_when_promoted_and_history_shows_missed_games():
+    """Only meaningful once DURABILITY_WEIGHT is nonzero -- this test (and
+    the code it exercises) only exist in the committed diff if Task 8
+    actually promoted it (Step 4b's branch); if Task 8 took Step 4a, this
+    test is not added at all.
+
+    The exact promoted weight's magnitude isn't knowable at plan-writing
+    time, so this asserts a DIRECTION (a fragile player scores lower once
+    durability is live), not an exact value -- this is a real, complete,
+    runnable test, not a placeholder; only the underlying DURABILITY_WEIGHT
+    constant it depends on is determined by an earlier step.
+
+    Deviation from the brief's literal single-player verbatim text (see
+    Task 8's ledger ruling addendum): a bystander "rb2" is included in both
+    calls. With only "rb" in the pool, engine.replacement.replacement_levels
+    sets RB replacement level to "rb"'s own (pre-adjustment) value -- a
+    self-referential gap of exactly zero -- which zeroes out both the
+    durability cost itself (build's gap-to-replacement uses that same
+    degenerate replacement_ppg) and the final VOR, regardless of
+    DURABILITY_WEIGHT's magnitude. This is a pool-size artifact of
+    unmodified Task 6 code, not a defect in the durability wiring. "rb2"
+    carries a fixed, unrelated stat line and no history entry in either
+    call, so it does not itself change between the two calls -- it only
+    exists to give the position a real (non-degenerate) replacement level.
+    """
+    profiles = {"rb": _profile("rb", "RB", age=26), "rb2": _profile("rb2", "RB", age=26)}
+    proj = {"rb": _proj("rb", _RB_STATS),
+            "rb2": _proj("rb2", {"rush_yd": 600.0, "rush_td": 4.0,
+                                  "rec": 20.0, "rec_yd": 150.0})}
+    fragile_history = {"rb": [
+        SeasonStatLine(player_id="rb", season=2023, games_played=8,
+                       season_length=17, stats={}),
+        SeasonStatLine(player_id="rb", season=2024, games_played=9,
+                       season_length=18, stats={}),
+        SeasonStatLine(player_id="rb", season=2025, games_played=10,
+                       season_length=18, stats={}),
+    ]}
+    with_history = ros_value.roster_value(
+        ["rb", "rb2"], _league(), resolved_format="redraft", season_proj=proj,
+        profiles=profiles, actuals={}, weeks_played=0, history=fragile_history)
+    without_history = ros_value.roster_value(
+        ["rb", "rb2"], _league(), resolved_format="redraft", season_proj=proj,
+        profiles=profiles, actuals={}, weeks_played=0)
+    assert with_history["rb"].vor < without_history["rb"].vor
