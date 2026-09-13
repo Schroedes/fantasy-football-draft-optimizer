@@ -185,7 +185,8 @@ def create_app() -> FastAPI:
 
     from ffdo.api import board as board_mod
     from ffdo.domain import models as models_mod
-    from ffdo.domain.constants import DYNASTY_AGE_CURVE, NFL_BYE_WEEKS, PICK_VALUE_CURVE, SEASON_LENGTH
+    from ffdo.domain.constants import (
+        DYNASTY_AGE_CURVE, FAAB_BID_CURVE, NFL_BYE_WEEKS, PICK_VALUE_CURVE, SEASON_LENGTH)
     from ffdo.domain.models import DraftPickAsset
     from ffdo.engine import auction, scoring, vor
     from ffdo.engine import pick_value as pick_value_mod
@@ -216,6 +217,8 @@ def create_app() -> FastAPI:
     from ffdo.ingest.sleeper import player_history as player_history_mod
     from ffdo.ingest.sleeper import traded_picks as traded_picks_mod
     from ffdo.ingest.sleeper import transactions as transactions_mod
+    from ffdo.ingest.sleeper import waivers as waivers_mod
+    from ffdo.engine import waiver_value as waiver_value_mod
     from ffdo.ingest.sleeper import weekly_projections as weekly_projections_mod
     from ffdo.ingest.sleeper import schedule as schedule_mod
     from ffdo.engine import weekly_lineup as weekly_lineup_mod
@@ -1603,6 +1606,74 @@ def create_app() -> FastAPI:
                 "current_pick_value_b": round(sum(p["value"] for p in picks_b), 1),
             })
         return {"trades": out}
+
+    @app.get("/api/leagues/{league_key}/waivers")
+    def get_waivers(league_key: str) -> dict:
+        """Free-agent add/drop + FAAB bid recommendations. FAAB leagues
+        only (Sleeper waiver_type == 2) -- a 400 for any other waiver type
+        or provider, matching /lineup's ESPN gate."""
+        lg = _load_league(league_key)
+        if lg.provider != "sleeper":
+            raise HTTPException(status_code=400, detail="Waivers is Sleeper-only for now")
+
+        sleeper = client_mod.SleeperClient()
+        try:
+            league_raw = sleeper.get_json(f"{client_mod.V1}/league/{lg.provider_league_id}")
+            settings = league_raw.get("settings") or {}
+            if settings.get("waiver_type") != 2:
+                raise HTTPException(
+                    status_code=400, detail="Waivers is FAAB-leagues-only for now")
+            waiver_budget = float(settings.get("waiver_budget") or 0)
+
+            nfl = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
+            profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            proj_anchor = _season_proj_anchor_for(lg.season).get(
+                lambda: _load_projection_anchor(sleeper, lg.season))
+            rosters = rosters_mod.fetch(sleeper, lg.provider_league_id)
+            through_week = _through_week(nfl)
+            actuals = actuals_mod.points_so_far(sleeper, lg.provider_league_id, through_week)
+
+            # nfl.week, NOT through_week -- a waiver claim can happen during
+            # the current, still-in-progress week (see this task's design
+            # note: reusing the stats-final bound here reproduces #5's
+            # GET /trades bug).
+            claims = waivers_mod.fetch_waivers(
+                sleeper, lg.provider_league_id, season=lg.season, through_week=nfl.week)
+            budgets = waivers_mod.remaining_budget(claims, waiver_budget=waiver_budget)
+
+            all_player_ids = set(profiles)
+        except HTTPException:
+            raise
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(status_code=502, detail="Couldn't reach Sleeper, try again") from exc
+        finally:
+            sleeper.close()
+
+        you = next((r for r in rosters if r.roster_id == lg.roster_id), None)
+        if you is None:
+            return {"remaining_budget": waiver_budget, "recommendations": []}
+
+        free_agent_ids = waiver_value_mod.free_agents(all_player_ids, rosters)
+        your_remaining = budgets.get(lg.roster_id, waiver_budget)
+
+        valued = ros_value_mod.roster_value(
+            set(you.player_ids) | free_agent_ids, lg,
+            resolved_format=lg.resolved_format, season_proj=proj_anchor,
+            profiles=profiles, actuals=actuals, weeks_played=through_week,
+            season_weeks=_season_weeks(lg.season))
+
+        recommendations = waiver_value_mod.recommend_adds(
+            free_agent_ids, you.player_ids, valued, profiles, lg,
+            FAAB_BID_CURVE, your_remaining)
+
+        return {
+            "remaining_budget": round(your_remaining, 1),
+            "recommendations": [
+                {"free_agent_id": r.free_agent_id, "drop_player_id": r.drop_player_id,
+                 "vor_gain": round(r.vor_gain, 1), "suggested_bid": r.suggested_bid}
+                for r in recommendations
+            ],
+        }
 
     # Static mounts MUST be registered last: StaticFiles("/") matches any
     # path under it, so routes declared after this point would be shadowed.
