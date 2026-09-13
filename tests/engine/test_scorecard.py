@@ -144,3 +144,24 @@ def test_waiver_metric_no_recommended_claims_returns_none_rates():
 def test_waiver_metric_empty_outcomes():
     result = scorecard.waiver_metric([])
     assert result == {"recommended_claims": 0, "win_rate": None, "avg_bid_delta": None}
+
+
+def test_draft_metric_counts_grades():
+    outcomes = [
+        scorecard.DraftOutcome(grade="GREAT"),
+        scorecard.DraftOutcome(grade="GREAT"),
+        scorecard.DraftOutcome(grade="GOOD"),
+        scorecard.DraftOutcome(grade="POOR"),
+        scorecard.DraftOutcome(grade=None),  # ungraded, e.g. auction with no bid amount
+    ]
+    result = scorecard.draft_metric(outcomes)
+    assert result["picks_graded"] == 4
+    assert result["grade_counts"] == {"GREAT": 2, "GOOD": 1, "FAIR": 0, "POOR": 1}
+
+
+def test_draft_metric_empty_outcomes():
+    result = scorecard.draft_metric([])
+    assert result == {
+        "picks_graded": 0,
+        "grade_counts": {"GREAT": 0, "GOOD": 0, "FAIR": 0, "POOR": 0},
+    }

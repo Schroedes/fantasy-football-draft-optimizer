@@ -110,3 +110,14 @@ def waiver_metric(outcomes: Sequence[WaiverOutcome]) -> dict:
         "win_rate": round(win_rate, 3) if win_rate is not None else None,
         "avg_bid_delta": round(avg_bid_delta, 1) if avg_bid_delta is not None else None,
     }
+
+
+@dataclass(frozen=True, slots=True)
+class DraftOutcome:
+    grade: str | None
+
+
+def draft_metric(outcomes: Sequence[DraftOutcome]) -> dict:
+    graded = [o.grade for o in outcomes if o.grade is not None]
+    counts = {g: graded.count(g) for g in ("GREAT", "GOOD", "FAIR", "POOR")}
+    return {"picks_graded": len(graded), "grade_counts": counts}
