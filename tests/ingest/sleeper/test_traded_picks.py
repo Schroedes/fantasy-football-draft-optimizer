@@ -45,7 +45,10 @@ def test_single_trade_moves_ownership_and_sets_via():
     out = _capital(traded)
     pick = next(p for p in out if p.season == 2027 and p.original_roster_id == 1)
     assert pick.current_owner_roster_id == 3
-    assert pick.via_team_name == "Charlie"         # current owner's name
+    # The pick is listed under the current owner's (Charlie's) row, so "via"
+    # names where it came FROM -- the original owner, Alpha -- not Charlie's
+    # own name repeated back on Charlie's own row.
+    assert pick.via_team_name == "Alpha"           # original owner's name
     assert pick.projected_slot == 3                # slot follows ORIGINAL roster (1 = best)
 
 

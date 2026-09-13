@@ -74,6 +74,11 @@ def capital(
                     projected_slot=slot,
                     current_owner_roster_id=current,
                     original_roster_id=original,
-                    via_team_name=team_names.get(current) if current != original else None,
+                    # The pick is listed under the CURRENT owner's row (see
+                    # _draft_capital_payload's by_owner grouping); "via" is
+                    # meant to say where it came FROM, i.e. the original
+                    # owner who traded it away. team_names.get(current) named
+                    # the same team the row already belongs to.
+                    via_team_name=team_names.get(original) if current != original else None,
                 ))
     return out
