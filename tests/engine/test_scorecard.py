@@ -55,3 +55,59 @@ def test_lineup_metric_empty_outcomes():
         "weeks_resolved": 0, "weeks_full": 0, "weeks_partial": 0,
         "weeks_none": 0, "points_left_on_bench": 0.0,
     }
+
+
+def test_trade_metric_scopes_to_your_own_trades():
+    outcomes = [
+        scorecard.TradeOutcome(
+            transaction_id="t1", roster_a_id=1, roster_b_id=2,
+            side_a_value_at_trade=10.0, side_b_value_at_trade=10.0,
+            side_a_current_value=15.0, side_b_current_value=10.0),
+        scorecard.TradeOutcome(
+            transaction_id="t2", roster_a_id=3, roster_b_id=4,  # not your trade
+            side_a_value_at_trade=10.0, side_b_value_at_trade=10.0,
+            side_a_current_value=5.0, side_b_current_value=10.0),
+    ]
+    result = scorecard.trade_metric(outcomes, your_roster_id=1)
+    assert result["total_trades_in_league"] == 2
+    assert result["your_trades"] == 1
+
+
+def test_trade_metric_classifies_gained_lost_unchanged():
+    outcomes = [
+        scorecard.TradeOutcome(
+            transaction_id="gained", roster_a_id=1, roster_b_id=2,
+            side_a_value_at_trade=10.0, side_b_value_at_trade=10.0,
+            side_a_current_value=20.0, side_b_current_value=10.0),
+        scorecard.TradeOutcome(
+            transaction_id="lost", roster_a_id=1, roster_b_id=2,
+            side_a_value_at_trade=10.0, side_b_value_at_trade=10.0,
+            side_a_current_value=2.0, side_b_current_value=10.0),
+        scorecard.TradeOutcome(
+            transaction_id="unchanged", roster_a_id=1, roster_b_id=2,
+            side_a_value_at_trade=10.0, side_b_value_at_trade=10.0,
+            side_a_current_value=10.2, side_b_current_value=10.0),
+    ]
+    result = scorecard.trade_metric(outcomes, your_roster_id=1)
+    assert result["gained_value"] == 1
+    assert result["lost_value"] == 1
+    assert result["unchanged"] == 1
+
+
+def test_trade_metric_reads_the_correct_side_when_you_are_roster_b():
+    outcomes = [
+        scorecard.TradeOutcome(
+            transaction_id="t1", roster_a_id=1, roster_b_id=2,
+            side_a_value_at_trade=10.0, side_b_value_at_trade=10.0,
+            side_a_current_value=10.0, side_b_current_value=25.0),
+    ]
+    result = scorecard.trade_metric(outcomes, your_roster_id=2)
+    assert result["gained_value"] == 1
+
+
+def test_trade_metric_empty_outcomes():
+    result = scorecard.trade_metric([], your_roster_id=1)
+    assert result == {
+        "total_trades_in_league": 0, "your_trades": 0,
+        "gained_value": 0, "lost_value": 0, "unchanged": 0,
+    }

@@ -57,3 +57,36 @@ def lineup_metric(
         "weeks_full": full, "weeks_partial": partial, "weeks_none": none_,
         "points_left_on_bench": round(points_left, 1),
     }
+
+
+@dataclass(frozen=True, slots=True)
+class TradeOutcome:
+    transaction_id: str
+    roster_a_id: int
+    roster_b_id: int
+    side_a_value_at_trade: float
+    side_b_value_at_trade: float
+    side_a_current_value: float
+    side_b_current_value: float
+
+
+def trade_metric(outcomes: Sequence[TradeOutcome], your_roster_id: int) -> dict:
+    your_trades = [o for o in outcomes if your_roster_id in (o.roster_a_id, o.roster_b_id)]
+    gained = lost = unchanged = 0
+    for o in your_trades:
+        if o.roster_a_id == your_roster_id:
+            at_trade, current = o.side_a_value_at_trade, o.side_a_current_value
+        else:
+            at_trade, current = o.side_b_value_at_trade, o.side_b_current_value
+        delta = current - at_trade
+        if delta > 0.5:
+            gained += 1
+        elif delta < -0.5:
+            lost += 1
+        else:
+            unchanged += 1
+    return {
+        "total_trades_in_league": len(outcomes),
+        "your_trades": len(your_trades),
+        "gained_value": gained, "lost_value": lost, "unchanged": unchanged,
+    }
