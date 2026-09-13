@@ -164,7 +164,7 @@ float, curve: Mapping[int, float], *, bucket_width: int = 10) -> float`:
 def suggested_bid(vor_gain, remaining_budget, curve, *, bucket_width=10):
     if not curve:
         return 0.0
-    bucket = (int(vor_gain) // bucket_width) * bucket_width
+    bucket = math.floor(vor_gain / bucket_width) * bucket_width
     available_buckets = sorted(curve)
     # Fall to the nearest bucket at or below vor_gain's own bucket -- a
     # gap in the curve (a VOR-gain range with no MIN_SAMPLE-qualifying
@@ -184,6 +184,22 @@ validate against, the same honest position #4's `DISCOUNT_RATE` and #5's
 `PICK_UNCERTAINTY_DISCOUNT_RATE` are documented with) — but unlike those
 two constants, this one IS fit from real data end-to-end, not a judgment
 call, since real historical bid outcomes exist to fit it from.
+
+**Correctness note (caught during implementation's task review):** an
+earlier version of this bucket computation used `(int(vor_gain) //
+bucket_width) * bucket_width`. Python's `int()` truncates toward zero,
+not toward negative infinity, so for a negative non-integer `vor_gain`
+(e.g. `-100.5`) this gives `int(-100.5) // 10 * 10 == -100` — one full
+`bucket_width` too high, when the correct floor-based bucket is
+`math.floor(-100.5 / 10) * 10 == -110`. Since real VOR values are
+essentially never exact integers and most of `FAAB_BID_CURVE`'s real
+buckets are negative, this silently mis-binned the majority of the
+curve's real fitting observations, not just lookups at inference time —
+the same identical bug existed in `scripts/fit_faab_curve.py`'s own
+bucketing code, since both were written from this same formula. Both
+were corrected to `math.floor(vor_gain / bucket_width) * bucket_width`,
+and the curve was re-fit from scratch with the corrected formula (see
+the SDD ledger's Task 5 fix entry for the before/after bucket values).
 
 ## §5. Free-agent pool, positional caps, and the add/drop recommendation
 
