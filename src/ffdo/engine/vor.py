@@ -4,9 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from statistics import median
+from typing import Final
 
 from ffdo.domain.models import PlayerProfile, ValuedPlayer
-from ffdo.engine.replacement import replacement_levels
+from ffdo.engine import scarcity
+from ffdo.engine.replacement import rank_by_position, replacement_levels
+
+# Promoted above zero only on real out-of-sample backtest improvement -- see
+# scripts/backtest_scarcity.py. Same posture as adjustments.AGE_WEIGHT: a
+# real capability that ships inert until the data says otherwise.
+SCARCITY_STRENGTH: Final[float] = 0.0
 
 
 def compute(
@@ -15,6 +22,7 @@ def compute(
     league,
     *,
     adjustments: Mapping[str, Mapping[str, float]] | None = None,
+    scarcity_strength: float = SCARCITY_STRENGTH,
 ) -> dict[str, ValuedPlayer]:
     adjustments = adjustments or {}
     adjusted = {
@@ -24,6 +32,14 @@ def compute(
     }
     positions = {pid: profiles[pid].position for pid in adjusted}
     levels = replacement_levels(adjusted, positions, league)
+
+    # Recomputed here rather than threaded out of replacement_levels: that
+    # function's signature is also depended on by engine.roster's
+    # single-team lineup solve, and ranking is cheap relative to everything
+    # else this function already does.
+    ranked = rank_by_position(adjusted, positions)
+    cliff = scarcity.positional_cliff(ranked, levels)
+    multiplier = scarcity.scarcity_multiplier(cliff, scarcity_strength)
 
     out: dict[str, ValuedPlayer] = {}
     for pid, adj_pts in adjusted.items():
@@ -41,7 +57,7 @@ def compute(
             profile=profiles[pid],
             projected_points=points[pid],
             adjusted_points=adj_pts,
-            vor=adj_pts - levels[pos],
+            vor=(adj_pts - levels[pos]) * multiplier.get(pos, 1.0),
             tier=0,
             adjustments=dict(adjustments.get(pid, {})),
         )

@@ -124,3 +124,34 @@ def test_def_and_k_get_position_differentiated_vor():
     # Replacement levels are computed independently per position -- a DEF's
     # VOR must not be measured against the K replacement level or vice versa.
     assert valued["def0"].vor != valued["k0"].vor - (130.0 - 90.0)
+
+
+def test_scarcity_strength_zero_leaves_vor_unchanged():
+    points = {f"rb{i}": 200.0 - 10 * i for i in range(6)}
+    profiles = _profiles({f"rb{i}": "RB" for i in range(6)})
+    points.update({f"wr{i}": 150.0 - 10 * i for i in range(6)})
+    profiles.update(_profiles({f"wr{i}": "WR" for i in range(6)}))
+    valued = vor.compute(points, profiles, _league(), scarcity_strength=0.0)
+    assert valued["rb0"].vor == 200.0 - 180.0
+
+
+def test_scarcity_strength_scales_vor_by_relative_cliff():
+    # league() has 2 teams x 1 RB slot x 1 WR slot -> replacement is the
+    # 3rd-best player at each position (idx 2).
+    # RB: 200,190,180,170,160,150 -> replacement 180.0, next 3 below
+    #     (170,160,150) mean 160.0 -> cliff 20.0
+    # WR: 150,148,146,144,142,140 -> replacement 146.0, next 3 below
+    #     (144,142,140) mean 142.0 -> cliff 4.0 (RB's cliff is the max)
+    points = {f"rb{i}": 200.0 - 10 * i for i in range(6)}
+    points.update({f"wr{i}": 150.0 - 2 * i for i in range(6)})
+    profiles = _profiles({f"rb{i}": "RB" for i in range(6)})
+    profiles.update(_profiles({f"wr{i}": "WR" for i in range(6)}))
+
+    valued = vor.compute(points, profiles, _league(), scarcity_strength=1.0)
+    raw_rb_vor = 200.0 - 180.0
+    raw_wr_vor = 150.0 - 146.0
+    # RB carries the steepest cliff (20.0, the max), so its multiplier is
+    # 1.0 + 1.0 * (20/20) = 2.0
+    assert valued["rb0"].vor == raw_rb_vor * 2.0
+    # WR's multiplier is 1.0 + 1.0 * (4/20) = 1.2
+    assert valued["wr0"].vor == raw_wr_vor * 1.2
