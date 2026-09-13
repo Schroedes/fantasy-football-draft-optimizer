@@ -15,6 +15,7 @@ import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
+from ffdo.api.draft_pick_ledger import DraftPickLedger
 from ffdo.api.lineup_ledger import LineupLedger
 from ffdo.api.store import LeagueStore
 from ffdo.api.trade_ledger import TradeLedger
@@ -39,6 +40,17 @@ _STORE = LeagueStore(Path("data") / "ffdo.db",
 _LINEUP_LEDGER = LineupLedger(Path("data") / "ffdo.db")
 _TRADE_LEDGER = TradeLedger(Path("data") / "ffdo.db")
 _WAIVER_LEDGER = WaiverLedger(Path("data") / "ffdo.db")
+_DRAFT_PICK_LEDGER = DraftPickLedger(Path("data") / "ffdo.db")
+# In-memory only, per draft_id -- the last known live simulate_survival()
+# estimate for each player while they were still available. A player who
+# gets drafted between two polls drops out of the NEXT poll's `survival`
+# dict, so this must be updated with dict.update (merge), never replaced
+# wholesale, or the last known value for a just-drafted player would be
+# lost the moment he's no longer "available". Process-lifetime only, same
+# as every other in-memory cache in this module -- resets on restart,
+# which is fine: it only ever backfills a value that would otherwise be
+# None.
+_DRAFT_SURVIVAL_CACHE: dict[str, dict[str, float]] = {}
 
 _FORMATS = ("redraft", "keeper", "dynasty")
 
@@ -912,6 +924,17 @@ def create_app() -> FastAPI:
                     # draft happened before the app was reopened. See get_season
                     # for the actual season-view data.
                     _STORE.touch_status(league_key, state.status)
+                    if not is_mock:
+                        # This path never loads valuations, so any pick(s)
+                        # first seen here (the final pick and a status flip
+                        # to "complete" landing in the same poll) get
+                        # recorded ungraded rather than lost entirely.
+                        for pick in state.picks:
+                            _DRAFT_PICK_LEDGER.record_if_absent(
+                                league_key, draft_id=state.draft_id, pick_no=pick.pick_no,
+                                round=pick.round, roster_id=pick.roster_id,
+                                player_id=pick.player_id, position=None, amount=pick.amount,
+                                grade=None, vor_at_pick=None, predicted_survival=None)
                     return {"draft_status": state.status, "is_mock": is_mock}
 
                 profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
@@ -980,10 +1003,43 @@ def create_app() -> FastAPI:
                         if a.adp.get("half_ppr", 999) < 999}
             picks_until = lg.num_teams  # conservative: one full round
             survival = market.simulate_survival(adp_means, available, picks_until)
+            _DRAFT_SURVIVAL_CACHE.setdefault(state.draft_id, {}).update(survival)
             cow = market.cost_of_waiting(valued, survival, available)
             plan = snake_plan_mod.simulate_snake_plan(valued, adp_means, state, lg, roster_id)
             board = board_mod.build_snake_board(
                 lg, state, valued, survival, cow, plan, roster_id=roster_id, teams=teams)
+
+        if not is_mock:
+            from ffdo.engine import grading as grading_mod
+            for pick in state.picks:
+                if _DRAFT_PICK_LEDGER.get(league_key, state.draft_id, pick.pick_no) is not None:
+                    continue
+                vp = valued.get(pick.player_id)
+                vor_at_pick = round(vp.vor, 2) if vp is not None else None
+                position = profiles[pick.player_id].position if pick.player_id in profiles else None
+                if state.draft_type == "auction":
+                    grade = None
+                    if pick.amount is not None and vp is not None:
+                        base = baseline.get(pick.player_id, 1.0)
+                        grade = grading_mod.grade_auction_pick(base, pick.amount)
+                    predicted_survival = None
+                else:
+                    grade = None
+                    if vp is not None:
+                        drafted_before = {
+                            p.player_id for p in state.picks if p.pick_no < pick.pick_no}
+                        alternatives = [
+                            other.vor for pid, other in valued.items()
+                            if other.vor > 0 and pid != pick.player_id and pid not in drafted_before
+                        ]
+                        grade = grading_mod.grade_snake_pick(vp.vor, alternatives)
+                    predicted_survival = _DRAFT_SURVIVAL_CACHE.get(state.draft_id, {}).get(
+                        pick.player_id)
+                _DRAFT_PICK_LEDGER.record_if_absent(
+                    league_key, draft_id=state.draft_id, pick_no=pick.pick_no,
+                    round=pick.round, roster_id=pick.roster_id, player_id=pick.player_id,
+                    position=position, amount=pick.amount, grade=grade,
+                    vor_at_pick=vor_at_pick, predicted_survival=predicted_survival)
 
         board["is_mock"] = is_mock
         return board

@@ -1659,3 +1659,181 @@ def test_two_leagues_with_different_scoring_produce_different_vor(monkeypatch):
     assert _vor(ppr, "P1") != _vor(std, "P1"), (
         "same player, same stat line, different league scoring -> different VOR")
     assert _vor(ppr, "P2") != _vor(std, "P2")
+
+
+# -- (h) draft_pick_ledger wiring -------------------------------------------
+#
+# `_isolated_store` (autouse, see conftest.py) gives every test here a fresh
+# `_STORE`, but NOT a fresh `_DRAFT_PICK_LEDGER` -- that module-level
+# singleton points at the real `data/ffdo.db` by default, so every test below
+# explicitly monkeypatches it to a tmp_path-backed ledger.
+
+
+def _board_pick_raw(*, pick_no=1, round=1, roster_id=1, player_id="P1", amount="40"):
+    return {
+        "draft_id": "D123", "draft_slot": roster_id, "pick_no": pick_no,
+        "picked_by": "U1", "player_id": player_id, "roster_id": roster_id,
+        "round": round, "metadata": {"amount": amount},
+    }
+
+
+def test_board_records_a_real_auction_pick_with_a_grade(monkeypatch, tmp_path):
+    from ffdo.api.draft_pick_ledger import DraftPickLedger
+
+    ledger = DraftPickLedger(tmp_path / "ledger.db")
+    monkeypatch.setattr(app_mod, "_DRAFT_PICK_LEDGER", ledger)
+
+    app_mod._STORE.upsert(_tracked())  # sleeper:L123:2025
+
+    pick = _board_pick_raw()
+    FakeClient, _ = _recording_client({
+        f"{V1}/draft/D123/picks": [pick],
+        f"{V1}/draft/D123": _BOARD_DRAFT_RAW,
+        f"{V1}/league/L123/rosters": [],
+        f"{V1}/league/L123/users": [],
+        f"{V1}/league/L123": _BOARD_REAL_LEAGUE_RAW,
+        f"{V1}/players/nfl": _BOARD_PLAYERS_RAW,
+        f"{PROJECTIONS}/2025": _BOARD_PROJECTIONS_RAW,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    res = TestClient(create_app()).get("/api/leagues/sleeper:L123:2025/board")
+
+    assert res.status_code == 200
+    entry = ledger.get("sleeper:L123:2025", "D123", 1)
+    assert entry is not None, "the real pick made in this poll must be recorded"
+    assert entry.player_id == "P1"
+    assert entry.roster_id == 1
+    assert entry.amount == 40
+    assert entry.grade is not None, (
+        "auction pick with a real amount and a valued player must be graded")
+
+
+def test_board_second_poll_does_not_duplicate_or_re_record_a_pick(monkeypatch, tmp_path):
+    from ffdo.api.draft_pick_ledger import DraftPickLedger
+
+    ledger = DraftPickLedger(tmp_path / "ledger.db")
+    monkeypatch.setattr(app_mod, "_DRAFT_PICK_LEDGER", ledger)
+
+    app_mod._STORE.upsert(_tracked())
+
+    pick = _board_pick_raw()
+    FakeClient, _ = _recording_client({
+        f"{V1}/draft/D123/picks": [pick],
+        f"{V1}/draft/D123": _BOARD_DRAFT_RAW,
+        f"{V1}/league/L123/rosters": [],
+        f"{V1}/league/L123/users": [],
+        f"{V1}/league/L123": _BOARD_REAL_LEAGUE_RAW,
+        f"{V1}/players/nfl": _BOARD_PLAYERS_RAW,
+        f"{PROJECTIONS}/2025": _BOARD_PROJECTIONS_RAW,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    client = TestClient(create_app())
+    res1 = client.get("/api/leagues/sleeper:L123:2025/board")
+    assert res1.status_code == 200
+    first = ledger.get("sleeper:L123:2025", "D123", 1)
+    assert first is not None
+
+    res2 = client.get("/api/leagues/sleeper:L123:2025/board")
+    assert res2.status_code == 200
+    second = ledger.get("sleeper:L123:2025", "D123", 1)
+    assert second is not None
+    assert second.recorded_at == first.recorded_at, (
+        "a second poll of the same, already-recorded pick must not rewrite "
+        "the row -- record_if_absent is idempotent")
+
+
+def test_board_completed_draft_early_return_records_the_final_pick_ungraded(
+        monkeypatch, tmp_path):
+    """The real edge case this task exists to handle: the final pick and the
+    status flip to "complete" landing in the SAME poll takes the early-return
+    path (before valuations are ever loaded), so the pick must still be
+    recorded, just without a grade/vor_at_pick/predicted_survival."""
+    from ffdo.api.draft_pick_ledger import DraftPickLedger
+
+    ledger = DraftPickLedger(tmp_path / "ledger.db")
+    monkeypatch.setattr(app_mod, "_DRAFT_PICK_LEDGER", ledger)
+
+    app_mod._STORE.upsert(_tracked(draft_status="drafting"))
+
+    pick = _board_pick_raw()
+    complete_draft = {**_BOARD_DRAFT_RAW, "status": "complete"}
+    contaminated_projections = [{
+        "player_id": "P1", "stats": {"pts_half_ppr": 100.0},
+        "last_modified": 9_999_999_999_000,  # long after the 2025 kickoff
+    }]
+    FakeClient, calls = _recording_client({
+        f"{V1}/draft/D123/picks": [pick],
+        f"{V1}/draft/D123": complete_draft,
+        f"{V1}/league/L123/rosters": [],
+        f"{V1}/league/L123/users": [],
+        f"{V1}/league/L123": {**_BOARD_REAL_LEAGUE_RAW, "status": "complete"},
+        f"{V1}/players/nfl": _BOARD_PLAYERS_RAW,
+        f"{PROJECTIONS}/2025": contaminated_projections,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    res = TestClient(create_app()).get("/api/leagues/sleeper:L123:2025/board")
+
+    assert res.status_code == 200
+    assert res.json() == {"draft_status": "complete", "is_mock": False}
+    assert not any("/projections/" in c for c in calls), (
+        f"projections must never be fetched once the draft is complete: {calls}")
+
+    entry = ledger.get("sleeper:L123:2025", "D123", 1)
+    assert entry is not None, (
+        "the final pick, first seen on the same poll the status flips to "
+        "complete, must still be recorded -- just ungraded")
+    assert entry.player_id == "P1"
+    assert entry.pick_no == 1
+    assert entry.roster_id == 1
+    assert entry.amount == 40
+    assert entry.grade is None
+    assert entry.vor_at_pick is None
+    assert entry.predicted_survival is None
+
+
+def test_board_never_records_picks_for_a_mock_draft(monkeypatch, tmp_path):
+    from ffdo.api.draft_pick_ledger import DraftPickLedger
+
+    ledger = DraftPickLedger(tmp_path / "ledger.db")
+    monkeypatch.setattr(app_mod, "_DRAFT_PICK_LEDGER", ledger)
+
+    app_mod._STORE.upsert(_mock_tracked())  # sleeper-mock:D999:2026
+
+    pick = {
+        "draft_id": "D999", "draft_slot": 1, "pick_no": 1, "picked_by": "U1",
+        "player_id": "P1", "roster_id": 1, "round": 1, "metadata": {"amount": "40"},
+    }
+    FakeClient, _ = _recording_client({
+        f"{V1}/draft/D999/picks": [pick],
+        f"{V1}/draft/D999": _BOARD_MOCK_DRAFT_RAW,
+    })
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", FakeClient)
+
+    res = TestClient(create_app()).get("/api/leagues/sleeper-mock:D999:2026/board")
+
+    assert res.status_code == 200
+    assert res.json()["is_mock"] is True
+    assert ledger.list_for_league("sleeper-mock:D999:2026") == [], (
+        "mock drafts must never be persisted into the real draft pick ledger")
+
+
+def test_board_snake_survival_cache_uses_update_not_assignment():
+    """Building a full, realistic snake-draft fixture with real ADP data to
+    exercise `_DRAFT_SURVIVAL_CACHE` end to end is significantly higher
+    effort than warranted here (see task dispatch). Verify by direct
+    inspection instead that the cache line uses dict.update() (a merge) and
+    not assignment -- assignment would drop a just-drafted player's last
+    known survival estimate the moment he's no longer in the next poll's
+    `survival` dict, since that dict only ever covers still-available
+    players."""
+    import inspect
+
+    from ffdo.api import app as app_src
+
+    source = inspect.getsource(app_src)
+    assert "_DRAFT_SURVIVAL_CACHE.setdefault(state.draft_id, {}).update(survival)" in source, (
+        "the survival cache must be merged via dict.update(), never replaced "
+        "wholesale via assignment")
