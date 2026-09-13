@@ -411,6 +411,17 @@ def main() -> None:
             season_weeks = len(SEASON_LENGTH) and SEASON_LENGTH.get(season, 18)
             claims = waivers.fetch_waivers(sleeper, league_id, season=season,
                                             through_week=season_weeks)
+            # Cache each week's stats ONCE per league-season and reuse
+            # across every claim that needs it, rather than re-fetching
+            # the same week many times over -- a league-season with dozens
+            # of claims spread across the year would otherwise make many
+            # redundant live HTTP calls for the same (season, week) pair.
+            week_stats_cache: dict[int, dict] = {}
+
+            def _week_stats(wk: int) -> dict:
+                if wk not in week_stats_cache:
+                    week_stats_cache[wk] = historical_weekly_stats.fetch(sleeper, season, wk)
+                return week_stats_cache[wk]
             # This re-walks chronologically rather than calling
             # waivers.remaining_budget(): that function only returns each
             # roster's FINAL remaining total after every claim, but fitting
@@ -428,7 +439,7 @@ def main() -> None:
 
                 rest_of_season_points: dict[str, float] = {}
                 for wk in range(claim.week + 1, season_weeks + 1):
-                    week_stats = historical_weekly_stats.fetch(sleeper, season, wk)
+                    week_stats = _week_stats(wk)
                     for pid, stat_line in week_stats.items():
                         rest_of_season_points[pid] = (
                             rest_of_season_points.get(pid, 0.0)
