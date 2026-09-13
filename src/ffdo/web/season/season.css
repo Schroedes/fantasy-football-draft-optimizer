@@ -345,3 +345,10 @@
    stacked block is the correct layout here. */
 .lineup-row.trade-row { display: block; }
 .lineup-row.trade-row > div + div { margin-top: 4px; }
+
+/* ---- waivers tab ---- */
+/* Same fit problem and fix as .trade-row above: a waiver recommendation is
+   two lines of prose (add/drop + suggested bid), not the Lineup tab's four
+   discrete slot/current/arrow/delta columns. */
+.lineup-row.waiver-row { display: block; }
+.lineup-row.waiver-row > div + div { margin-top: 4px; }

@@ -16,6 +16,7 @@ let _c, _key, _meta, _data;
 let _panel = "lineup", _pos = "OVR", _scope = "starters";
 let _lineupData = null;   // null until the Lineup tab has been opened at least once
 let _tradesData = null;   // null until the Trades tab has been opened at least once
+let _waiversData = null;  // null until the Waivers tab has been opened at least once
 
 // Sub-strip (week context + refresh) above a two-panel skeleton. #season-body
 // itself is deliberately left empty here -- render() populates it (and
@@ -65,6 +66,7 @@ export async function mountSeason(container, leagueKey, meta) {
   _scope = "starters";
   _lineupData = null;
   _tradesData = null;
+  _waiversData = null;
 
   container.innerHTML = SHELL;
   container.querySelector("#season-refresh").addEventListener("click", load);
@@ -120,6 +122,7 @@ function renderRightPanel() {
       <button data-panel-tab="power" class="${_panel === "power" ? "on" : ""}">Power ranking</button>
       ${showCapital ? `<button data-panel-tab="capital" class="${_panel === "capital" ? "on" : ""}">Draft capital</button>` : ""}
       <button data-panel-tab="trades" class="${_panel === "trades" ? "on" : ""}">Trades</button>
+      <button data-panel-tab="waivers" class="${_panel === "waivers" ? "on" : ""}">Waivers</button>
     </div>`;
   if (_panel === "lineup") {
     if (_lineupData === null) {
@@ -134,6 +137,13 @@ function renderRightPanel() {
       return tabBar + `<div class="lineup-loading">Loading trades&hellip;</div>`;
     }
     return tabBar + renderTrades();
+  }
+  if (_panel === "waivers") {
+    if (_waiversData === null) {
+      loadWaivers();
+      return tabBar + `<div class="lineup-loading">Loading waivers&hellip;</div>`;
+    }
+    return tabBar + renderWaivers();
   }
   return tabBar + (_panel === "capital" ? renderCapital() : renderPower());
 }
@@ -270,6 +280,53 @@ function renderTrades() {
     </div>`;
   }).join("");
   return `<div class="lineup-list">${rows}</div>`;
+}
+
+async function loadWaivers() {
+  // Same stale-response guard as loadLineup()/loadTrades() above -- capture
+  // _key before the first await and bail if the user has switched leagues by
+  // the time any await resolves, so a slow response for a league the user
+  // has left can't clobber the newly-reset (or still-loading) _waiversData.
+  const myKey = _key;
+  let result;
+  try {
+    const res = await fetch(`/api/leagues/${encodeURIComponent(myKey)}/waivers`);
+    if (_key !== myKey) return;
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      if (_key !== myKey) return;
+      result = { error: body.detail || "Couldn't load waivers" };
+    } else {
+      const data = await res.json();
+      if (_key !== myKey) return;
+      result = data;
+    }
+  } catch (e) {
+    if (_key !== myKey) return;
+    result = { error: "Couldn't load waivers" };
+  }
+  _waiversData = result;
+  render();
+}
+
+function renderWaivers() {
+  if (_waiversData.error) {
+    return `<div class="lineup-error">${escapeHtml(_waiversData.error)}</div>`;
+  }
+  const header = `<div class="lineup-header">Remaining budget: $${_waiversData.remaining_budget}</div>`;
+  if (_waiversData.recommendations.length === 0) {
+    return header + `<div class="lineup-empty">No recommended adds right now</div>`;
+  }
+  const rows = _waiversData.recommendations.map(r => {
+    const drop = r.drop_player_id
+      ? `drop ${escapeHtml(r.drop_player_id)}`
+      : "open bench slot, no drop needed";
+    return `<div class="lineup-row waiver-row">
+      <div>Add ${escapeHtml(r.free_agent_id)} (${drop}) &mdash; +${r.vor_gain} VOR</div>
+      <div>Suggested bid: $${r.suggested_bid}</div>
+    </div>`;
+  }).join("");
+  return header + `<div class="lineup-list">${rows}</div>`;
 }
 
 function renderPower() {
