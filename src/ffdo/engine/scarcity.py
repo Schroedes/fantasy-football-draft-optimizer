@@ -21,18 +21,24 @@ def positional_cliff(
     levels: Mapping[str, float],
 ) -> dict[str, float]:
     """Points gap between each position's replacement level and the mean of
-    the CLIFF_DEPTH players ranked just below it. Always >= 0: `ranked[pos]`
-    is sorted descending and the players counted are ranked below the
-    replacement-level entry, so they can only be worth the same or less. A
-    position with fewer than CLIFF_DEPTH players left below replacement (a
-    thin pool) averages over however many remain; a position with none left
-    below replacement gets 0.0 -- there is nothing to fall off a cliff into.
+    the CLIFF_DEPTH next-lowest-valued players below it. Always >= 0, since
+    only players with a value strictly less than `level` are counted --
+    this is deliberate: `ranked[pos]` can have multiple players tied
+    exactly at the replacement value (common at deep positions like
+    K/DEF/TE, where many players carry the same 0.0 projection), and a
+    naive positional slice below wherever the tie happens to sit in the
+    sorted list can pull in another tied (not actually lower) player,
+    understating the cliff. Filtering on value instead of position makes
+    the result correct regardless of how many players tie at `level`.
+    A position with fewer than CLIFF_DEPTH players strictly below
+    replacement (a thin pool) averages over however many remain; a
+    position with none strictly below gets 0.0 -- there is nothing to
+    fall off a cliff into.
     """
     cliffs: dict[str, float] = {}
     for pos, level in levels.items():
         pool = ranked.get(pos, [])
-        idx = next((i for i, (v, _) in enumerate(pool) if v <= level), len(pool))
-        below = [v for v, _ in pool[idx + 1: idx + 1 + CLIFF_DEPTH]]
+        below = [v for v, _ in pool if v < level][:CLIFF_DEPTH]
         cliffs[pos] = (level - sum(below) / len(below)) if below else 0.0
     return cliffs
 

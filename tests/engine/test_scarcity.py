@@ -24,6 +24,21 @@ def test_positional_cliff_nothing_below_replacement_is_zero():
     assert cliff["K"] == 0.0
 
 
+def test_positional_cliff_ties_at_replacement_are_never_counted_as_below():
+    """Regression: a naive positional slice after finding the first index
+    <= level can sweep in ANOTHER player tied at the same value as
+    'below' -- e.g. here, three players (c, d, e) are all tied at exactly
+    the replacement level (15.0). None of them may ever count as 'below'
+    the replacement, since none is actually worth less than it."""
+    ranked = {"TE": [(30.0, "a"), (20.0, "b"), (15.0, "c"), (15.0, "d"),
+                     (15.0, "e"), (10.0, "f"), (5.0, "g")]}
+    levels = {"TE": 15.0}
+    cliff = scarcity.positional_cliff(ranked, levels)
+    # Only f (10.0) and g (5.0) are genuinely below 15.0 -- CLIFF_DEPTH=3
+    # would want a third, but there isn't one, so this averages over 2.
+    assert cliff["TE"] == 15.0 - (10.0 + 5.0) / 2
+
+
 def test_scarcity_multiplier_zero_strength_is_a_no_op():
     cliff = {"RB": 20.0, "WR": 4.0}
     result = scarcity.scarcity_multiplier(cliff, 0.0)
