@@ -56,6 +56,23 @@ def test_list_for_league_scopes_to_the_given_league(tmp_path):
     assert result[0].league_key == "league1"
 
 
+def test_two_drafts_in_the_same_league_with_overlapping_pick_no_do_not_collide(tmp_path):
+    ledger = DraftPickLedger(tmp_path / "test.db")
+    ledger.record_if_absent("league1", **_kwargs(draft_id="draft-a", pick_no=1, player_id="playerA"))
+    ledger.record_if_absent("league1", **_kwargs(draft_id="draft-b", pick_no=1, player_id="playerB"))
+
+    entry_a = ledger.get("league1", "draft-a", 1)
+    entry_b = ledger.get("league1", "draft-b", 1)
+    assert entry_a is not None
+    assert entry_b is not None
+    assert entry_a.player_id == "playerA"
+    assert entry_b.player_id == "playerB"
+
+    result = ledger.list_for_league("league1")
+    assert len(result) == 2
+    assert {e.draft_id for e in result} == {"draft-a", "draft-b"}
+
+
 def test_ungraded_pick_supports_null_fields(tmp_path):
     """A pick recorded via the early-return (draft already complete on
     first poll) path has no grade/vor/survival available yet."""
