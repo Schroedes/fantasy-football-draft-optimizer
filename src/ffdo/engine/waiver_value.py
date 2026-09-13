@@ -29,3 +29,18 @@ def suggested_bid(
         return 0.0
     pct = curve[max(candidates)]
     return round(remaining_budget * pct, 0)
+
+
+def free_agents(all_player_ids: Iterable[str], rosters: Sequence) -> set[str]:
+    rostered = {pid for r in rosters for pid in r.player_ids}
+    return set(all_player_ids) - rostered
+
+
+def position_cap(position: str, league) -> int | None:
+    if position not in POSITION_CAP_EXTRA:
+        return None
+    dedicated = sum(1 for s in league.roster_positions if s == position)
+    flex_eligible = sum(
+        1 for s in league.roster_positions
+        if s in FLEX_ELIGIBILITY and position in FLEX_ELIGIBILITY[s])
+    return dedicated + flex_eligible + POSITION_CAP_EXTRA[position]

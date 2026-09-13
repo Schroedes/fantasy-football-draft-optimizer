@@ -1,6 +1,7 @@
 import pytest
 
 from ffdo.domain.constants import FAAB_BID_CURVE
+from ffdo.domain.models import RosterEntry
 from ffdo.engine import waiver_value
 
 
@@ -67,3 +68,58 @@ def test_real_curve_higher_vor_gain_bucket_never_suggests_less_than_the_lowest_b
     low_bid = waiver_value.suggested_bid(float(lowest_bucket), 100.0, FAAB_BID_CURVE)
     high_bid = waiver_value.suggested_bid(float(highest_bucket) + 5.0, 100.0, FAAB_BID_CURVE)
     assert high_bid >= low_bid
+
+
+def _roster(roster_id, player_ids):
+    return RosterEntry(roster_id=roster_id, team_name=f"Team {roster_id}",
+                       player_ids=tuple(player_ids), starter_ids=(),
+                       wins=0, losses=0, ties=0, points_for=0.0, points_against=0.0)
+
+
+def _league(roster_positions):
+    class _L:
+        pass
+    lg = _L()
+    lg.roster_positions = roster_positions
+    return lg
+
+
+def test_free_agents_excludes_every_rostered_player():
+    rosters = [_roster(1, ["p1", "p2"]), _roster(2, ["p3"])]
+    result = waiver_value.free_agents(["p1", "p2", "p3", "p4", "p5"], rosters)
+    assert result == {"p4", "p5"}
+
+
+def test_free_agents_with_no_rosters_returns_everyone():
+    result = waiver_value.free_agents(["p1", "p2"], [])
+    assert result == {"p1", "p2"}
+
+
+def test_position_cap_uncapped_position_returns_none():
+    league = _league(("QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "BN", "BN"))
+    assert waiver_value.position_cap("RB", league) is None
+    assert waiver_value.position_cap("WR", league) is None
+
+
+def test_position_cap_te_with_one_te_eligible_flex_matches_the_users_own_example():
+    """The user's own worked example from brainstorming: a 1-TE + 1-FLEX
+    (TE-eligible) league should cap TE at exactly 3."""
+    league = _league(("QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "BN", "BN"))
+    assert waiver_value.position_cap("TE", league) == 3
+
+
+def test_position_cap_qb_standard_non_superflex_matches_the_users_own_example():
+    league = _league(("QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "BN", "BN"))
+    assert waiver_value.position_cap("QB", league) == 2
+
+
+def test_position_cap_def_and_k_have_zero_extra():
+    league = _league(("QB", "RB", "RB", "WR", "WR", "TE", "DEF", "K", "BN"))
+    assert waiver_value.position_cap("DEF", league) == 1
+    assert waiver_value.position_cap("K", league) == 1
+
+
+def test_position_cap_superflex_widens_the_qb_cap():
+    league = _league(("QB", "SUPER_FLEX", "RB", "WR", "TE", "BN", "BN"))
+    # 1 dedicated QB slot + 1 SUPER_FLEX (QB-eligible) + 1 extra = 3
+    assert waiver_value.position_cap("QB", league) == 3
