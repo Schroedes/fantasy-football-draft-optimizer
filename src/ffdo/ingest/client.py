@@ -11,6 +11,7 @@ from ffdo.ingest.http import get_json_with_retry
 
 V1 = "https://api.sleeper.app/v1"
 PROJECTIONS = "https://api.sleeper.app/projections/nfl"
+SCHEDULE = "https://api.sleeper.app/schedule/nfl/regular"
 
 
 class SleeperClient:
