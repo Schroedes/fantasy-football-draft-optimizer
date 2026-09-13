@@ -352,3 +352,26 @@
    discrete slot/current/arrow/delta columns. */
 .lineup-row.waiver-row { display: block; }
 .lineup-row.waiver-row > div + div { margin-top: 4px; }
+
+/* ---- scorecard tab ---- */
+.scorecard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.scorecard-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.scorecard-card h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.scorecard-card p {
+  margin: 4px 0;
+  font-size: 13px;
+}

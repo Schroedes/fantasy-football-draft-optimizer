@@ -26,6 +26,12 @@ construction (it won't suggest stockpiling QBs or TEs beyond what you can
 usefully start), with bid amounts fit from your own leagues' real
 historical waiver-claim outcomes.
 
+The **Scorecard** tab shows how good FFDO's own recommendations have
+actually been -- weeks your lineup rec was followed and points left on the
+bench when it wasn't, how your trades have played out since, your FAAB
+claim win rate and bid efficiency, and a grade breakdown for your own
+draft picks.
+
 ## Running it
 
 Install dependencies:
