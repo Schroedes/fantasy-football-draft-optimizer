@@ -111,3 +111,36 @@ def test_trade_metric_empty_outcomes():
         "total_trades_in_league": 0, "your_trades": 0,
         "gained_value": 0, "lost_value": 0, "unchanged": 0,
     }
+
+
+def test_waiver_metric_win_rate_over_recommended_claims_only():
+    outcomes = [
+        scorecard.WaiverOutcome(won=True, recommended_bid=10.0, actual_bid=10),
+        scorecard.WaiverOutcome(won=False, recommended_bid=5.0, actual_bid=5),
+        scorecard.WaiverOutcome(won=True, recommended_bid=None, actual_bid=20),  # not our rec
+    ]
+    result = scorecard.waiver_metric(outcomes)
+    assert result["recommended_claims"] == 2
+    assert result["win_rate"] == 0.5
+
+
+def test_waiver_metric_bid_delta_averages_actual_minus_recommended():
+    outcomes = [
+        scorecard.WaiverOutcome(won=True, recommended_bid=10.0, actual_bid=15),
+        scorecard.WaiverOutcome(won=True, recommended_bid=10.0, actual_bid=5),
+    ]
+    result = scorecard.waiver_metric(outcomes)
+    assert result["avg_bid_delta"] == 0.0
+
+
+def test_waiver_metric_no_recommended_claims_returns_none_rates():
+    outcomes = [scorecard.WaiverOutcome(won=True, recommended_bid=None, actual_bid=8)]
+    result = scorecard.waiver_metric(outcomes)
+    assert result["recommended_claims"] == 0
+    assert result["win_rate"] is None
+    assert result["avg_bid_delta"] is None
+
+
+def test_waiver_metric_empty_outcomes():
+    result = scorecard.waiver_metric([])
+    assert result == {"recommended_claims": 0, "win_rate": None, "avg_bid_delta": None}

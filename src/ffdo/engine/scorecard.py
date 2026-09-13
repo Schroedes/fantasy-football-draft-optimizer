@@ -90,3 +90,23 @@ def trade_metric(outcomes: Sequence[TradeOutcome], your_roster_id: int) -> dict:
         "your_trades": len(your_trades),
         "gained_value": gained, "lost_value": lost, "unchanged": unchanged,
     }
+
+
+@dataclass(frozen=True, slots=True)
+class WaiverOutcome:
+    won: bool
+    recommended_bid: float | None
+    actual_bid: int
+
+
+def waiver_metric(outcomes: Sequence[WaiverOutcome]) -> dict:
+    recommended = [o for o in outcomes if o.recommended_bid is not None]
+    win_rate = (sum(1 for o in recommended if o.won) / len(recommended)
+               if recommended else None)
+    bid_deltas = [o.actual_bid - o.recommended_bid for o in recommended]
+    avg_bid_delta = sum(bid_deltas) / len(bid_deltas) if bid_deltas else None
+    return {
+        "recommended_claims": len(recommended),
+        "win_rate": round(win_rate, 3) if win_rate is not None else None,
+        "avg_bid_delta": round(avg_bid_delta, 1) if avg_bid_delta is not None else None,
+    }

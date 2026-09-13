@@ -108,7 +108,7 @@ New `src/ffdo/engine/scorecard.py`, pure functions over ledger data (no I/O) —
 |---|---|---|
 | **Lineup** | Weeks fully/partially/not followed; estimated points left on the bench when not fully followed | `lineup_ledger` rows (existing `followed` status) joined at read time against final realized points for the recommended-vs-actual slots that differed — the ledger itself stores no points, only which players, so this join happens in `scorecard.py`, not by widening the ledger schema |
 | **Trade** | Value-at-trade vs. current recomputed value, per team: how many of your trades have gained/lost value since | `trade_ledger` rows + the same read-time current-value recompute `GET /trades` already does (#5) |
-| **Waiver** | Claim win rate, average realized VOR gain vs. predicted, bid efficiency (recommended vs. actual amount paid) | `waiver_ledger` rows |
+| **Waiver** | Claim win rate, bid efficiency (recommended vs. actual amount paid) -- `predicted_vor_gain` is captured in the ledger but a "realized VOR gain" comparison was cut from this sub-project's scope (it needs a full historical league-wide revaluation, not just the ledger's own stored fields) and left for a future follow-up | `waiver_ledger` rows |
 | **Draft** | Grade distribution (GREAT/GOOD/FAIR/POOR) for your own picks, aggregated across all drafts this league (or all tracked leagues) has run | `draft_pick_ledger` rows, filtered to `roster_id == your roster` |
 
 Each metric function takes ledger rows (already fetched by the API layer) plus whatever read-time data it needs (realized points, current valuations) and returns a plain dict — `api/app.py` composes these into one response, same pattern as every other season-screen endpoint.
