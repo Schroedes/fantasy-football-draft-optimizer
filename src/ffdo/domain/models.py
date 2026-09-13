@@ -302,3 +302,11 @@ class WaiverClaim:
     player_id: str
     bid_amount: float
     created_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class WaiverRecommendation:
+    free_agent_id: str
+    drop_player_id: str | None
+    vor_gain: float
+    suggested_bid: float

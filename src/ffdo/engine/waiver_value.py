@@ -9,6 +9,8 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Final
 
+from ffdo.domain.constants import INJURY_OUT_STATUSES
+from ffdo.domain.models import PlayerProfile, ValuedPlayer, WaiverRecommendation
 from ffdo.engine.replacement import FLEX_ELIGIBILITY
 
 POSITION_CAP_EXTRA: Final[dict[str, int]] = {"QB": 1, "TE": 1, "DEF": 0, "K": 0}
@@ -44,3 +46,58 @@ def position_cap(position: str, league) -> int | None:
         1 for s in league.roster_positions
         if s in FLEX_ELIGIBILITY and position in FLEX_ELIGIBILITY[s])
     return dedicated + flex_eligible + POSITION_CAP_EXTRA[position]
+
+
+def recommend_adds(
+    free_agent_ids: Iterable[str],
+    your_roster_ids: Iterable[str],
+    valued: Mapping[str, "ValuedPlayer"],
+    profiles: Mapping[str, "PlayerProfile"],
+    league,
+    faab_curve: Mapping[int, float],
+    remaining_budget: float,
+    *,
+    top_n: int = 10,
+    min_vor_gain: float = 5.0,
+) -> list["WaiverRecommendation"]:
+    your_ids = list(your_roster_ids)
+    your_by_position: dict[str, list[str]] = {}
+    for pid in your_ids:
+        prof = profiles.get(pid)
+        if prof is not None:
+            your_by_position.setdefault(prof.position, []).append(pid)
+
+    def _worst(pids: Sequence[str]) -> str | None:
+        candidates = [pid for pid in pids if pid in valued]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda pid: valued[pid].vor)
+
+    out: list[WaiverRecommendation] = []
+    for fa_id in free_agent_ids:
+        prof = profiles.get(fa_id)
+        vp = valued.get(fa_id)
+        if prof is None or vp is None:
+            continue
+        if not prof.active or prof.injury_status in INJURY_OUT_STATUSES:
+            continue
+
+        cap = position_cap(prof.position, league)
+        at_cap = cap is not None and len(your_by_position.get(prof.position, [])) >= cap
+
+        if at_cap:
+            drop_id = _worst(your_by_position.get(prof.position, []))
+        else:
+            drop_id = _worst(your_ids)
+        baseline = valued[drop_id].vor if drop_id is not None else 0.0
+
+        vor_gain = vp.vor - baseline
+        if vor_gain < min_vor_gain:
+            continue
+
+        out.append(WaiverRecommendation(
+            free_agent_id=fa_id, drop_player_id=drop_id, vor_gain=vor_gain,
+            suggested_bid=suggested_bid(vor_gain, remaining_budget, faab_curve)))
+
+    out.sort(key=lambda r: r.vor_gain, reverse=True)
+    return out[:top_n]

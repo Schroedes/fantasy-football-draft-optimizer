@@ -123,3 +123,109 @@ def test_position_cap_superflex_widens_the_qb_cap():
     league = _league(("QB", "SUPER_FLEX", "RB", "WR", "TE", "BN", "BN"))
     # 1 dedicated QB slot + 1 SUPER_FLEX (QB-eligible) + 1 extra = 3
     assert waiver_value.position_cap("QB", league) == 3
+
+
+from ffdo.domain.models import PlayerProfile, ValuedPlayer
+
+
+def _profile(pid, pos, injury=None, active=True):
+    return PlayerProfile(player_id=pid, first_name="A", last_name="B",
+                         position=pos, team="X", age=25, years_exp=3,
+                         injury_status=injury, active=active)
+
+
+def _valued(pid, pos, vor_val, injury=None, active=True):
+    return ValuedPlayer(profile=_profile(pid, pos, injury, active),
+                        projected_points=vor_val + 50.0, adjusted_points=vor_val + 50.0,
+                        vor=vor_val, tier=1, adjustments={})
+
+
+def test_recommends_a_clear_upgrade_over_worst_bench_player_with_open_position():
+    profiles = {"fa1": _profile("fa1", "WR"), "bench1": _profile("bench1", "RB")}
+    valued = {"fa1": _valued("fa1", "WR", 40.0), "bench1": _valued("bench1", "RB", 5.0)}
+    league = _league(("QB", "RB", "RB", "WR", "WR", "TE", "BN", "BN"))
+    result = waiver_value.recommend_adds(
+        ["fa1"], ["bench1"], valued, profiles, league,
+        faab_curve={0: 0.1, 30: 0.5}, remaining_budget=100.0)
+    assert len(result) == 1
+    assert result[0].free_agent_id == "fa1"
+    assert result[0].drop_player_id == "bench1"
+    assert result[0].vor_gain == pytest.approx(35.0)
+    assert result[0].suggested_bid == pytest.approx(50.0)  # bucket 30 -> 0.5 * 100
+
+
+def test_skips_a_free_agent_that_does_not_clear_min_vor_gain():
+    profiles = {"fa1": _profile("fa1", "WR"), "bench1": _profile("bench1", "RB")}
+    valued = {"fa1": _valued("fa1", "WR", 8.0), "bench1": _valued("bench1", "RB", 5.0)}
+    league = _league(("QB", "RB", "WR", "BN"))
+    result = waiver_value.recommend_adds(
+        ["fa1"], ["bench1"], valued, profiles, league,
+        faab_curve={0: 0.1}, remaining_budget=100.0, min_vor_gain=5.0)
+    assert result == []  # only 3.0 VOR gain, below the 5.0 minimum
+
+
+def test_excludes_an_injured_out_free_agent_entirely():
+    profiles = {"fa1": _profile("fa1", "WR", injury="IR"), "bench1": _profile("bench1", "RB")}
+    valued = {"fa1": _valued("fa1", "WR", 100.0, injury="IR"),
+              "bench1": _valued("bench1", "RB", 1.0)}
+    league = _league(("QB", "RB", "WR", "BN"))
+    result = waiver_value.recommend_adds(
+        ["fa1"], ["bench1"], valued, profiles, league,
+        faab_curve={0: 0.1}, remaining_budget=100.0)
+    assert result == []
+
+
+def test_at_position_cap_only_compares_against_the_same_position():
+    """The core scenario from brainstorming: a standard league already
+    rostering 2 QBs (at the cap of dedicated=1 + extra=1 = 2) must not
+    have a high-VOR free-agent QB compared against the worst BENCH player
+    overall (a low-VOR kicker) -- only against the user's worst QB."""
+    profiles = {
+        "fa_qb": _profile("fa_qb", "QB"),
+        "my_qb1": _profile("my_qb1", "QB"),
+        "my_qb2": _profile("my_qb2", "QB"),
+        "my_k": _profile("my_k", "K"),
+    }
+    valued = {
+        "fa_qb": _valued("fa_qb", "QB", 20.0),
+        "my_qb1": _valued("my_qb1", "QB", 15.0),
+        "my_qb2": _valued("my_qb2", "QB", 3.0),   # worst QB
+        "my_k": _valued("my_k", "K", -50.0),      # worst bench player overall
+    }
+    league = _league(("QB", "RB", "WR", "K", "BN", "BN"))
+    result = waiver_value.recommend_adds(
+        ["fa_qb"], ["my_qb1", "my_qb2", "my_k"], valued, profiles, league,
+        faab_curve={0: 0.1, 10: 0.3}, remaining_budget=100.0)
+    assert len(result) == 1
+    assert result[0].drop_player_id == "my_qb2"   # worst QB, not my_k
+    assert result[0].vor_gain == pytest.approx(17.0)  # 20.0 - 3.0, not 20.0 - (-50.0)
+
+
+def test_no_existing_players_at_all_means_a_pure_add_with_no_drop():
+    """Genuine edge case: an empty roster (e.g. right after first sync,
+    before any players are rostered) has no drop candidate at all -- not
+    a normal scenario (real rosters are kept full), but must not crash
+    and must not invent a drop candidate that doesn't exist."""
+    profiles = {"fa_qb": _profile("fa_qb", "QB")}
+    valued = {"fa_qb": _valued("fa_qb", "QB", 20.0)}
+    league = _league(("QB", "RB", "WR", "BN", "BN"))
+    result = waiver_value.recommend_adds(
+        ["fa_qb"], [], valued, profiles, league,
+        faab_curve={0: 0.1, 10: 0.3}, remaining_budget=100.0)
+    assert len(result) == 1
+    assert result[0].drop_player_id is None
+    assert result[0].vor_gain == pytest.approx(20.0)
+
+
+def test_sorted_by_vor_gain_descending_and_capped_at_top_n():
+    profiles = {f"fa{i}": _profile(f"fa{i}", "WR") for i in range(3)}
+    profiles["bench1"] = _profile("bench1", "RB")
+    valued = {f"fa{i}": _valued(f"fa{i}", "WR", float(10 * (i + 1))) for i in range(3)}
+    valued["bench1"] = _valued("bench1", "RB", 0.0)
+    league = _league(("QB", "RB", "WR", "BN"))
+    result = waiver_value.recommend_adds(
+        [f"fa{i}" for i in range(3)], ["bench1"], valued, profiles, league,
+        faab_curve={0: 0.1}, remaining_budget=100.0, top_n=2)
+    assert len(result) == 2
+    assert result[0].free_agent_id == "fa2"  # highest VOR (30.0) first
+    assert result[1].free_agent_id == "fa1"
