@@ -291,3 +291,14 @@ class TradeTransaction:
     picks_to_a: list[DraftPickAsset]
     picks_to_b: list[DraftPickAsset]
     traded_at_ms: int   # Sleeper's raw `created` epoch-millis timestamp
+
+
+@dataclass(frozen=True, slots=True)
+class WaiverClaim:
+    transaction_id: str
+    season: int
+    week: int
+    roster_id: int
+    player_id: str
+    bid_amount: float
+    created_ms: int
