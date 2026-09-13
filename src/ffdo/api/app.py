@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from ffdo.api.lineup_ledger import LineupLedger
 from ffdo.api.store import LeagueStore
 from ffdo.api.trade_ledger import TradeLedger
+from ffdo.api.waiver_ledger import WaiverLedger
 from ffdo.domain.models import DiscoveredLeague, TrackedLeague
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -37,6 +38,7 @@ _STORE = LeagueStore(Path("data") / "ffdo.db",
                      legacy_session_path=Path("data") / "session.json")
 _LINEUP_LEDGER = LineupLedger(Path("data") / "ffdo.db")
 _TRADE_LEDGER = TradeLedger(Path("data") / "ffdo.db")
+_WAIVER_LEDGER = WaiverLedger(Path("data") / "ffdo.db")
 
 _FORMATS = ("redraft", "keeper", "dynasty")
 
@@ -1641,6 +1643,15 @@ def create_app() -> FastAPI:
                 sleeper, lg.provider_league_id, season=lg.season, through_week=nfl.week)
             budgets = waivers_mod.remaining_budget(claims, waiver_budget=waiver_budget)
 
+            # For the ledger (outcome scorecard) -- every claim for the
+            # tracked roster, win or loss, not just the winning ones
+            # `claims` above is scoped to.
+            your_claims = (
+                [c for c in waivers_mod.fetch_all_claims(
+                    sleeper, lg.provider_league_id, season=lg.season, through_week=nfl.week)
+                 if c.roster_id == lg.roster_id]
+                if lg.roster_id is not None else [])
+
             all_player_ids = set(profiles)
         except HTTPException:
             raise
@@ -1665,6 +1676,24 @@ def create_app() -> FastAPI:
         recommendations = waiver_value_mod.recommend_adds(
             free_agent_ids, you.player_ids, valued, profiles, lg,
             FAAB_BID_CURVE, your_remaining)
+
+        # A claim only matches a recommendation if it happened THIS week
+        # (recommend_adds only ever returns the current week's top-N) --
+        # older claims are recorded with recommended_bid/predicted_vor_gain
+        # as None, an accepted, disclosed limitation: past weeks'
+        # recommendations were never persisted before this ledger existed,
+        # so they cannot be reconstructed now.
+        recommended_by_player = {r.free_agent_id: r for r in recommendations}
+        for claim in your_claims:
+            rec = recommended_by_player.get(claim.player_id)
+            _WAIVER_LEDGER.record_if_absent(
+                lg.league_key, transaction_id=claim.transaction_id, season=claim.season,
+                week=claim.week, roster_id=claim.roster_id, add_player_id=claim.player_id,
+                drop_player_id=rec.drop_player_id if rec else None,
+                recommended_bid=rec.suggested_bid if rec else None,
+                actual_bid=int(claim.bid_amount),
+                predicted_vor_gain=rec.vor_gain if rec else None,
+                won=claim.won)
 
         return {
             "remaining_budget": round(your_remaining, 1),
