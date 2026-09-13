@@ -45,6 +45,13 @@ export async function mountSeason(container, leagueKey, meta) {
     link.href = "/season/season.css";
     document.head.appendChild(link);
   }
+  // Undoes board.js's mount()'s body.board-mode: that class locks <body> to
+  // height: 100vh + overflow: hidden, which only works because the board
+  // screen's own panels (#board-scroll etc.) carry their own overflow-y:
+  // auto. This screen has no such internal scroll container, so leaving
+  // the class on left the page unscrollable the moment its content (or a
+  // browser zoom level) didn't fit in one viewport height.
+  document.body.classList.remove("board-mode");
 
   _c = container;
   _key = leagueKey;

@@ -30,10 +30,24 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 14px/1.4 var(--font-sans);
-  height: 100vh;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+/* The fixed-viewport, no-scroll layout is the draft board's own trick --
+   #board-scroll / #rosters-rows / #history-rows / #plan-rows /
+   #snakeplan-rows each carry their own overflow-y: auto and size to fill
+   whatever's left of the locked-height body, so the dashboard never needs a
+   page scrollbar. board.js's mount() stamps this class on <body> for
+   exactly as long as the board is the mounted screen.
+   The season screen (season.js) has no such internal scroll containers --
+   it's a plain two-panel flow -- so this class must NOT be active there, or
+   the page becomes unscrollable the moment content (or a browser zoom
+   level, which shrinks the effective viewport in CSS px) doesn't fit
+   height: 100vh, with no way to reach what's clipped below the fold.
+   season.js's mountSeason() removes the class for exactly this reason. */
+body.board-mode {
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* ---- top strip ---- */
@@ -376,7 +390,7 @@ tr.tier-break td { border-top: 2px solid var(--border-strong); }
   /* Stacked layout can't fit table + sidebar in one screen -- let the
      whole layout column scroll here instead of the desktop no-scroll
      constraint, which would otherwise clip content below the fold. */
-  body { overflow: visible; height: auto; }
+  body.board-mode { overflow: visible; height: auto; }
   #layout { flex-direction: column; overflow: visible; }
   #sidebar { width: 100%; overflow: visible; }
 }

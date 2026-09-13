@@ -201,10 +201,21 @@
 .pos-tabs button.on, .scope-toggle button.on { background: var(--accent); color: #0a0f14; }
 
 /* ---- power ranking / draft capital table ---- */
-.pr-table { display: flex; flex-direction: column; }
+/* overflow-x: auto so a container narrower than the columns' combined
+   minimum (fixed columns + gaps + the team column's own floor) scrolls
+   instead of forcing the grid to shrink the team column below its floor --
+   see the minmax() on the team track below. */
+.pr-table { display: flex; flex-direction: column; overflow-x: auto; }
 .pr-row {
   display: grid;
-  grid-template-columns: 44px 1fr 90px 70px 90px 64px;
+  /* The team column is minmax(110px, 1fr), not a bare 1fr: a bare 1fr's
+     minimum size is its content's min-content by default, but .pr-team sets
+     min-width: 0 (for its own text-overflow: ellipsis) which removes that
+     floor -- so whenever the row's available width was less than the other
+     five columns' combined fixed width + gaps, the bare 1fr computed to 0
+     and every team name vanished. minmax(110px, 1fr) puts an explicit floor
+     back under the track regardless of the item's own min-width. */
+  grid-template-columns: 44px minmax(110px, 1fr) 90px 70px 90px 64px;
   gap: 14px;
   align-items: center;
   padding: 10px;
@@ -216,6 +227,15 @@
   letter-spacing: 1px;
   color: var(--faint);
   padding: 0 10px 9px;
+}
+/* The data cells in these columns are right-aligned (see .pr-value,
+   .pr-rec, .pr-pf, .pr-delta below); the header spans carry no such class
+   and were left-aligned by default, so the column headers sat visibly
+   left of the numbers they labeled. Excluded from .cap-table, whose
+   per-year columns hold left-aligned pick chips, not right-aligned
+   numbers. */
+.pr-table:not(.cap-table) .pr-row.pr-head span:nth-child(n+3) {
+  text-align: right;
 }
 .pr-row.you { background: color-mix(in oklch, var(--accent) 8%, transparent); }
 .pr-rank { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--muted); }
@@ -255,7 +275,7 @@
    column count comes in as a custom property set on .pr-table.cap-table
    rather than a fixed selector. */
 .pr-row.cap-row {
-  grid-template-columns: 44px 1fr repeat(var(--cap-cols, 2), minmax(160px, 1fr));
+  grid-template-columns: 44px minmax(110px, 1fr) repeat(var(--cap-cols, 2), minmax(160px, 1fr));
 }
 .pick-cell { display: flex; flex-wrap: wrap; gap: 5px; }
 .pick-cell-empty { color: var(--faint); font-family: var(--font-mono); font-size: 11px; }

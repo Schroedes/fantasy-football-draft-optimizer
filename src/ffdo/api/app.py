@@ -390,7 +390,21 @@ def create_app() -> FastAPI:
         sleeper = client_mod.SleeperClient()
         try:
             players_cache.get(lambda: _load_players(sleeper))  # warms the cache; return value unused here
-            _projections_cache_for(season).get(lambda: _load_projections(sleeper, season))
+            try:
+                _projections_cache_for(season).get(lambda: _load_projections(sleeper, season))
+            except proj_mod.ContaminatedProjectionError:
+                # Expected once a season kicks off -- Sleeper's projections
+                # endpoint stops being trustworthy the moment it's edited
+                # post-kickoff (see projections.py's module docstring), and
+                # every in-season league track hits this on every warm.
+                # There's nothing to cache and nothing wrong to fix; the
+                # request path re-derives the same refusal on demand and
+                # falls back to ADP, so let this one signal go quiet instead
+                # of logging an unhandled-exception traceback on every
+                # background warm for the rest of the season.
+                logging.getLogger("ffdo.api").info(
+                    "season %s projections are post-kickoff; warm skipped, ADP will be used",
+                    season)
             if provider == "sleeper":
                 _teams_cache_for(league_id).get(lambda: _load_teams(sleeper, league_id))
         finally:
