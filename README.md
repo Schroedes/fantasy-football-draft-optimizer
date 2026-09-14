@@ -18,7 +18,11 @@ number.
 The **Trades** tab shows every real trade in the league (not just yours),
 each with its value at the moment it happened and how that trade has
 played out since -- draft picks included, valued from real historical
-rookie-draft outcomes rather than a guessed chart.
+rookie-draft outcomes rather than a guessed chart. A **Propose a trade**
+button opens the Trade Machine, a what-if calculator: pick players and
+future picks from your roster and any other team's, and the value/
+differential updates live as you go. Nothing built there is saved --
+only real, completed trades ever show up in the ledger above it.
 
 The **Waivers** tab (FAAB leagues only) recommends free-agent adds, which
 bench player to drop for each, and how much to bid -- respecting roster

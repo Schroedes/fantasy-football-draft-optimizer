@@ -45,6 +45,95 @@ def test_trade_evaluate_returns_both_sides_value(monkeypatch, tmp_path):
     assert "side_a_value" in data and "side_b_value" in data and "differential" in data
 
 
+def test_trade_builder_returns_every_teams_players_with_values(monkeypatch, tmp_path):
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_tracked(fmt="redraft"))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+
+    resp = {
+        f"{V1}/state/nfl": _STATE, f"{V1}/league/L1/rosters": _ROSTERS,
+        f"{V1}/league/L1/users": _USERS, f"{V1}/league/L1/traded_picks": [],
+        f"{V1}/players/nfl": _PLAYERS, "/projections/": _PROJ, "/matchups/": _MATCHUPS,
+    }
+
+    class _FakeClient:
+        def __init__(self, *a, **k): pass
+        def get_json(self, url, *a, **k):
+            for key, val in resp.items():
+                if key in url:
+                    return val
+            return [] if "/matchups/" in url or "/projections/" in url else {}
+        def close(self): pass
+
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeClient)
+    client = TestClient(create_app())
+    res = client.get("/api/leagues/sleeper:L1:2026/trade-builder")
+    assert res.status_code == 200
+    teams = res.json()["teams"]
+    assert len(teams) == 2
+
+    you = next(t for t in teams if t["is_you"])
+    assert you["roster_id"] == 1
+    player_ids = {p["player_id"] for p in you["players"]}
+    assert player_ids == {"p_qb", "p_rb", "p_wr"}
+    for p in you["players"]:
+        assert "name" in p and "position" in p and "value" in p
+
+    # Redraft has no future picks to trade.
+    assert you["picks"] == []
+
+    partner = next(t for t in teams if not t["is_you"])
+    assert partner["roster_id"] == 2
+    assert {p["player_id"] for p in partner["players"]} == {"p_rb2"}
+
+
+def test_trade_builder_includes_future_picks_for_a_dynasty_league(monkeypatch, tmp_path):
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_tracked(fmt="dynasty"))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+
+    resp = {
+        f"{V1}/state/nfl": _STATE, f"{V1}/league/L1/rosters": _ROSTERS,
+        f"{V1}/league/L1/users": _USERS, f"{V1}/league/L1/traded_picks": [],
+        f"{V1}/players/nfl": _PLAYERS, "/projections/": _PROJ, "/matchups/": _MATCHUPS,
+    }
+
+    class _FakeClient:
+        def __init__(self, *a, **k): pass
+        def get_json(self, url, *a, **k):
+            for key, val in resp.items():
+                if key in url:
+                    return val
+            return [] if "/matchups/" in url or "/projections/" in url else {}
+        def close(self): pass
+
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeClient)
+    client = TestClient(create_app())
+    res = client.get("/api/leagues/sleeper:L1:2026/trade-builder")
+    assert res.status_code == 200
+    teams = res.json()["teams"]
+    you = next(t for t in teams if t["is_you"])
+
+    # An empty traded_picks feed still yields every roster's own untraded
+    # picks -- 2 draft years x 4 rounds (raw_settings.draft_rounds) each,
+    # per traded_picks.capital's implicit-ownership rule.
+    assert len(you["picks"]) == 8
+    for pick in you["picks"]:
+        assert pick["current_owner_roster_id"] == 1
+        assert "label" in pick and "value" in pick
+        assert "season" in pick and "round" in pick and "projected_slot" in pick
+        assert "original_roster_id" in pick
+
+
+def test_trade_builder_is_sleeper_only():
+    from ffdo.domain.models import TrackedLeague
+
+    app_mod._STORE.upsert(_tracked(
+        league_key="espn:E1:2026", provider="espn", provider_league_id="E1"))
+    res = TestClient(create_app()).get("/api/leagues/espn:E1:2026/trade-builder")
+    assert res.status_code == 400
+
+
 def test_trades_endpoint_returns_empty_list_with_no_real_trades(monkeypatch, tmp_path):
     store = LeagueStore(tmp_path / "ffdo.db")
     store.upsert(_tracked(fmt="redraft"))
