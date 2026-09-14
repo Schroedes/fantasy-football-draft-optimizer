@@ -206,6 +206,7 @@ def create_app() -> FastAPI:
     from ffdo.engine import pick_value as pick_value_mod
     from ffdo.engine import power_ranking as power_ranking_mod
     from ffdo.engine import ros_value as ros_value_mod
+    from ffdo.engine import roster_needs as roster_needs_mod
     from ffdo.engine import scorecard as scorecard_mod
     from ffdo.engine import trade_value as trade_value_mod
     from ffdo.ingest import actuals as actuals_mod
@@ -1564,13 +1565,42 @@ def create_app() -> FastAPI:
              "picks": _picks_from_payload(side_b.get("picks", []))},
             valued_players=valued, pick_curve=PICK_VALUE_CURVE,
             current_season=lg.season, round_size=lg.num_teams)
-        return {
+
+        response = {
             "side_a_value": round(result.side_a_value, 1),
             "side_b_value": round(result.side_b_value, 1),
             "differential": round(result.differential, 1),
             "differential_pct": (round(result.differential_pct, 3)
                                  if result.differential_pct is not None else None),
         }
+
+        # Roster-needs depth-impact preview: only computable when both a
+        # real partner_roster_id and both rosters are known -- degrades to
+        # simply omitting these fields rather than 400ing, since the value
+        # comparison above is still useful on its own (e.g. mid-selection,
+        # before a partner is fully resolved).
+        you_roster = next((r for r in rosters if r.roster_id == lg.roster_id), None)
+        partner_roster = next(
+            (r for r in rosters if r.roster_id == payload.get("partner_roster_id")), None)
+        if you_roster is not None and partner_roster is not None:
+            side_a_ids = set(side_a.get("player_ids", []))
+            side_b_ids = set(side_b.get("player_ids", []))
+            you_after = replace(you_roster, player_ids=tuple(
+                (set(you_roster.player_ids) - side_a_ids) | side_b_ids))
+            partner_after = replace(partner_roster, player_ids=tuple(
+                (set(partner_roster.player_ids) - side_b_ids) | side_a_ids))
+
+            def _needs_json(entry) -> dict:
+                return {pos: {"rank": n.rank, "severity": n.severity}
+                       for pos, n in roster_needs_mod.position_needs(
+                           entry, rosters, valued, lg).items()}
+
+            response["needs_before"] = {
+                "you": _needs_json(you_roster), "partner": _needs_json(partner_roster)}
+            response["needs_after"] = {
+                "you": _needs_json(you_after), "partner": _needs_json(partner_after)}
+
+        return response
 
     @app.get("/api/leagues/{league_key}/trade-builder")
     def get_trade_builder(league_key: str) -> dict:
