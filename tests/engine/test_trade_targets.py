@@ -250,21 +250,59 @@ def test_suggest_for_team_folds_already_selected_into_the_hypothetical_roster():
 
 
 def test_suggest_for_team_excludes_already_selected_yours_from_target_candidacy():
-    # r1a (your best RB, currently checked as something you're ALREADY
-    # offering the partner in this in-progress trade) must never be
-    # suggested back as a NEW target -- even though folding it into
-    # their_hypo for needs-scoring purposes is correct, it must not also
-    # become eligible as a candidate the partner's own side could "give"
-    # you again. Before the fix, this fixture reproduced target_player_ids
-    # == ("r1a",) -- your own player suggested as the ask.
+    # already_selected_yours is folded INTO their_hypo (it's hypothetically
+    # already on its way to the partner), so the excluded player is
+    # physically present in the pool _best_candidate_excluding scans for a
+    # NEW target. This fixture is a separate, local roster shape (not
+    # _YOUR/_THEIRS/_POS_VALUED) specifically so the position r1a sits at
+    # (RB) can flip from your offer-surplus to your NEEDY position once r1a
+    # is pulled out -- that flip is what makes RB a *target* position at
+    # all, which is the only way r1a's presence in their_hypo's RB pool can
+    # matter. A second, untouched position (TE) is built as a genuine
+    # your-surplus/their-need position so offer_positions stays non-empty
+    # and the pipeline actually reaches candidate selection instead of
+    # short-circuiting via `if not target_positions or not offer_positions`.
+    #
+    # Empirically verified (see PR description / dev notes): with r1a
+    # removed, your_needs == {RB: Severe, TE: Fine, QB: Moderate, WR:
+    # Severe} and their_needs (r1a folded in) == {RB: Fine, TE: Severe, QB:
+    # Severe, WR: Moderate} -- RB is the only target position, TE the only
+    # offer position, giving exactly one suggestion. Reverting just the
+    # candidate-exclusion lines in suggest_for_team (so _best_at_position/
+    # _players_at_position are used instead of the *_excluding helpers)
+    # reproduces target_player_ids == ("r1a",) on this exact fixture -- your
+    # own already-offered player suggested back as the ask -- confirming
+    # the fix and this regression test actually exercise the bug.
+    league = _league(("QB", "RB", "RB", "WR", "WR", "TE", "BN", "BN", "BN", "BN", "BN"))
+    valued = {
+        "q1": _vp("q1", "QB", 20),
+        "r1a": _vp("r1a", "RB", 30), "r1b": _vp("r1b", "RB", 12), "r1c": _vp("r1c", "RB", 5),
+        "w1a": _vp("w1a", "WR", 8),
+        "t1a": _vp("t1a", "TE", 8), "t1b": _vp("t1b", "TE", 6),
+        "q2": _vp("q2", "QB", 15),
+        "r2a": _vp("r2a", "RB", 20), "r2b": _vp("r2b", "RB", 18),
+        "w2a": _vp("w2a", "WR", 32),
+        "t2a": _vp("t2a", "TE", 5),
+    }
+    your_roster = _entry(1, ["q1", "r1a", "r1b", "r1c", "w1a", "t1a", "t1b"])
+    their_roster = _entry(2, ["q2", "r2a", "r2b", "w2a", "t2a"])
+    all_rosters = [your_roster, their_roster]
+
     suggestions = trade_targets.suggest_for_team(
-        _YOUR, _THEIRS, _ALL_ROSTERS, _POS_VALUED, _POS_LEAGUE,
+        your_roster, their_roster, all_rosters, valued, league,
         free_agent_ids=[], your_picks=[],
         pick_curve=_CURVE, current_season=2026, round_size=10,
         already_selected_yours=frozenset({"r1a"}))
-    for s in suggestions:
-        assert "r1a" not in s.target_player_ids
-        assert "r1a" not in s.offer_player_ids
+
+    assert len(suggestions) == 1
+    s = suggestions[0]
+    assert s.target_position == "RB"
+    assert s.offer_position == "TE"
+    assert s.target_player_ids == ("r2a",)  # NOT r1a, even though r1a out-values r2a/r2b
+    assert s.offer_player_ids == ("t1a",)
+    for suggestion in suggestions:
+        assert "r1a" not in suggestion.target_player_ids
+        assert "r1a" not in suggestion.offer_player_ids
 
 
 def test_suggest_for_team_returns_empty_with_no_two_way_fit():
