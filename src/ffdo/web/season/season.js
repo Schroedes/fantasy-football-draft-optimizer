@@ -852,6 +852,52 @@ function tbScoreboardHTML() {
     </div>`;
 }
 
+function tbNeedsHTML() {
+  if (!_tradeBuilderEval || _tradeBuilderEval.error || !_tradeBuilderEval.needs_before) {
+    return "";
+  }
+  const positions = ["QB", "RB", "WR", "TE"];
+  const sideRows = (side) => positions.map(pos => {
+    const before = _tradeBuilderEval.needs_before[side][pos];
+    const after = _tradeBuilderEval.needs_after[side][pos];
+    const order = { Fine: 0, Moderate: 1, Severe: 2 };
+    let deltaClass = "";
+    if (order[after.severity] > order[before.severity]) deltaClass = "loss";
+    else if (order[after.severity] < order[before.severity]) deltaClass = "gain";
+    return `<div class="tb-need-row">
+      <span class="tb-need-pos">${pos}</span>
+      <span class="tb-need-delta ${deltaClass}">${ordinalSuffix(before.rank)} &rarr; ${ordinalSuffix(after.rank)}
+        (${escapeHtml(before.severity)} &rarr; ${escapeHtml(after.severity)})</span>
+    </div>`;
+  }).join("");
+
+  return `
+    <div class="tb-needs">
+      <p class="tb-section-label">Roster needs impact</p>
+      <div class="tb-needs-cols">
+        <div class="tb-needs-col">
+          <p class="tb-side-label">Your team</p>
+          ${sideRows("you")}
+        </div>
+        <div class="tb-needs-col">
+          <p class="tb-side-label">Partner</p>
+          ${sideRows("partner")}
+        </div>
+      </div>
+    </div>`;
+}
+
+function ordinalSuffix(n) {
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1: return `${n}st`;
+    case 2: return `${n}nd`;
+    case 3: return `${n}rd`;
+    default: return `${n}th`;
+  }
+}
+
 function renderTradeBuilderModal() {
   const root = document.getElementById("trade-builder-root");
   if (!root) return;
@@ -908,6 +954,7 @@ function renderTradeBuilderModal() {
         </div>
       </div>
       ${tbScoreboardHTML()}
+      ${tbNeedsHTML()}
       <div class="tb-foot">
         <p class="tb-hint">This is a what-if calculator only &mdash; nothing here is saved. Real completed trades still show up in the ledger below once they happen.</p>
         <button class="tb-done-btn" type="button" data-tb-close>Done</button>
