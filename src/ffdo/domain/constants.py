@@ -166,6 +166,34 @@ PICK_VALUE_CURVE: Final[dict[int, dict]] = {
     5: {'exact': {}, 'early': -46.47, 'mid': -51.75, 'late': -47.35, 'round_avg': -48.53},
 }
 
+# Fit from Task 3's real run -- paste the EXACT printed output here,
+# including its leading comment line recording how many observations/
+# league-seasons/MIN_SAMPLE/BUCKET_WIDTH it was fit from. Do not hand-edit
+# the pasted values.
+# Fit from 423 real waiver observations across 6 league-seasons, MIN_SAMPLE=3, BUCKET_WIDTH=10
+FAAB_BID_CURVE: Final[dict[int, float]] = {
+    -170: 0.0,
+    -140: 0.0065,
+    -130: 0.0635,
+    -120: 0.005,
+    -110: 0.0946,
+    -100: 0.0249,
+    -90: 0.059,
+    -80: 0.0285,
+    -70: 0.0519,
+    -60: 0.0965,
+    -50: 0.0534,
+    -40: 0.0667,
+    -30: 0.1416,
+    -20: 0.0842,
+    -10: 0.1251,
+    0: 0.0708,
+    10: 0.1503,
+    20: 0.0814,
+    30: 0.3184,
+    40: 0.05,
+}
+
 # Scoring keys excluded from offense classification even when they match an
 # offense-vocabulary prefix or bare key. `fum_rec`/`fum_rec_td` are credited
 # to defensive/special-teams units, never to an offensive player. `pass_int_td`

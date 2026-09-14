@@ -20,6 +20,12 @@ each with its value at the moment it happened and how that trade has
 played out since -- draft picks included, valued from real historical
 rookie-draft outcomes rather than a guessed chart.
 
+The **Waivers** tab (FAAB leagues only) recommends free-agent adds, which
+bench player to drop for each, and how much to bid -- respecting roster
+construction (it won't suggest stockpiling QBs or TEs beyond what you can
+usefully start), with bid amounts fit from your own leagues' real
+historical waiver-claim outcomes.
+
 ## Running it
 
 Install dependencies:

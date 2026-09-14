@@ -40,3 +40,20 @@ def test_pick_value_curve_values_are_plausible_vor_magnitudes():
 def test_pick_value_curve_rounds_are_positive_integers():
     for rnd in PICK_VALUE_CURVE:
         assert isinstance(rnd, int) and rnd >= 1
+
+
+from ffdo.domain.constants import FAAB_BID_CURVE
+
+
+def test_faab_bid_curve_keys_are_ints():
+    for bucket in FAAB_BID_CURVE:
+        assert isinstance(bucket, int)
+
+
+def test_faab_bid_curve_values_are_plausible_bid_fractions():
+    for pct in FAAB_BID_CURVE.values():
+        assert 0.0 <= pct < 5.0
+
+
+def test_faab_bid_curve_is_not_empty():
+    assert len(FAAB_BID_CURVE) > 0
