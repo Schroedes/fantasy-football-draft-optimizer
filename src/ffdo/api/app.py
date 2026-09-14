@@ -1475,7 +1475,7 @@ def create_app() -> FastAPI:
         # VOR/replacement-level baseline, same as power_ranking.py's
         # league-wide pool) -- but the lineup solve itself must only pick
         # from the tracked user's own roster, or it can recommend starting
-        # another team's player. Same scoping `power_ranking._team_value`
+        # another team's player. Same scoping `power_ranking.team_value`
         # already does for the season view's per-team lineup solve.
         you_roster = next((r for r in rosters if r.roster_id == lg.roster_id), None)
         your_valued = ({pid: valued[pid] for pid in you_roster.player_ids if pid in valued}

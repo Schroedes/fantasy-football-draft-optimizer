@@ -16,7 +16,7 @@ from ffdo.engine.roster import team_lineup
 _POSITIONS = ("QB", "RB", "WR", "TE")
 
 
-def _team_value(
+def team_value(
     entry: RosterEntry,
     valued: Mapping[str, ValuedPlayer],
     league,
@@ -54,7 +54,7 @@ def rank(
 ) -> list[PowerRow]:
     scored = []
     for entry in rosters:
-        value, bench = _team_value(entry, valued, league, position=position, scope=scope)
+        value, bench = team_value(entry, valued, league, position=position, scope=scope)
         scored.append((entry, value, bench))
 
     scored.sort(key=lambda t: (-t[1], t[0].roster_id))   # value desc, roster_id for determinism
