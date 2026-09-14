@@ -795,6 +795,7 @@ async function loadTradeBuilder() {
   }
   renderTradeBuilderModal();
   if (!result.error && _tradeBuilderPartnerId !== null) {
+    evaluateTradeBuilder();
     fetchTradeSuggestions();
   }
 }
