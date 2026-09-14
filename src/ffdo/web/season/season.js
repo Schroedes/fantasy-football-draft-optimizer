@@ -17,6 +17,7 @@ let _panel = "lineup", _pos = "OVR", _scope = "starters";
 let _lineupData = null;   // null until the Lineup tab has been opened at least once
 let _tradesData = null;   // null until the Trades tab has been opened at least once
 let _waiversData = null;  // null until the Waivers tab has been opened at least once
+let _scorecardData = null; // null until the Scorecard tab has been opened at least once
 
 // Sub-strip (week context + refresh) above a two-panel skeleton. #season-body
 // itself is deliberately left empty here -- render() populates it (and
@@ -67,6 +68,7 @@ export async function mountSeason(container, leagueKey, meta) {
   _lineupData = null;
   _tradesData = null;
   _waiversData = null;
+  _scorecardData = null;
 
   container.innerHTML = SHELL;
   container.querySelector("#season-refresh").addEventListener("click", load);
@@ -123,6 +125,7 @@ function renderRightPanel() {
       ${showCapital ? `<button data-panel-tab="capital" class="${_panel === "capital" ? "on" : ""}">Draft capital</button>` : ""}
       <button data-panel-tab="trades" class="${_panel === "trades" ? "on" : ""}">Trades</button>
       <button data-panel-tab="waivers" class="${_panel === "waivers" ? "on" : ""}">Waivers</button>
+      <button data-panel-tab="scorecard" class="${_panel === "scorecard" ? "on" : ""}">Scorecard</button>
     </div>`;
   if (_panel === "lineup") {
     if (_lineupData === null) {
@@ -144,6 +147,13 @@ function renderRightPanel() {
       return tabBar + `<div class="lineup-loading">Loading waivers&hellip;</div>`;
     }
     return tabBar + renderWaivers();
+  }
+  if (_panel === "scorecard") {
+    if (_scorecardData === null) {
+      loadScorecard();
+      return tabBar + `<div class="lineup-loading">Loading scorecard&hellip;</div>`;
+    }
+    return tabBar + renderScorecard();
   }
   return tabBar + (_panel === "capital" ? renderCapital() : renderPower());
 }
@@ -327,6 +337,77 @@ function renderWaivers() {
     </div>`;
   }).join("");
   return header + `<div class="lineup-list">${rows}</div>`;
+}
+
+async function loadScorecard() {
+  // Same stale-response guard as loadLineup()/loadTrades()/loadWaivers()
+  // above -- capture _key before the first await and bail if the user has
+  // switched leagues by the time any await resolves, so a slow response for
+  // a league the user has left can't clobber the newly-reset (or
+  // still-loading) _scorecardData.
+  const myKey = _key;
+  let result;
+  try {
+    const res = await fetch(`/api/leagues/${encodeURIComponent(myKey)}/scorecard`);
+    if (_key !== myKey) return;
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      if (_key !== myKey) return;
+      result = { error: body.detail || "Couldn't load the scorecard" };
+    } else {
+      const data = await res.json();
+      if (_key !== myKey) return;
+      result = data;
+    }
+  } catch (e) {
+    if (_key !== myKey) return;
+    result = { error: "Couldn't load the scorecard" };
+  }
+  _scorecardData = result;
+  render();
+}
+
+function renderScorecard() {
+  if (_scorecardData.error) {
+    return `<div class="lineup-error">${escapeHtml(_scorecardData.error)}</div>`;
+  }
+  const l = _scorecardData.lineup;
+  const t = _scorecardData.trade;
+  const w = _scorecardData.waiver;
+  const d = _scorecardData.draft;
+
+  const lineupCard = `
+    <div class="scorecard-card">
+      <h3>Lineup</h3>
+      <p>${l.weeks_resolved} weeks resolved &mdash; ${l.weeks_full} fully followed,
+         ${l.weeks_partial} partial, ${l.weeks_none} not followed</p>
+      <p>Points left on the bench when not followed: ${l.points_left_on_bench}</p>
+    </div>`;
+
+  const tradeCard = `
+    <div class="scorecard-card">
+      <h3>Trades</h3>
+      <p>${t.total_trades_in_league} trades in the league, ${t.your_trades} involving you</p>
+      <p>Gained value: ${t.gained_value} &middot; Lost value: ${t.lost_value} &middot; Unchanged: ${t.unchanged}</p>
+    </div>`;
+
+  const waiverCard = `
+    <div class="scorecard-card">
+      <h3>Waivers</h3>
+      <p>${w.recommended_claims} recommended claims &mdash;
+         win rate: ${w.win_rate === null ? "&mdash;" : (w.win_rate * 100).toFixed(0) + "%"}</p>
+      <p>Avg bid vs. recommended: ${w.avg_bid_delta === null ? "&mdash;" : w.avg_bid_delta}</p>
+    </div>`;
+
+  const draftCard = `
+    <div class="scorecard-card">
+      <h3>Draft</h3>
+      <p>${d.picks_graded} of your picks graded</p>
+      <p>GREAT: ${d.grade_counts.GREAT} &middot; GOOD: ${d.grade_counts.GOOD} &middot;
+         FAIR: ${d.grade_counts.FAIR} &middot; POOR: ${d.grade_counts.POOR}</p>
+    </div>`;
+
+  return `<div class="scorecard-grid">${lineupCard}${tradeCard}${waiverCard}${draftCard}</div>`;
 }
 
 function renderPower() {

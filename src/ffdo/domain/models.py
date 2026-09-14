@@ -302,6 +302,7 @@ class WaiverClaim:
     player_id: str
     bid_amount: float
     created_ms: int
+    won: bool = True
 
 
 @dataclass(frozen=True, slots=True)

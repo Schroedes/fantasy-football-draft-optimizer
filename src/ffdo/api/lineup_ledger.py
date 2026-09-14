@@ -149,6 +149,18 @@ class LineupLedger:
             conn.commit()
         return followed
 
+    def list_for_league(self, league_key: str) -> list[LineupRecord]:
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT * FROM lineup_recommendation WHERE league_key = ? "
+                    "ORDER BY season ASC, week ASC",
+                    (league_key,),
+                ).fetchall()
+        except sqlite3.DatabaseError:
+            return []
+        return [self._row_to_record(row) for row in rows]
+
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> LineupRecord:
         recommended_raw = json.loads(row["recommended_json"])
