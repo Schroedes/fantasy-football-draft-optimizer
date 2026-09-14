@@ -209,6 +209,7 @@ def create_app() -> FastAPI:
     from ffdo.engine import roster_needs as roster_needs_mod
     from ffdo.engine import scorecard as scorecard_mod
     from ffdo.engine import trade_value as trade_value_mod
+    from ffdo.engine import trade_targets as trade_targets_mod
     from ffdo.ingest import actuals as actuals_mod
     from ffdo.ingest import client as client_mod
     from ffdo.ingest import connect as connect_mod
@@ -1698,6 +1699,148 @@ def create_app() -> FastAPI:
         teams.sort(key=lambda t: (not t["is_you"], t["team_name"]))
 
         return {"teams": teams}
+
+    def _load_trade_targets_context(lg):
+        """Rosters, valuations, player profiles, free-agent ids, and your
+        own team's future picks -- everything both new endpoints below
+        need. Mirrors get_trade_builder's fetch pattern; kept separate
+        from it (not extracted into a shared helper) since no existing
+        endpoint in this file shares fetch logic across endpoints either
+        -- each fetches independently. Returns None on a Sleeper outage."""
+        sleeper = client_mod.SleeperClient()
+        try:
+            nfl = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
+            profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            proj_anchor = _season_proj_anchor_for(lg.season).get(
+                lambda: _load_projection_anchor(sleeper, lg.season))
+            rosters = rosters_mod.fetch(sleeper, lg.provider_league_id)
+            through_week = _through_week(nfl)
+            actuals = actuals_mod.points_so_far(sleeper, lg.provider_league_id, through_week)
+
+            your_picks: list = []
+            if lg.resolved_format in ("dynasty", "keeper"):
+                worst_to_best = sorted(rosters, key=lambda r: (r.wins, r.points_for))
+                try:
+                    capital = traded_picks_mod.capital(
+                        sleeper, lg.provider_league_id,
+                        num_teams=lg.num_teams,
+                        rounds=int((lg.raw_settings or {}).get("draft_rounds") or 4),
+                        standings_order=[r.roster_id for r in worst_to_best],
+                        draft_years=(lg.season + 1, lg.season + 2),
+                        team_names={r.roster_id: r.team_name for r in rosters})
+                    your_picks = [a for a in capital if a.current_owner_roster_id == lg.roster_id]
+                except (httpx.HTTPError, RuntimeError):
+                    logging.getLogger("ffdo.api").warning(
+                        "trade-targets: traded-picks fetch failed for %s, picks omitted",
+                        lg.league_key)
+        except (httpx.HTTPError, RuntimeError):
+            return None
+        finally:
+            sleeper.close()
+
+        all_pids = {pid for r in rosters for pid in r.player_ids}
+        valued = ros_value_mod.roster_value(
+            all_pids, lg, resolved_format=lg.resolved_format, season_proj=proj_anchor,
+            profiles=profiles, actuals=actuals, weeks_played=through_week,
+            season_weeks=_season_weeks(lg.season))
+        free_agent_ids = waiver_value_mod.free_agents(set(profiles.keys()), rosters)
+
+        return rosters, valued, profiles, free_agent_ids, your_picks
+
+    def _suggestion_json(s, valued, profiles) -> dict:
+        def _player_row(pid: str) -> dict:
+            prof = profiles.get(pid)
+            vp = valued.get(pid)
+            return {
+                "player_id": pid,
+                "name": prof.full_name if prof else pid,
+                "position": prof.position if prof else "",
+                "value": round(vp.vor, 1) if vp is not None else 0.0,
+            }
+
+        def _pick_row(pick) -> dict:
+            return {"label": pick.label, "season": pick.season, "round": pick.round,
+                    "original_roster_id": pick.original_roster_id}
+
+        return {
+            "partner_roster_id": s.partner_roster_id,
+            "partner_team_name": s.partner_team_name,
+            "target_players": [_player_row(pid) for pid in s.target_player_ids],
+            "offer_players": [_player_row(pid) for pid in s.offer_player_ids],
+            "offer_picks": [_pick_row(p) for p in s.offer_picks],
+            "target_value": s.target_value,
+            "offer_value": s.offer_value,
+            "net_value_gain": s.net_value_gain,
+            "differential": s.differential,
+            "why": (f"Fills your {s.target_position} need -- they're deep at "
+                    f"{s.target_position} and thin at {s.offer_position}, "
+                    f"where you have surplus."),
+        }
+
+    @app.post("/api/leagues/{league_key}/trade/suggestions")
+    def get_trade_suggestions(league_key: str, payload: dict) -> dict:
+        """Counter-offer suggestions for the trade partner already selected
+        in the live Trade Machine session (spec (C)) -- same request shape
+        as POST /trade/evaluate, so whatever's already checked there is
+        folded into the hypothetical roster suggest_for_team scores
+        against."""
+        lg = _load_league(league_key)
+        if lg.provider != "sleeper":
+            raise HTTPException(status_code=400, detail="Trade suggestions are Sleeper-only for now")
+
+        ctx = _load_trade_targets_context(lg)
+        if ctx is None:
+            raise HTTPException(status_code=502, detail="Couldn't reach Sleeper, try again")
+        rosters, valued, profiles, free_agent_ids, your_picks = ctx
+
+        you_roster = next((r for r in rosters if r.roster_id == lg.roster_id), None)
+        partner_roster = next(
+            (r for r in rosters if r.roster_id == payload.get("partner_roster_id")), None)
+        if you_roster is None or partner_roster is None:
+            return {"suggestions": []}
+
+        side_a = payload.get("side_a") or {}
+        side_b = payload.get("side_b") or {}
+        already_yours = frozenset(side_a.get("player_ids", []))
+        already_theirs = frozenset(side_b.get("player_ids", []))
+
+        suggestions = trade_targets_mod.suggest_for_team(
+            you_roster, partner_roster, rosters, valued, lg, free_agent_ids, your_picks,
+            pick_curve=PICK_VALUE_CURVE, current_season=lg.season, round_size=lg.num_teams,
+            already_selected_yours=already_yours, already_selected_theirs=already_theirs)
+
+        return {"suggestions": [_suggestion_json(s, valued, profiles) for s in suggestions]}
+
+    @app.get("/api/leagues/{league_key}/trade-targets")
+    def get_trade_targets(league_key: str) -> dict:
+        """League-wide "who should I target" browse (spec (D)) -- your real
+        current roster against every other team, nothing pre-selected.
+        Merges every team's suggest_for_team() output, top 10 by net value
+        gain."""
+        lg = _load_league(league_key)
+        if lg.provider != "sleeper":
+            raise HTTPException(status_code=400, detail="Trade targets are Sleeper-only for now")
+
+        ctx = _load_trade_targets_context(lg)
+        if ctx is None:
+            raise HTTPException(status_code=502, detail="Couldn't reach Sleeper, try again")
+        rosters, valued, profiles, free_agent_ids, your_picks = ctx
+
+        you_roster = next((r for r in rosters if r.roster_id == lg.roster_id), None)
+        if you_roster is None:
+            return {"suggestions": []}
+
+        all_suggestions = []
+        for partner_roster in rosters:
+            if partner_roster.roster_id == you_roster.roster_id:
+                continue
+            all_suggestions.extend(trade_targets_mod.suggest_for_team(
+                you_roster, partner_roster, rosters, valued, lg, free_agent_ids, your_picks,
+                pick_curve=PICK_VALUE_CURVE, current_season=lg.season, round_size=lg.num_teams))
+
+        all_suggestions.sort(key=lambda s: -s.net_value_gain)
+        top = all_suggestions[:10]
+        return {"suggestions": [_suggestion_json(s, valued, profiles) for s in top]}
 
     @app.get("/api/leagues/{league_key}/trades")
     def get_trades(league_key: str) -> dict:
