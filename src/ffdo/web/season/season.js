@@ -28,6 +28,8 @@ let _tradeBuilderPartnerSel = new Set();
 let _tradeBuilderEval = null;       // last POST /trade/evaluate result, {error:true}, or null (nothing selected yet)
 let _tradeBuilderEvalPending = false;
 let _tradeBuilderEvalTimer = null;
+let _tbSuggestions = null;         // last POST /trade/suggestions result, {error:true}, or null (not loaded yet)
+let _tbSuggestionsPending = false;
 
 // Sub-strip (week context + refresh) above a two-panel skeleton. #season-body
 // itself is deliberately left empty here -- render() populates it (and
@@ -88,6 +90,8 @@ export async function mountSeason(container, leagueKey, meta) {
   _tradeBuilderEval = null;
   _tradeBuilderEvalPending = false;
   clearTimeout(_tradeBuilderEvalTimer);
+  _tbSuggestions = null;
+  _tbSuggestionsPending = false;
 
   container.innerHTML = SHELL;
   container.querySelector("#season-refresh").addEventListener("click", load);
@@ -112,7 +116,9 @@ export async function mountSeason(container, leagueKey, meta) {
   // click vs. change because a checkbox's own click bubbles as change, not
   // click, and the <select> partner picker only ever fires change.
   container.querySelector("#trade-builder-root").addEventListener("click", (e) => {
-    if (e.target.closest("[data-tb-close]")) { closeTradeBuilder(); }
+    if (e.target.closest("[data-tb-close]")) { closeTradeBuilder(); return; }
+    const addBtn = e.target.closest("[data-tb-add-suggestion]");
+    if (addBtn) { onAddSuggestionToTrade(Number(addBtn.dataset.tbAddSuggestion)); }
   });
   container.querySelector("#trade-builder-root").addEventListener("change", (e) => {
     const partnerSelect = e.target.closest("[data-tb-partner]");
@@ -646,6 +652,7 @@ function openTradeBuilder() {
   _tradeBuilderYourSel = new Set();
   _tradeBuilderPartnerSel = new Set();
   _tradeBuilderEval = null;
+  _tbSuggestions = null;
   if (_tradeBuilderData === null) {
     loadTradeBuilder();
   } else if (!_tradeBuilderData.error && _tradeBuilderPartnerId === null) {
@@ -653,6 +660,9 @@ function openTradeBuilder() {
     _tradeBuilderPartnerId = firstOther ? firstOther.roster_id : null;
   }
   renderTradeBuilderModal();
+  if (_tradeBuilderData !== null && !_tradeBuilderData.error && _tradeBuilderPartnerId !== null) {
+    fetchTradeSuggestions();
+  }
 }
 
 function closeTradeBuilder() {
@@ -683,11 +693,14 @@ async function loadTradeBuilder() {
     result = { error: "Couldn't load rosters" };
   }
   _tradeBuilderData = result;
-  if (!result.error) {
+  if (!result.error && _tradeBuilderPartnerId === null) {
     const firstOther = result.teams.find(t => !t.is_you);
     _tradeBuilderPartnerId = firstOther ? firstOther.roster_id : null;
   }
   renderTradeBuilderModal();
+  if (!result.error && _tradeBuilderPartnerId !== null) {
+    fetchTradeSuggestions();
+  }
 }
 
 function _tbTeam(rosterId) {
@@ -713,8 +726,12 @@ function onTradeBuilderToggle(checkbox) {
 
 function scheduleTradeBuilderEvaluate() {
   _tradeBuilderEvalPending = true;
+  _tbSuggestionsPending = true;
   clearTimeout(_tradeBuilderEvalTimer);
-  _tradeBuilderEvalTimer = setTimeout(evaluateTradeBuilder, 400);
+  _tradeBuilderEvalTimer = setTimeout(() => {
+    evaluateTradeBuilder();
+    fetchTradeSuggestions();
+  }, 400);
 }
 
 // Picks have no stable id of their own (unlike a player_id) -- the
@@ -775,6 +792,48 @@ async function evaluateTradeBuilder() {
   }
   _tradeBuilderEvalPending = false;
   renderTradeBuilderModal();
+}
+
+async function fetchTradeSuggestions() {
+  const yourTeam = _tradeBuilderData.teams.find(t => t.is_you);
+  const partnerTeam = _tbTeam(_tradeBuilderPartnerId);
+  if (!yourTeam || !partnerTeam) {
+    _tbSuggestions = null;
+    _tbSuggestionsPending = false;
+    renderTradeBuilderModal();
+    return;
+  }
+  _tbSuggestionsPending = true;
+  const myKey = _key;
+  const body = {
+    partner_roster_id: partnerTeam.roster_id,
+    side_a: _tbSelectionToPayload(_tradeBuilderYourSel, yourTeam),
+    side_b: _tbSelectionToPayload(_tradeBuilderPartnerSel, partnerTeam),
+  };
+  try {
+    const res = await fetch(`/api/leagues/${encodeURIComponent(myKey)}/trade/suggestions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (_key !== myKey) return;
+    _tbSuggestions = res.ok ? await res.json() : { error: true };
+  } catch (e) {
+    if (_key !== myKey) return;
+    _tbSuggestions = { error: true };
+  }
+  _tbSuggestionsPending = false;
+  renderTradeBuilderModal();
+}
+
+function onAddSuggestionToTrade(index) {
+  const s = _tbSuggestions && _tbSuggestions.suggestions && _tbSuggestions.suggestions[index];
+  if (!s) return;
+  s.target_players.forEach(p => _tradeBuilderPartnerSel.add(`player:${p.player_id}`));
+  s.offer_players.forEach(p => _tradeBuilderYourSel.add(`player:${p.player_id}`));
+  s.offer_picks.forEach(p => _tradeBuilderYourSel.add(`pick:${p.season}:${p.round}:${p.original_roster_id}`));
+  renderTradeBuilderModal();
+  scheduleTradeBuilderEvaluate();
 }
 
 function tbBackdrop(inner) {
@@ -898,6 +957,38 @@ function ordinalSuffix(n) {
   }
 }
 
+function tbSuggestionsHTML() {
+  if (!_tbSuggestions || _tbSuggestions.error) return "";
+  const items = _tbSuggestions.suggestions || [];
+  const updating = _tbSuggestionsPending ? "updating" : "";
+  if (items.length === 0) {
+    return `
+      <div class="tb-suggestions ${updating}">
+        <p class="tb-section-label">Suggested additions</p>
+        <p class="tb-empty">No additional players clear both the fairness and value-gain bar right now.</p>
+      </div>`;
+  }
+  const rows = items.map((s, i) => {
+    const targets = s.target_players.map(p => escapeHtml(p.name)).join(", ");
+    const offers = [...s.offer_players.map(p => escapeHtml(p.name)),
+                    ...s.offer_picks.map(p => escapeHtml(p.label))].join(", ") || "(nothing else)";
+    return `<div class="tb-suggestion-row">
+      <div class="tb-suggestion-main">
+        <span class="tb-suggestion-ask">Ask for ${targets}</span>
+        <span class="tb-suggestion-arrow">&harr;</span>
+        <span class="tb-suggestion-give">offer ${offers}</span>
+        <span class="tb-suggestion-gain">+${s.net_value_gain.toFixed(1)} value</span>
+      </div>
+      <button class="tb-add-btn" type="button" data-tb-add-suggestion="${i}">Add to trade</button>
+    </div>`;
+  }).join("");
+  return `
+    <div class="tb-suggestions ${updating}">
+      <p class="tb-section-label">Suggested additions</p>
+      <div class="tb-suggestions-list">${rows}</div>
+    </div>`;
+}
+
 function renderTradeBuilderModal() {
   const root = document.getElementById("trade-builder-root");
   if (!root) return;
@@ -955,6 +1046,7 @@ function renderTradeBuilderModal() {
       </div>
       ${tbScoreboardHTML()}
       ${tbNeedsHTML()}
+      ${tbSuggestionsHTML()}
       <div class="tb-foot">
         <p class="tb-hint">This is a what-if calculator only &mdash; nothing here is saved. Real completed trades still show up in the ledger below once they happen.</p>
         <button class="tb-done-btn" type="button" data-tb-close>Done</button>

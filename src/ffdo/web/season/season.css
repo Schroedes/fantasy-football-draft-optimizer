@@ -600,6 +600,48 @@
   .tb-needs-cols { grid-template-columns: 1fr; gap: 10px; }
 }
 
+.tb-suggestions { padding: 16px 28px 4px; transition: opacity 0.15s ease; }
+.tb-suggestions.updating { opacity: 0.5; }
+.tb-suggestions-list { display: flex; flex-direction: column; gap: 1px; margin-top: 8px; }
+.tb-suggestion-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.tb-suggestion-row:last-child { border-bottom: none; }
+.tb-suggestion-main {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12.5px;
+  min-width: 0;
+}
+.tb-suggestion-ask { color: var(--text); font-weight: 600; }
+.tb-suggestion-arrow { color: var(--faint); }
+.tb-suggestion-give { color: var(--muted); }
+.tb-suggestion-gain {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--green);
+  font-weight: 600;
+}
+.tb-add-btn {
+  font: 600 11.5px var(--font-sans);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.tb-add-btn:hover { border-color: var(--accent); color: var(--accent); }
+
 .tb-foot {
   display: flex;
   align-items: center;
