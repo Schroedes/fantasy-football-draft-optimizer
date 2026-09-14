@@ -711,6 +711,8 @@ function onTradeBuilderPartnerChange(rosterIdStr) {
   _tradeBuilderPartnerId = Number(rosterIdStr);
   _tradeBuilderPartnerSel = new Set();
   _tradeBuilderEval = null;
+  _tbSuggestions = null;
+  _tbSuggestionsPending = true;
   renderTradeBuilderModal();
   scheduleTradeBuilderEvaluate();
 }
