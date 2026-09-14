@@ -23,6 +23,10 @@ button opens the Trade Machine, a what-if calculator: pick players and
 future picks from your roster and any other team's, and the value/
 differential updates live as you go. Nothing built there is saved --
 only real, completed trades ever show up in the ledger above it.
+It also shows how the trade would change either side's roster needs --
+positional rank and depth severity before and after -- so a trade that
+looks good on value alone doesn't quietly leave you thin at a position,
+or hand your trade partner a rank jump you didn't mean to give them.
 
 The **Waivers** tab (FAAB leagues only) recommends free-agent adds, which
 bench player to drop for each, and how much to bid -- respecting roster
