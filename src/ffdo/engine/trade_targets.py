@@ -122,7 +122,9 @@ def _net_value_gain(
     freed roster spot (offering more players than you receive) with the
     single best available free agent by raw VOR (spec Step 4) -- one FA
     regardless of how many spots actually opened, per the spec's own
-    simplification."""
+    simplification. Any picks in ``offer_picks`` are valued via
+    ``pick_value.slot_value`` and subtracted from the net gain, so a pick
+    given away as part of the offer costs you just like a player would."""
     before_value, _ = power_ranking.team_value(your_roster, valued, league, position="OVR", scope="full")
     after_ids = (set(your_roster.player_ids) - set(offer_ids)) | set(target_ids)
     if len(offer_ids) > len(target_ids):
