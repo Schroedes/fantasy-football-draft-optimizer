@@ -59,6 +59,17 @@ def _best_at_position(entry: RosterEntry, valued: Mapping[str, ValuedPlayer], po
     return max(candidates, key=lambda pid: valued[pid].vor)
 
 
+def _candidates_excluding(entry: RosterEntry, valued: Mapping[str, ValuedPlayer], position: str, excluded: frozenset[str]) -> list[str]:
+    return [pid for pid in _players_at_position(entry, valued, position) if pid not in excluded]
+
+
+def _best_candidate_excluding(entry: RosterEntry, valued: Mapping[str, ValuedPlayer], position: str, excluded: frozenset[str]) -> str | None:
+    candidates = _candidates_excluding(entry, valued, position, excluded)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda pid: valued[pid].vor)
+
+
 def _build_offer_package(
     candidates: list[str],
     target_value: float,
@@ -162,15 +173,17 @@ def suggest_for_team(
     your_needs = roster_needs.position_needs(your_hypo, all_rosters, valued, league)
     their_needs = roster_needs.position_needs(their_hypo, all_rosters, valued, league)
 
+    excluded = already_selected_yours | already_selected_theirs
+
     target_positions = [
         pos for pos in _POSITIONS
         if your_needs[pos].severity in _NEEDY and their_needs[pos].severity == "Fine"
-        and len(_players_at_position(their_hypo, valued, pos)) >= 2
+        and len(_candidates_excluding(their_hypo, valued, pos, excluded)) >= 2
     ]
     offer_positions = [
         pos for pos in _POSITIONS
         if your_needs[pos].severity == "Fine" and their_needs[pos].severity in _NEEDY
-        and len(_players_at_position(your_hypo, valued, pos)) >= 2
+        and len(_candidates_excluding(your_hypo, valued, pos, excluded)) >= 2
     ]
     if not target_positions or not offer_positions:
         return []
@@ -178,14 +191,14 @@ def suggest_for_team(
     free_agent_id_list = list(free_agent_ids)
     suggestions: list[TradeSuggestion] = []
     for target_position in target_positions:
-        target_id = _best_at_position(their_hypo, valued, target_position)
+        target_id = _best_candidate_excluding(their_hypo, valued, target_position, excluded)
         if target_id is None:
             continue
         target_ids = (target_id,)
         target_value = valued[target_id].vor
 
         for offer_position in offer_positions:
-            candidates = _players_at_position(your_hypo, valued, offer_position)
+            candidates = _candidates_excluding(your_hypo, valued, offer_position, excluded)
             built = _build_offer_package(
                 candidates, target_value, valued, your_picks, pick_curve,
                 current_season, round_size)

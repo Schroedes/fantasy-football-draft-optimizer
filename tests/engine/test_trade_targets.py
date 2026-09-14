@@ -249,6 +249,24 @@ def test_suggest_for_team_folds_already_selected_into_the_hypothetical_roster():
     assert suggestions == []
 
 
+def test_suggest_for_team_excludes_already_selected_yours_from_target_candidacy():
+    # r1a (your best RB, currently checked as something you're ALREADY
+    # offering the partner in this in-progress trade) must never be
+    # suggested back as a NEW target -- even though folding it into
+    # their_hypo for needs-scoring purposes is correct, it must not also
+    # become eligible as a candidate the partner's own side could "give"
+    # you again. Before the fix, this fixture reproduced target_player_ids
+    # == ("r1a",) -- your own player suggested as the ask.
+    suggestions = trade_targets.suggest_for_team(
+        _YOUR, _THEIRS, _ALL_ROSTERS, _POS_VALUED, _POS_LEAGUE,
+        free_agent_ids=[], your_picks=[],
+        pick_curve=_CURVE, current_season=2026, round_size=10,
+        already_selected_yours=frozenset({"r1a"}))
+    for s in suggestions:
+        assert "r1a" not in s.target_player_ids
+        assert "r1a" not in s.offer_player_ids
+
+
 def test_suggest_for_team_returns_empty_with_no_two_way_fit():
     # Neither team has any surplus position (everyone rosters exactly
     # their starters, nothing more) -- the >=2-rostered gate excludes
