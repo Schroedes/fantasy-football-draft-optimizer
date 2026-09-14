@@ -213,10 +213,14 @@ def test_position_needs_scores_a_hypothetical_roster_with_other_teams_frozen():
     result = roster_needs.position_needs(hypothetical, _ROSTERS, _VALUED, _LEAGUE)
     assert result["QB"].rank == 2
     assert result["QB"].severity != "Fine"
-    # Confirms team2 was read at its real, current value (15), not itself
-    # modified by scoring team1's hypothetical roster.
+    # A second, independent call using the ORIGINAL (unmodified) _ROSTERS
+    # list must read team1's REAL QB value (q1, 30), not leftover state
+    # from the hypothetical (q3, 5) used above -- team1's real 30 beats
+    # team2's real 15, so team2's genuine rank is 2. If Call A's
+    # substitution had somehow leaked into this fresh call, team2 would
+    # wrongly show rank 1 instead.
     real_team2_result = roster_needs.position_needs(_ROSTERS[1], _ROSTERS, _VALUED, _LEAGUE)
-    assert real_team2_result["QB"].rank == 1
+    assert real_team2_result["QB"].rank == 2
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
