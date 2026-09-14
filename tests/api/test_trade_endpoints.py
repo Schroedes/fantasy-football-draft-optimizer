@@ -136,6 +136,66 @@ def test_trade_builder_is_sleeper_only():
     assert res.status_code == 400
 
 
+def test_trade_suggestions_is_sleeper_only():
+    from ffdo.domain.models import TrackedLeague
+
+    app_mod._STORE.upsert(_tracked(
+        league_key="espn:E2:2026", provider="espn", provider_league_id="E2"))
+    body = {"partner_roster_id": 2, "side_a": {"player_ids": [], "picks": []},
+            "side_b": {"player_ids": [], "picks": []}}
+    res = TestClient(create_app()).post("/api/leagues/espn:E2:2026/trade/suggestions", json=body)
+    assert res.status_code == 400
+
+
+def test_trade_targets_is_sleeper_only():
+    from ffdo.domain.models import TrackedLeague
+
+    app_mod._STORE.upsert(_tracked(
+        league_key="espn:E3:2026", provider="espn", provider_league_id="E3"))
+    res = TestClient(create_app()).get("/api/leagues/espn:E3:2026/trade-targets")
+    assert res.status_code == 400
+
+
+def test_trade_suggestions_returns_empty_list_when_no_team_has_surplus_depth(monkeypatch, tmp_path):
+    # The shared _ROSTERS fixture rosters exactly 1 player per position per
+    # team (see test_season_endpoint.py) -- no position anywhere clears the
+    # >=2-rostered surplus gate, so suggest_for_team deterministically
+    # returns []. This is a real, meaningful assertion (confirms the
+    # >=2-rostered gate works end-to-end through the real API and
+    # valuation pipeline), not a placeholder.
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_tracked(fmt="redraft"))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+
+    resp = {
+        f"{V1}/state/nfl": _STATE, f"{V1}/league/L1/rosters": _ROSTERS,
+        f"{V1}/league/L1/users": _USERS, f"{V1}/league/L1/traded_picks": [],
+        f"{V1}/players/nfl": _PLAYERS, "/projections/": _PROJ, "/matchups/": _MATCHUPS,
+    }
+
+    class _FakeClient:
+        def __init__(self, *a, **k): pass
+        def get_json(self, url, *a, **k):
+            for key, val in resp.items():
+                if key in url:
+                    return val
+            return [] if "/matchups/" in url or "/projections/" in url else {}
+        def close(self): pass
+
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeClient)
+    client = TestClient(create_app())
+    body = {"partner_roster_id": 2,
+            "side_a": {"player_ids": [], "picks": []},
+            "side_b": {"player_ids": [], "picks": []}}
+    res = client.post("/api/leagues/sleeper:L1:2026/trade/suggestions", json=body)
+    assert res.status_code == 200
+    assert res.json() == {"suggestions": []}
+
+    res2 = client.get("/api/leagues/sleeper:L1:2026/trade-targets")
+    assert res2.status_code == 200
+    assert res2.json() == {"suggestions": []}
+
+
 def test_trades_endpoint_returns_empty_list_with_no_real_trades(monkeypatch, tmp_path):
     store = LeagueStore(tmp_path / "ffdo.db")
     store.upsert(_tracked(fmt="redraft"))
