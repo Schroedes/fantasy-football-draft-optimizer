@@ -1572,6 +1572,103 @@ def create_app() -> FastAPI:
                                  if result.differential_pct is not None else None),
         }
 
+    @app.get("/api/leagues/{league_key}/trade-builder")
+    def get_trade_builder(league_key: str) -> dict:
+        """Every team's roster (players + future picks, for the
+        hypothetical trade-builder UI to pick from). Dynasty/keeper leagues
+        get real future-pick data -- the same synthesis get_season's draft
+        capital panel already uses (every roster implicitly owns its own
+        pick in every round/year unless traded_picks says otherwise);
+        redraft leagues get an empty `picks` list per team, since there's
+        nothing future to trade away."""
+        lg = _load_league(league_key)
+        if lg.provider != "sleeper":
+            raise HTTPException(status_code=400, detail="Trade builder is Sleeper-only for now")
+
+        capital = None
+        sleeper = client_mod.SleeperClient()
+        try:
+            nfl = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
+            profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            proj_anchor = _season_proj_anchor_for(lg.season).get(
+                lambda: _load_projection_anchor(sleeper, lg.season))
+            rosters = rosters_mod.fetch(sleeper, lg.provider_league_id)
+            through_week = _through_week(nfl)
+            actuals = actuals_mod.points_so_far(sleeper, lg.provider_league_id, through_week)
+
+            if lg.resolved_format in ("dynasty", "keeper"):
+                worst_to_best = sorted(rosters, key=lambda r: (r.wins, r.points_for))
+                try:
+                    capital = traded_picks_mod.capital(
+                        sleeper, lg.provider_league_id,
+                        num_teams=lg.num_teams,
+                        rounds=int((lg.raw_settings or {}).get("draft_rounds") or 4),
+                        standings_order=[r.roster_id for r in worst_to_best],
+                        draft_years=(lg.season + 1, lg.season + 2),
+                        team_names={r.roster_id: r.team_name for r in rosters})
+                except (httpx.HTTPError, RuntimeError):
+                    # Same posture as get_season: a traded-picks outage
+                    # degrades to no picks rather than failing the whole
+                    # request -- players are still tradeable either way.
+                    logging.getLogger("ffdo.api").warning(
+                        "trade-builder: traded-picks fetch failed for %s, picks omitted",
+                        lg.league_key)
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(status_code=502, detail="Couldn't reach Sleeper, try again") from exc
+        finally:
+            sleeper.close()
+
+        all_pids = {pid for r in rosters for pid in r.player_ids}
+        valued = ros_value_mod.roster_value(
+            all_pids, lg, resolved_format=lg.resolved_format, season_proj=proj_anchor,
+            profiles=profiles, actuals=actuals, weeks_played=through_week,
+            season_weeks=_season_weeks(lg.season))
+
+        picks_by_owner: dict[int, list] = {}
+        if capital:
+            for asset in capital:
+                picks_by_owner.setdefault(asset.current_owner_roster_id, []).append(asset)
+
+        def _player_row(pid: str) -> dict | None:
+            prof = profiles.get(pid)
+            if prof is None:
+                return None
+            vp = valued.get(pid)
+            return {"player_id": pid, "name": prof.full_name, "position": prof.position,
+                    "value": round(vp.vor, 1) if vp is not None else 0.0}
+
+        def _pick_row(asset) -> dict:
+            return {
+                "label": asset.label,
+                "value": round(pick_value_mod.slot_value(
+                    asset, PICK_VALUE_CURVE, current_season=lg.season,
+                    round_size=lg.num_teams), 1),
+                "season": asset.season, "round": asset.round,
+                "projected_slot": asset.projected_slot,
+                "current_owner_roster_id": asset.current_owner_roster_id,
+                "original_roster_id": asset.original_roster_id,
+            }
+
+        teams = []
+        for r in rosters:
+            players = []
+            for pid in r.player_ids:
+                row = _player_row(pid)
+                if row is not None:
+                    players.append(row)
+            players.sort(key=lambda p: -p["value"])
+            picks = sorted(
+                (_pick_row(a) for a in picks_by_owner.get(r.roster_id, [])),
+                key=lambda p: (p["season"], p["round"]))
+            teams.append({
+                "roster_id": r.roster_id, "team_name": r.team_name,
+                "is_you": r.roster_id == lg.roster_id,
+                "players": players, "picks": picks,
+            })
+        teams.sort(key=lambda t: (not t["is_you"], t["team_name"]))
+
+        return {"teams": teams}
+
     @app.get("/api/leagues/{league_key}/trades")
     def get_trades(league_key: str) -> dict:
         """The real-trade decision ledger. Detects any new completed trade

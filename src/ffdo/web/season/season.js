@@ -19,6 +19,16 @@ let _tradesData = null;   // null until the Trades tab has been opened at least 
 let _waiversData = null;  // null until the Waivers tab has been opened at least once
 let _scorecardData = null; // null until the Scorecard tab has been opened at least once
 
+// ---- trade builder modal state ----
+let _tradeBuilderData = null;      // null until the modal has been opened at least once; {teams:[...]} or {error}
+let _tradeBuilderOpen = false;
+let _tradeBuilderPartnerId = null; // roster_id of the currently-selected trade partner
+let _tradeBuilderYourSel = new Set();    // "player:<id>" or "pick:<season>:<round>:<original_roster_id>"
+let _tradeBuilderPartnerSel = new Set();
+let _tradeBuilderEval = null;       // last POST /trade/evaluate result, {error:true}, or null (nothing selected yet)
+let _tradeBuilderEvalPending = false;
+let _tradeBuilderEvalTimer = null;
+
 // Sub-strip (week context + refresh) above a two-panel skeleton. #season-body
 // itself is deliberately left empty here -- render() populates it (and
 // recreates #season-left/#season-right on every call) so a failed load's
@@ -33,7 +43,8 @@ const SHELL = `
   </div>
   <button id="season-refresh" class="season-refresh-btn" type="button">Refresh</button>
 </div>
-<div id="season-body" class="season-two-panel"></div>`;
+<div id="season-body" class="season-two-panel"></div>
+<div id="trade-builder-root"></div>`;
 
 export async function mountSeason(container, leagueKey, meta) {
   // Self-inject season.css the same way board.js's mount() self-injects
@@ -69,6 +80,14 @@ export async function mountSeason(container, leagueKey, meta) {
   _tradesData = null;
   _waiversData = null;
   _scorecardData = null;
+  _tradeBuilderData = null;
+  _tradeBuilderOpen = false;
+  _tradeBuilderPartnerId = null;
+  _tradeBuilderYourSel = new Set();
+  _tradeBuilderPartnerSel = new Set();
+  _tradeBuilderEval = null;
+  _tradeBuilderEvalPending = false;
+  clearTimeout(_tradeBuilderEvalTimer);
 
   container.innerHTML = SHELL;
   container.querySelector("#season-refresh").addEventListener("click", load);
@@ -82,7 +101,24 @@ export async function mountSeason(container, leagueKey, meta) {
     const posBtn = e.target.closest("[data-pos-tab]");
     if (posBtn) { _pos = posBtn.dataset.posTab; render(); return; }
     const scopeBtn = e.target.closest("[data-scope-tab]");
-    if (scopeBtn) { _scope = scopeBtn.dataset.scopeTab; render(); }
+    if (scopeBtn) { _scope = scopeBtn.dataset.scopeTab; render(); return; }
+    const proposeBtn = e.target.closest("[data-propose-trade]");
+    if (proposeBtn) { openTradeBuilder(); }
+  });
+  // Two delegated listeners on the never-replaced #trade-builder-root --
+  // renderTradeBuilderModal() only ever rewrites this element's innerHTML
+  // (and clears it entirely when the modal is closed), so these survive
+  // every open/close/re-render without needing to be re-attached. Split
+  // click vs. change because a checkbox's own click bubbles as change, not
+  // click, and the <select> partner picker only ever fires change.
+  container.querySelector("#trade-builder-root").addEventListener("click", (e) => {
+    if (e.target.closest("[data-tb-close]")) { closeTradeBuilder(); }
+  });
+  container.querySelector("#trade-builder-root").addEventListener("change", (e) => {
+    const partnerSelect = e.target.closest("[data-tb-partner]");
+    if (partnerSelect) { onTradeBuilderPartnerChange(partnerSelect.value); return; }
+    const checkbox = e.target.closest("[data-tb-item]");
+    if (checkbox) { onTradeBuilderToggle(checkbox); }
   });
 
   await load();
@@ -259,11 +295,14 @@ async function loadTrades() {
 }
 
 function renderTrades() {
+  const proposeBtn = `<div class="trades-toolbar">
+    <button class="season-refresh-btn" type="button" data-propose-trade>Propose a trade</button>
+  </div>`;
   if (_tradesData.error) {
-    return `<div class="lineup-error">${escapeHtml(_tradesData.error)}</div>`;
+    return proposeBtn + `<div class="lineup-error">${escapeHtml(_tradesData.error)}</div>`;
   }
   if (_tradesData.trades.length === 0) {
-    return `<div class="lineup-empty">No trades in this league yet</div>`;
+    return proposeBtn + `<div class="lineup-empty">No trades in this league yet</div>`;
   }
   // Players and picks are both "what a side got" -- rendered as one
   // comma-joined list of names/labels rather than two separate lists, since
@@ -289,7 +328,7 @@ function renderTrades() {
         ${t.roster_b_picks.length ? `, pick value now ${t.current_pick_value_b}` : ""})</div>
     </div>`;
   }).join("");
-  return `<div class="lineup-list">${rows}</div>`;
+  return proposeBtn + `<div class="lineup-list">${rows}</div>`;
 }
 
 async function loadWaivers() {
@@ -592,4 +631,286 @@ function ordinal(n) {
     case 3: return `${n}rd`;
     default: return `${n}th`;
   }
+}
+
+// ---- trade builder modal ----
+// A what-if calculator layered over the Trades tab's real-trade ledger --
+// nothing selected here is ever saved. Rendered into #trade-builder-root
+// (a sibling of #season-body in SHELL, see mountSeason) rather than inside
+// the tab-panel flow render() otherwise owns, since the modal is an overlay
+// over the whole screen, not scoped to one tab, and must survive tab
+// switches while it's open.
+
+function openTradeBuilder() {
+  _tradeBuilderOpen = true;
+  _tradeBuilderYourSel = new Set();
+  _tradeBuilderPartnerSel = new Set();
+  _tradeBuilderEval = null;
+  if (_tradeBuilderData === null) {
+    loadTradeBuilder();
+  } else if (!_tradeBuilderData.error && _tradeBuilderPartnerId === null) {
+    const firstOther = _tradeBuilderData.teams.find(t => !t.is_you);
+    _tradeBuilderPartnerId = firstOther ? firstOther.roster_id : null;
+  }
+  renderTradeBuilderModal();
+}
+
+function closeTradeBuilder() {
+  _tradeBuilderOpen = false;
+  clearTimeout(_tradeBuilderEvalTimer);
+  renderTradeBuilderModal();
+}
+
+async function loadTradeBuilder() {
+  // Same stale-response guard as loadLineup()/loadTrades()/loadWaivers()/
+  // loadScorecard() above.
+  const myKey = _key;
+  let result;
+  try {
+    const res = await fetch(`/api/leagues/${encodeURIComponent(myKey)}/trade-builder`);
+    if (_key !== myKey) return;
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      if (_key !== myKey) return;
+      result = { error: body.detail || "Couldn't load rosters" };
+    } else {
+      const data = await res.json();
+      if (_key !== myKey) return;
+      result = data;
+    }
+  } catch (e) {
+    if (_key !== myKey) return;
+    result = { error: "Couldn't load rosters" };
+  }
+  _tradeBuilderData = result;
+  if (!result.error) {
+    const firstOther = result.teams.find(t => !t.is_you);
+    _tradeBuilderPartnerId = firstOther ? firstOther.roster_id : null;
+  }
+  renderTradeBuilderModal();
+}
+
+function _tbTeam(rosterId) {
+  return _tradeBuilderData.teams.find(t => t.roster_id === rosterId);
+}
+
+function onTradeBuilderPartnerChange(rosterIdStr) {
+  _tradeBuilderPartnerId = Number(rosterIdStr);
+  _tradeBuilderPartnerSel = new Set();
+  _tradeBuilderEval = null;
+  renderTradeBuilderModal();
+  scheduleTradeBuilderEvaluate();
+}
+
+function onTradeBuilderToggle(checkbox) {
+  const side = checkbox.dataset.tbSide;
+  const itemKey = checkbox.dataset.tbItem;
+  const sel = side === "your" ? _tradeBuilderYourSel : _tradeBuilderPartnerSel;
+  if (checkbox.checked) sel.add(itemKey); else sel.delete(itemKey);
+  renderTradeBuilderModal();
+  scheduleTradeBuilderEvaluate();
+}
+
+function scheduleTradeBuilderEvaluate() {
+  _tradeBuilderEvalPending = true;
+  clearTimeout(_tradeBuilderEvalTimer);
+  _tradeBuilderEvalTimer = setTimeout(evaluateTradeBuilder, 400);
+}
+
+// Picks have no stable id of their own (unlike a player_id) -- the
+// selection key encodes (season, round, original_roster_id), the same
+// 3-tuple traded_picks.capital() uses to identify a synthesized pick asset,
+// so a selection survives re-render and maps back to the exact asset the
+// GET /trade-builder response described it with.
+function _tbSelectionToPayload(sel, team) {
+  const player_ids = [];
+  const picks = [];
+  sel.forEach((key) => {
+    if (key.startsWith("player:")) {
+      player_ids.push(key.slice("player:".length));
+      return;
+    }
+    const [, season, round, originalId] = key.split(":");
+    const pick = team.picks.find(p =>
+      String(p.season) === season && String(p.round) === round &&
+      String(p.original_roster_id) === originalId);
+    if (pick) {
+      picks.push({
+        season: pick.season, round: pick.round, projected_slot: pick.projected_slot,
+        current_owner_roster_id: pick.current_owner_roster_id,
+        original_roster_id: pick.original_roster_id,
+      });
+    }
+  });
+  return { player_ids, picks };
+}
+
+async function evaluateTradeBuilder() {
+  const yourTeam = _tradeBuilderData.teams.find(t => t.is_you);
+  const partnerTeam = _tbTeam(_tradeBuilderPartnerId);
+  if (!yourTeam || !partnerTeam ||
+      (_tradeBuilderYourSel.size === 0 && _tradeBuilderPartnerSel.size === 0)) {
+    _tradeBuilderEval = null;
+    _tradeBuilderEvalPending = false;
+    renderTradeBuilderModal();
+    return;
+  }
+  const myKey = _key;
+  const body = {
+    partner_roster_id: partnerTeam.roster_id,
+    side_a: _tbSelectionToPayload(_tradeBuilderYourSel, yourTeam),
+    side_b: _tbSelectionToPayload(_tradeBuilderPartnerSel, partnerTeam),
+  };
+  try {
+    const res = await fetch(`/api/leagues/${encodeURIComponent(myKey)}/trade/evaluate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (_key !== myKey) return;
+    _tradeBuilderEval = res.ok ? await res.json() : { error: true };
+  } catch (e) {
+    if (_key !== myKey) return;
+    _tradeBuilderEval = { error: true };
+  }
+  _tradeBuilderEvalPending = false;
+  renderTradeBuilderModal();
+}
+
+function tbBackdrop(inner) {
+  return `<div class="tb-backdrop">${inner}</div>`;
+}
+
+function tbRowHTML(item, side, key, sel, isPick) {
+  const checked = sel.has(key) ? "checked" : "";
+  const label = isPick ? item.label : item.name;
+  const chip = isPick
+    ? `<span class="tb-pos-chip tb-pos-chip-pick">PICK</span>`
+    : `<span class="tb-pos-chip">${escapeHtml(item.position)}</span>`;
+  return `<label class="tb-row ${sel.has(key) ? "checked" : ""}">
+    <input type="checkbox" data-tb-item="${escapeHtml(key)}" data-tb-side="${side}" ${checked} />
+    <span class="tb-row-main">
+      <span class="tb-player-name">${escapeHtml(label)}</span>
+      ${chip}
+    </span>
+    <span class="tb-row-value">${item.value.toFixed(1)}</span>
+  </label>`;
+}
+
+function tbSideHTML(team, side, sel) {
+  const playerRows = team.players
+    .map(p => tbRowHTML(p, side, `player:${p.player_id}`, sel, false))
+    .join("") || `<div class="tb-empty">No players</div>`;
+  const pickRows = team.picks
+    .map(p => tbRowHTML(p, side, `pick:${p.season}:${p.round}:${p.original_roster_id}`, sel, true))
+    .join("") || `<div class="tb-empty">No future picks</div>`;
+  return `
+    <p class="tb-section-label">Players</p>
+    <div class="tb-roster-list">${playerRows}</div>
+    <p class="tb-section-label">Future picks</p>
+    <div class="tb-roster-list">${pickRows}</div>`;
+}
+
+function tbScoreboardHTML() {
+  const updating = _tradeBuilderEvalPending ? "updating" : "";
+  let yourValue = "0.0", partnerValue = "0.0", diffText = "&mdash;", diffClass = "";
+  let verdict = "Select players or picks on both sides to evaluate.";
+
+  if (_tradeBuilderEval && _tradeBuilderEval.error) {
+    verdict = "Couldn't evaluate this trade -- try again.";
+  } else if (_tradeBuilderEval) {
+    yourValue = _tradeBuilderEval.side_a_value.toFixed(1);
+    partnerValue = _tradeBuilderEval.side_b_value.toFixed(1);
+    const diff = _tradeBuilderEval.differential;
+    diffText = `${diff > 0 ? "+" : ""}${diff.toFixed(1)}`;
+    const mag = Math.abs(diff);
+    if (mag < 5) {
+      verdict = "Fair trade";
+    } else if (diff > 0) {
+      verdict = mag < 20 ? "Slight edge: you" : "Lopsided: favors you";
+      diffClass = "gain";
+    } else {
+      verdict = mag < 20 ? "Slight edge: partner" : "Lopsided: favors partner";
+      diffClass = "loss";
+    }
+  }
+
+  return `
+    <div class="tb-scoreboard">
+      <div class="tb-sb-value">
+        <p class="tb-sb-label">Your value</p>
+        <p class="tb-sb-number ${updating}">${yourValue}</p>
+      </div>
+      <div class="tb-sb-center">
+        <p class="tb-sb-diff ${diffClass} ${updating}">${diffText}</p>
+        <p class="tb-sb-verdict">${escapeHtml(verdict)}</p>
+      </div>
+      <div class="tb-sb-value">
+        <p class="tb-sb-label">Partner value</p>
+        <p class="tb-sb-number ${updating}">${partnerValue}</p>
+      </div>
+    </div>`;
+}
+
+function renderTradeBuilderModal() {
+  const root = document.getElementById("trade-builder-root");
+  if (!root) return;
+  if (!_tradeBuilderOpen) { root.innerHTML = ""; return; }
+
+  if (_tradeBuilderData === null) {
+    root.innerHTML = tbBackdrop(`<div class="tb-modal tb-modal-message">
+      <div class="lineup-loading">Loading rosters&hellip;</div>
+    </div>`);
+    return;
+  }
+  if (_tradeBuilderData.error) {
+    root.innerHTML = tbBackdrop(`<div class="tb-modal tb-modal-message">
+      <div class="lineup-error">${escapeHtml(_tradeBuilderData.error)}</div>
+    </div>`);
+    return;
+  }
+
+  const yourTeam = _tradeBuilderData.teams.find(t => t.is_you);
+  const otherTeams = _tradeBuilderData.teams.filter(t => !t.is_you);
+  const partnerTeam = _tbTeam(_tradeBuilderPartnerId) || otherTeams[0];
+
+  const partnerOptions = otherTeams.map(t =>
+    `<option value="${t.roster_id}" ${partnerTeam && t.roster_id === partnerTeam.roster_id ? "selected" : ""}>${escapeHtml(t.team_name)}</option>`
+  ).join("");
+
+  const partnerSideHtml = partnerTeam
+    ? tbSideHTML(partnerTeam, "partner", _tradeBuilderPartnerSel)
+    : `<div class="lineup-empty">No other teams in this league</div>`;
+
+  root.innerHTML = tbBackdrop(`
+    <div class="tb-modal">
+      <div class="tb-head">
+        <div class="tb-titles">
+          <p class="tb-eyebrow">Hypothetical trade</p>
+          <h2 class="tb-title">Trade Machine</h2>
+        </div>
+        <button class="tb-close" type="button" data-tb-close aria-label="Close">&times;</button>
+      </div>
+      <div class="tb-sides">
+        <div class="tb-side">
+          <div class="tb-side-head">
+            <p class="tb-side-label">Your team</p>
+            <p class="tb-team-name">${escapeHtml(yourTeam.team_name)}</p>
+          </div>
+          ${tbSideHTML(yourTeam, "your", _tradeBuilderYourSel)}
+        </div>
+        <div class="tb-side">
+          <div class="tb-side-head">
+            <p class="tb-side-label">Trade partner</p>
+            <select class="tb-team-picker" data-tb-partner aria-label="Choose trade partner">${partnerOptions}</select>
+          </div>
+          ${partnerSideHtml}
+        </div>
+      </div>
+      ${tbScoreboardHTML()}
+      <div class="tb-foot">
+        <p class="tb-hint">This is a what-if calculator only &mdash; nothing here is saved. Real completed trades still show up in the ledger below once they happen.</p>
+        <button class="tb-done-btn" type="button" data-tb-close>Done</button>
+      </div>
+    </div>`);
 }
