@@ -18,6 +18,7 @@ let _lineupData = null;   // null until the Lineup tab has been opened at least 
 let _tradesData = null;   // null until the Trades tab has been opened at least once
 let _waiversData = null;  // null until the Waivers tab has been opened at least once
 let _scorecardData = null; // null until the Scorecard tab has been opened at least once
+let _targetsData = null;  // null until the Targets tab has been opened at least once
 
 // ---- trade builder modal state ----
 let _tradeBuilderData = null;      // null until the modal has been opened at least once; {teams:[...]} or {error}
@@ -82,6 +83,7 @@ export async function mountSeason(container, leagueKey, meta) {
   _tradesData = null;
   _waiversData = null;
   _scorecardData = null;
+  _targetsData = null;
   _tradeBuilderData = null;
   _tradeBuilderOpen = false;
   _tradeBuilderPartnerId = null;
@@ -107,7 +109,9 @@ export async function mountSeason(container, leagueKey, meta) {
     const scopeBtn = e.target.closest("[data-scope-tab]");
     if (scopeBtn) { _scope = scopeBtn.dataset.scopeTab; render(); return; }
     const proposeBtn = e.target.closest("[data-propose-trade]");
-    if (proposeBtn) { openTradeBuilder(); }
+    if (proposeBtn) { openTradeBuilder(); return; }
+    const targetRow = e.target.closest("[data-target-row]");
+    if (targetRow) { onTargetRowClick(Number(targetRow.dataset.targetRow)); }
   });
   // Two delegated listeners on the never-replaced #trade-builder-root --
   // renderTradeBuilderModal() only ever rewrites this element's innerHTML
@@ -168,6 +172,7 @@ function renderRightPanel() {
       <button data-panel-tab="trades" class="${_panel === "trades" ? "on" : ""}">Trades</button>
       <button data-panel-tab="waivers" class="${_panel === "waivers" ? "on" : ""}">Waivers</button>
       <button data-panel-tab="scorecard" class="${_panel === "scorecard" ? "on" : ""}">Scorecard</button>
+      <button data-panel-tab="targets" class="${_panel === "targets" ? "on" : ""}">Targets</button>
     </div>`;
   if (_panel === "lineup") {
     if (_lineupData === null) {
@@ -196,6 +201,13 @@ function renderRightPanel() {
       return tabBar + `<div class="lineup-loading">Loading scorecard&hellip;</div>`;
     }
     return tabBar + renderScorecard();
+  }
+  if (_panel === "targets") {
+    if (_targetsData === null) {
+      loadTargets();
+      return tabBar + `<div class="lineup-loading">Loading trade targets&hellip;</div>`;
+    }
+    return tabBar + renderTargets();
   }
   return tabBar + (_panel === "capital" ? renderCapital() : renderPower());
 }
@@ -453,6 +465,90 @@ function renderScorecard() {
     </div>`;
 
   return `<div class="scorecard-grid">${lineupCard}${tradeCard}${waiverCard}${draftCard}</div>`;
+}
+
+async function loadTargets() {
+  // Same stale-response guard as loadLineup()/loadTrades()/loadWaivers()/
+  // loadScorecard() above.
+  const myKey = _key;
+  let result;
+  try {
+    const res = await fetch(`/api/leagues/${encodeURIComponent(myKey)}/trade-targets`);
+    if (_key !== myKey) return;
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      if (_key !== myKey) return;
+      result = { error: body.detail || "Couldn't load trade targets" };
+    } else {
+      const data = await res.json();
+      if (_key !== myKey) return;
+      result = data;
+    }
+  } catch (e) {
+    if (_key !== myKey) return;
+    result = { error: "Couldn't load trade targets" };
+  }
+  _targetsData = result;
+  render();
+}
+
+function renderTargets() {
+  if (_targetsData.error) {
+    return `<div class="lineup-error">${escapeHtml(_targetsData.error)}</div>`;
+  }
+  const items = _targetsData.suggestions || [];
+  if (items.length === 0) {
+    return `<div class="lineup-empty">No trade targets clear both the fairness and value-gain bar right now.</div>`;
+  }
+  const rows = items.map((s, i) => {
+    const targets = s.target_players.map(p => escapeHtml(p.name)).join(", ");
+    const offers = [...s.offer_players.map(p => escapeHtml(p.name)),
+                    ...s.offer_picks.map(p => escapeHtml(p.label))].join(", ") || "(nothing else)";
+    return `<div class="lineup-row target-row" data-target-row="${i}">
+      <div class="target-row-main">
+        <span class="target-partner">${escapeHtml(s.partner_team_name)}</span>
+        <span class="target-ask">Ask for ${targets}</span>
+        <span class="target-arrow">&harr;</span>
+        <span class="target-give">offer ${offers}</span>
+      </div>
+      <div class="target-row-meta">
+        <span class="target-why">${escapeHtml(s.why)}</span>
+        <span class="target-gain">+${s.net_value_gain.toFixed(1)} value</span>
+      </div>
+    </div>`;
+  }).join("");
+  return `<div class="lineup-list">${rows}</div>`;
+}
+
+function onTargetRowClick(index) {
+  const s = _targetsData && _targetsData.suggestions && _targetsData.suggestions[index];
+  if (!s) return;
+  openTradeBuilderWithSuggestion(s);
+}
+
+// Mirrors openTradeBuilder() but seeds the partner and both selections
+// from a suggestion instead of defaulting to the first other team --
+// used by the Targets tab's click-through. Kept separate from
+// openTradeBuilder() rather than adding an optional argument there, since
+// the two callers' defaulting behavior genuinely differs (first-other-team
+// vs. this-specific-suggestion).
+function openTradeBuilderWithSuggestion(s) {
+  _tradeBuilderOpen = true;
+  _tradeBuilderPartnerId = s.partner_roster_id;
+  _tradeBuilderPartnerSel = new Set(s.target_players.map(p => `player:${p.player_id}`));
+  _tradeBuilderYourSel = new Set([
+    ...s.offer_players.map(p => `player:${p.player_id}`),
+    ...s.offer_picks.map(p => `pick:${p.season}:${p.round}:${p.original_roster_id}`),
+  ]);
+  _tradeBuilderEval = null;
+  _tbSuggestions = null;
+  if (_tradeBuilderData === null) {
+    loadTradeBuilder();
+  }
+  renderTradeBuilderModal();
+  if (_tradeBuilderData !== null && !_tradeBuilderData.error) {
+    scheduleTradeBuilderEvaluate();
+  }
 }
 
 function renderPower() {

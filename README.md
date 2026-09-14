@@ -28,6 +28,14 @@ positional rank and depth severity before and after -- so a trade that
 looks good on value alone doesn't quietly leave you thin at a position,
 or hand your trade partner a rank jump you didn't mean to give them.
 
+The **Targets** tab ranks specific players on other teams worth trading
+for league-wide -- your weak positions matched against real surplus
+elsewhere, each paired with a value-matched offer from your own roster
+that only ever surfaces when it's fair to your trade partner *and*
+actually raises your own team's total value. The same suggestions also
+appear inside the Trade Machine itself once you've picked a partner, so
+you're never stuck guessing what else to ask for.
+
 The **Waivers** tab (FAAB leagues only) recommends free-agent adds, which
 bench player to drop for each, and how much to bid -- respecting roster
 construction (it won't suggest stockpiling QBs or TEs beyond what you can

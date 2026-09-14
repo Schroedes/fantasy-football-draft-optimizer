@@ -379,6 +379,42 @@
 /* ---- trades toolbar ---- */
 .trades-toolbar { margin-bottom: 10px; }
 
+.lineup-row.target-row { display: block; cursor: pointer; }
+.lineup-row.target-row:hover { border-color: var(--border-strong); }
+.target-row-main {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+}
+.target-partner {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--faint);
+  font-weight: 600;
+}
+.target-ask { color: var(--text); font-weight: 600; }
+.target-arrow { color: var(--faint); }
+.target-give { color: var(--muted); }
+.target-row-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 12px;
+}
+.target-why { color: var(--faint); }
+.target-gain {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--green);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
 /* ---- trade builder modal ----
    An overlay, not a tab panel -- rendered into #trade-builder-root (a
    sibling of #season-body, see season.js's SHELL), so it can sit above
