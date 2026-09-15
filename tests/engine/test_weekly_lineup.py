@@ -310,6 +310,50 @@ def test_diff_match_for_permutation_equivalent_lineup_not_offsetting_swaps():
     assert rows[1].status == "match"
 
 
+def test_diff_never_suggests_bringing_in_a_player_already_starting_elsewhere():
+    """`optimal_slots` solves for the single best overall arrangement, which
+    can reassign an already-started player to a DIFFERENT slot than the one
+    they currently occupy (e.g. the current RB-slot starter is actually the
+    correct FLEX pick once a stronger bench RB claims the dedicated slot).
+    `diff` must not report that reassignment as its own "suggested_swap" --
+    the player isn't sitting on the bench, so there's nothing to "bring in"
+    for that slot in isolation; only the one real bench-sourced upgrade
+    (the dedicated RB slot below) should be actionable.
+
+    Same player/value setup as
+    `test_optimal_slots_flex_takes_the_best_remaining_eligible_player`:
+    `optimal_slots` assigns RB -> p_rb_hi, FLEX -> p_rb_mid. The CURRENT
+    lineup instead has p_rb_mid in the dedicated RB slot and a WR in FLEX,
+    with p_rb_hi still on the bench.
+    """
+    profiles = {"p_rb_hi": _profile("p_rb_hi", "RB"), "p_rb_mid": _profile("p_rb_mid", "RB"),
+               "p_rb_lo": _profile("p_rb_lo", "RB"), "p_wr": _profile("p_wr", "WR")}
+    weekly_points = {
+        "p_rb_hi": _proj("p_rb_hi", 10, rush_yd=150.0),
+        "p_rb_mid": _proj("p_rb_mid", 10, rush_yd=60.0),
+        "p_rb_lo": _proj("p_rb_lo", 10, rush_yd=5.0),
+        "p_wr": _proj("p_wr", 10, rec=3.0, rec_yd=20.0),
+    }
+    league = _League(starting_slots=("RB", "FLEX"))
+    valued = _valued_from(profiles, weekly_points, league)
+    optimal = weekly_lineup.optimal_slots(valued, league)
+    assert optimal == {0: "p_rb_hi", 1: "p_rb_mid"}
+
+    # Current lineup: p_rb_mid started at RB (not yet swapped for p_rb_hi),
+    # a WR in FLEX, p_rb_hi still on the bench.
+    rows = weekly_lineup.diff(("p_rb_mid", "p_wr"), optimal, frozenset(),
+                              valued, profiles, league)
+
+    rb_row, flex_row = rows
+    assert rb_row.status == "suggested_swap"
+    assert rb_row.current_player_id == "p_rb_mid"
+    assert rb_row.optimal_player_id == "p_rb_hi"
+
+    # p_rb_mid is already starting (at RB) -- FLEX must not "suggest" him.
+    assert flex_row.status == "match"
+    assert flex_row.optimal_player_id is None
+
+
 def test_diff_match_when_no_eligible_replacement_exists_at_all():
     """A bye-week starter with NO bench replacement league-wide at that
     position (`optimal.get(i)` is `None`) must read as "match", not a
