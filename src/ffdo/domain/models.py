@@ -204,7 +204,7 @@ class TeamProfile:
 @dataclass(frozen=True, slots=True)
 class NflWeek:
     season: int
-    week: int              # the upcoming / in-progress week (Sleeper display_week)
+    week: int              # the upcoming / in-progress week (Sleeper's `week`, not `display_week`)
     season_type: str       # "pre" | "regular" | "post"
     complete: bool          # regular season over -> the view freezes values
 
