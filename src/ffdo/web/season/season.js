@@ -385,11 +385,12 @@ function renderWaivers() {
     return header + `<div class="lineup-empty">No recommended adds right now</div>`;
   }
   const rows = _waiversData.recommendations.map(r => {
+    const addLabel = `${escapeHtml(r.free_agent_name)} (${escapeHtml(r.free_agent_position)})`;
     const drop = r.drop_player_id
-      ? `drop ${escapeHtml(r.drop_player_id)}`
+      ? `drop ${escapeHtml(r.drop_player_name)} (${escapeHtml(r.drop_player_position)})`
       : "open bench slot, no drop needed";
     return `<div class="lineup-row waiver-row">
-      <div>Add ${escapeHtml(r.free_agent_id)} (${drop}) &mdash; +${r.vor_gain} VOR</div>
+      <div>Add ${addLabel} &mdash; ${drop} &mdash; +${r.vor_gain} VOR</div>
       <div>Suggested bid: $${r.suggested_bid}</div>
     </div>`;
   }).join("");
