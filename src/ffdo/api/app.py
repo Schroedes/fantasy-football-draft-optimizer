@@ -210,6 +210,8 @@ def create_app() -> FastAPI:
     from ffdo.engine import scorecard as scorecard_mod
     from ffdo.engine import trade_value as trade_value_mod
     from ffdo.engine import trade_targets as trade_targets_mod
+    from ffdo.engine import matchup_score as matchup_score_mod
+    from ffdo.ingest.sleeper import matchups as matchups_mod
     from ffdo.ingest import actuals as actuals_mod
     from ffdo.ingest import client as client_mod
     from ffdo.ingest import connect as connect_mod
@@ -1775,6 +1777,167 @@ def create_app() -> FastAPI:
             "why": (f"Fills your {s.target_position} need -- they're deep at "
                     f"{s.target_position} and thin at {s.offer_position}, "
                     f"where you have surplus."),
+        }
+
+    @app.get("/api/leagues/{league_key}/home-summary")
+    def get_home_summary(league_key: str) -> dict:
+        """One league's command-center card: power rank, starting-lineup
+        diff, this week's matchup (Sleeper only), and attention-flag
+        counts (lineup swap / waiver add / trade target). Composes every
+        per-league computation this initiative already built -- no new
+        scoring logic beyond Task 2's team_projected_score, which exists
+        specifically because weekly_lineup's own per-player values are
+        VOR, not the raw points a "projected score" needs to show."""
+        lg = _load_league(league_key)
+        if lg.provider != "sleeper":
+            raise HTTPException(status_code=400, detail="Home summary is Sleeper-only for now")
+
+        ctx = _load_trade_targets_context(lg)
+        if ctx is None:
+            raise HTTPException(status_code=502, detail="Couldn't reach Sleeper, try again")
+        rosters, valued, profiles, free_agent_ids, your_picks = ctx
+
+        you = next((r for r in rosters if r.roster_id == lg.roster_id), None)
+        if you is None:
+            # Observer-only tracking, same degrade /lineup and /waivers
+            # already use -- nothing personal to show, not an error.
+            return {
+                "league_key": lg.league_key, "name": lg.name, "provider": lg.provider,
+                "resolved_format": lg.resolved_format, "record": None,
+                "power_rank": None, "matchup": None, "starters": [], "flags": {},
+            }
+
+        sleeper = client_mod.SleeperClient()
+        try:
+            nfl = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
+            current_starters = rosters_mod.raw_starters(
+                sleeper, lg.provider_league_id, lg.roster_id)
+            weekly_proj = _weekly_proj_cache_for(nfl.season, nfl.week).get(
+                lambda: weekly_projections_mod.fetch(sleeper, nfl.season, nfl.week))
+            try:
+                games = _schedule_cache_for(nfl.season, nfl.week).get(
+                    lambda: schedule_mod.week_games(sleeper, nfl.season, nfl.week))
+            except (httpx.HTTPError, RuntimeError) as exc:
+                logging.getLogger("ffdo.api").warning(
+                    "home-summary: schedule fetch failed for %s week %s (%s) -- "
+                    "treating nothing as locked", lg.league_key, nfl.week, exc)
+                games = []
+            current_week = matchups_mod.fetch(sleeper, lg.provider_league_id, nfl.week)
+
+            waiver_recs_count = 0
+            # `raw_settings` (captured at track/refresh time, already used
+            # this same way for draft_rounds elsewhere in this file)
+            # avoids a live settings re-fetch just to decide whether this
+            # league is FAAB -- acceptable staleness for a flag COUNT,
+            # unlike /waivers' own live re-fetch which needs an exact
+            # current budget.
+            if (lg.raw_settings or {}).get("waiver_type") == 2:
+                try:
+                    league_raw = sleeper.get_json(f"{client_mod.V1}/league/{lg.provider_league_id}")
+                    waiver_budget = float((league_raw.get("settings") or {}).get("waiver_budget") or 0)
+                    claims = waivers_mod.fetch_waivers(
+                        sleeper, lg.provider_league_id, season=lg.season, through_week=nfl.week)
+                    budgets = waivers_mod.remaining_budget(claims, waiver_budget=waiver_budget)
+                    your_remaining = budgets.get(lg.roster_id, waiver_budget)
+                    waiver_recs = waiver_value_mod.recommend_adds(
+                        free_agent_ids, you.player_ids, valued, profiles, lg,
+                        FAAB_BID_CURVE, your_remaining)
+                    waiver_recs_count = len(waiver_recs)
+                except (httpx.HTTPError, RuntimeError):
+                    logging.getLogger("ffdo.api").warning(
+                        "home-summary: waiver fetch failed for %s, waiver flag omitted",
+                        lg.league_key)
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(status_code=502, detail="Couldn't reach Sleeper, try again") from exc
+        finally:
+            sleeper.close()
+
+        all_teams = frozenset(p.team for p in profiles.values() if p.team)
+        bye_teams = schedule_mod.bye_teams(games, all_teams) if games else frozenset()
+        locked_teams = schedule_mod.locked_teams(games)
+
+        all_pids = {pid for r in rosters for pid in r.player_ids}
+        weekly_valued = weekly_lineup_mod.weekly_value(
+            all_pids, lg, weekly_points=weekly_proj, profiles=profiles, bye_teams=bye_teams)
+        your_weekly_valued = {pid: weekly_valued[pid] for pid in you.player_ids if pid in weekly_valued}
+        optimal = weekly_lineup_mod.optimal_slots(your_weekly_valued, lg)
+        diff_rows = weekly_lineup_mod.diff(
+            current_starters, optimal, locked_teams, weekly_valued, profiles, lg)
+
+        def _starter_row(d) -> dict:
+            prof = profiles.get(d.current_player_id) if d.current_player_id else None
+            vp = weekly_valued.get(d.current_player_id) if d.current_player_id else None
+            swap_to = None
+            if d.status == "suggested_swap" and d.optimal_player_id:
+                swap_prof = profiles.get(d.optimal_player_id)
+                swap_to = swap_prof.full_name if swap_prof else d.optimal_player_id
+            return {
+                "slot_label": d.slot_label,
+                "name": prof.full_name if prof else None,
+                "value": round(vp.vor, 1) if vp else 0.0,
+                "status": d.status,
+                "swap_to": swap_to,
+            }
+
+        standings_rank = _standings_rank(rosters)
+        power_rows = power_ranking_mod.rank(
+            rosters, valued, lg, standings_rank, lg.roster_id, position="OVR", scope="starters")
+        your_power_row = next((r for r in power_rows if r.roster_id == lg.roster_id), None)
+        power_rank = None
+        if your_power_row is not None:
+            your_standings_rank = standings_rank.get(lg.roster_id)
+            power_rank = {
+                "value": your_power_row.power_rank,
+                "of": len(rosters),
+                "delta_vs_standings": (
+                    your_standings_rank - your_power_row.power_rank
+                    if your_standings_rank is not None else None),
+            }
+
+        matchup = None
+        opponent_roster_id = current_week.pairing.get(lg.roster_id)
+        if opponent_roster_id is not None:
+            opponent = next((r for r in rosters if r.roster_id == opponent_roster_id), None)
+            if opponent is not None:
+                your_score = matchup_score_mod.team_projected_score(
+                    you.starter_ids, weekly_points=weekly_proj, live_points=current_week.live_points,
+                    profiles=profiles, locked_teams=locked_teams, scoring_settings=lg.scoring_settings)
+                opp_score = matchup_score_mod.team_projected_score(
+                    opponent.starter_ids, weekly_points=weekly_proj, live_points=current_week.live_points,
+                    profiles=profiles, locked_teams=locked_teams, scoring_settings=lg.scoring_settings)
+                matchup = {
+                    "opponent_name": opponent.team_name,
+                    "your_projected": round(your_score, 1),
+                    "opponent_projected": round(opp_score, 1),
+                }
+
+        trade_suggestion_count = 0
+        for partner_roster in rosters:
+            if partner_roster.roster_id == you.roster_id:
+                continue
+            trade_suggestion_count += len(trade_targets_mod.suggest_for_team(
+                you, partner_roster, rosters, valued, lg, free_agent_ids, your_picks,
+                pick_curve=PICK_VALUE_CURVE, current_season=lg.season, round_size=lg.num_teams))
+
+        flags = {}
+        swaps = sum(1 for d in diff_rows if d.status == "suggested_swap")
+        if swaps:
+            flags["lineup_swaps"] = swaps
+        if waiver_recs_count:
+            flags["waiver_adds"] = waiver_recs_count
+        if trade_suggestion_count:
+            flags["trade_targets"] = trade_suggestion_count
+
+        return {
+            "league_key": lg.league_key,
+            "name": you.team_name,
+            "provider": lg.provider,
+            "resolved_format": lg.resolved_format,
+            "record": {"wins": you.wins, "losses": you.losses, "ties": you.ties},
+            "power_rank": power_rank,
+            "matchup": matchup,
+            "starters": [_starter_row(d) for d in diff_rows],
+            "flags": flags,
         }
 
     @app.post("/api/leagues/{league_key}/trade/suggestions")
