@@ -2023,13 +2023,23 @@ def create_app() -> FastAPI:
                 predicted_vor_gain=rec.vor_gain if rec else None,
                 won=claim.won)
 
+        def _waiver_row(r) -> dict:
+            add_prof = profiles.get(r.free_agent_id)
+            drop_prof = profiles.get(r.drop_player_id) if r.drop_player_id else None
+            return {
+                "free_agent_id": r.free_agent_id,
+                "free_agent_name": add_prof.full_name if add_prof else r.free_agent_id,
+                "free_agent_position": add_prof.position if add_prof else "",
+                "drop_player_id": r.drop_player_id,
+                "drop_player_name": (
+                    drop_prof.full_name if drop_prof else r.drop_player_id),
+                "drop_player_position": drop_prof.position if drop_prof else "",
+                "vor_gain": round(r.vor_gain, 1), "suggested_bid": r.suggested_bid,
+            }
+
         return {
             "remaining_budget": round(your_remaining, 1),
-            "recommendations": [
-                {"free_agent_id": r.free_agent_id, "drop_player_id": r.drop_player_id,
-                 "vor_gain": round(r.vor_gain, 1), "suggested_bid": r.suggested_bid}
-                for r in recommendations
-            ],
+            "recommendations": [_waiver_row(r) for r in recommendations],
         }
 
     @app.get("/api/leagues/{league_key}/scorecard")

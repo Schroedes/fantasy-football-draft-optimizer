@@ -46,6 +46,14 @@ def test_waivers_endpoint_returns_recommendations_for_a_faab_league(monkeypatch,
     data = res.json()
     assert "remaining_budget" in data
     assert "recommendations" in data
+    for rec in data["recommendations"]:
+        assert "free_agent_name" in rec and rec["free_agent_name"]
+        assert "free_agent_position" in rec
+        assert "drop_player_id" in rec
+        assert "drop_player_name" in rec
+        assert "drop_player_position" in rec
+        # Names must be resolved from player profiles, not raw Sleeper IDs.
+        assert rec["free_agent_name"] != rec["free_agent_id"]
 
 
 def test_waivers_endpoint_400s_for_a_non_faab_league(monkeypatch, tmp_path):
