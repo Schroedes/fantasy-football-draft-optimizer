@@ -109,6 +109,8 @@ def diff(
         vp = valued.get(pid)
         return vp.vor if vp is not None else 0.0
 
+    current_starter_ids = {pid for pid in current_starters if pid is not None}
+
     rows: list[SlotDiff] = []
     for i, slot_label in enumerate(league.starting_slots):
         current = current_starters[i] if i < len(current_starters) else None
@@ -118,8 +120,15 @@ def diff(
         # doesn't exist, or `best` isn't actually an improvement over `current`
         # (e.g. current's best RB sits in FLEX while a functionally-equivalent
         # RB sits in the dedicated slot -- swapping them would change nothing
-        # or make things worse, so it must not be reported as a "swap").
-        if current == best or best is None or value_of(best) <= value_of(current):
+        # or make things worse, so it must not be reported as a "swap"), or
+        # `best` is already starting in a DIFFERENT slot of the current
+        # lineup -- that's `optimal_slots` relabeling an existing starter,
+        # not a bench player available to bring in, so it must not be
+        # reported as a swap either (the slot that player vacates will pick
+        # up its own bench-sourced suggestion, if any, on a later diff once
+        # that vacancy actually exists).
+        if (current == best or best is None or value_of(best) <= value_of(current)
+                or best in current_starter_ids):
             rows.append(SlotDiff(
                 slot_index=i, slot_label=slot_label, status="match",
                 current_player_id=current, optimal_player_id=None, delta=0.0))
