@@ -22,6 +22,9 @@ Each season-mode (post-draft) league's card shows:
   top-line "POWER RANK" tile already uses
   (`power_ranking.rank(..., position="OVR", scope="full")`), plus the
   delta vs. raw standings rank that tile already shows.
+- **Sleeper leagues only**: this week's opponent name and both teams'
+  projected scores, live-updating (see "Matchup & projected score"
+  below). Omitted entirely for ESPN leagues and for a bye week.
 - The full starting lineup, one row per slot (position chip + player
   name + this-week value), reusing the Lineup tab's own diff — if a
   slot has a suggested swap, that row shows the swap inline (current
@@ -36,7 +39,48 @@ Each season-mode (post-draft) league's card shows:
 Validated against a real 3-card grid mockup (one flagged league, one
 clean league, one pre-draft league) during brainstorming — the full
 detailed card holds up fine at 3 cards per row; no need to fall back to
-a slimmer summary-only card.
+a slimmer summary-only card. (That mockup predates the matchup/score
+row below — a follow-up mockup isn't required, since it's one more row
+of text using the same design tokens as the rest of the card, not a new
+layout question.)
+
+## Matchup & projected score
+
+Sleeper-only for this pass (see "Deferred / out of scope" for why ESPN
+isn't included) — and **no win probability**, per an explicit scoping
+decision: Sleeper's own `matchups/{week}` endpoint (confirmed against
+their published API docs) returns only `points` and `custom_points`,
+never a projected-points or win-probability field, so a probability
+would mean building a real statistical model here, not exposing
+already-available data. Deferred; can be picked up as its own follow-up
+later if wanted.
+
+What IS built:
+
+- New ingest, `ingest/sleeper/matchups.py::current_matchup(sleeper, league_id, week) -> dict[int, int]`
+  — fetches `matchups/{week}` (the same endpoint `actuals.points_so_far`
+  already calls for historical weeks, just for the single current week)
+  and groups rows by `matchup_id` to produce a `roster_id -> opponent_roster_id`
+  map. A roster absent from every pairing that week (odd team count) has
+  a bye; the home-summary endpoint reads that as "no matchup this week,"
+  not an error.
+- Both teams' projected scores reuse the exact same per-player
+  weekly-value function the Lineup tab's `weekly_lineup` module already
+  computes (a player's actual points if their game is final, else their
+  weekly projection) — run once over your own starters and once over
+  the opponent's starters. `rosters_mod.fetch()` already returns every
+  roster in the league, not just yours, so the opponent's `starter_ids`
+  are already in hand; no new per-roster fetch. No new scoring model —
+  the same function, applied to a second roster.
+- **Live updates**: Sleeper's own `points` field updates through the day
+  as games play, and every ingest call behind it is already
+  server-side TTL-cached (see the Endpoint section's caching note), so
+  `home.js` re-polls each season-mode league's `home-summary` on a 60s
+  interval while the home screen stays mounted — matching the reasoning
+  already used for `schedule_caches`' own 60s TTL elsewhere in this
+  codebase ("short enough to matter at kickoff, long enough not to
+  hammer anything"). The interval clears on unmount, the same lifecycle
+  discipline `board.js`'s existing live-draft poller already follows.
 
 ## Pre-draft cards
 
@@ -75,6 +119,9 @@ endpoint already calls — no new computation invented:
 - Trade target count: `trade_targets.suggest_for_team` against every
   other team, only when `lg.provider == "sleeper"` (same gate the
   existing Targets tab/endpoints apply).
+- Matchup + projected scores: `matchups.current_matchup` plus the
+  reused per-player weekly-value function (see "Matchup & projected
+  score" below), only when `lg.provider == "sleeper"`.
 
 Response shape:
 
@@ -86,6 +133,11 @@ Response shape:
   "resolved_format": "redraft",
   "record": {"wins": 0, "losses": 0, "ties": 0},
   "power_rank": {"value": 1, "of": 12, "delta_vs_standings": 7},
+  "matchup": {
+    "opponent_name": "America's Next Top Waddle",
+    "your_projected": 118.4,
+    "opponent_projected": 109.2
+  },
   "starters": [
     {"slot_label": "QB", "name": "Dak Prescott", "value": null,
      "status": "missed", "swap_to": null},
@@ -111,7 +163,9 @@ Sleeper-only/non-FAAB leagues simply omit the corresponding count from
 `flags` (not `0` — omitted, so the frontend's "no flags" check is a
 single "is this object empty" test, matching how the rest of this
 codebase already treats a category that doesn't apply as absent rather
-than zeroed).
+than zeroed). `matchup` is `null` for an ESPN league, and `null` for a
+Sleeper league on a bye week that week — both render as "no matchup
+section" on the card, the same absent-not-zeroed treatment.
 
 On a provider outage for this one league, the endpoint returns `502`
 exactly like every other per-league endpoint in this codebase already
@@ -176,14 +230,24 @@ Each flag chip is its own link, not just decoration on the card:
   hand-verified rather than hand-derived through the blended-projection
   pipeline) for a case producing a genuine swap + waiver + trade-target
   flag, plus the Sleeper-only and non-FAAB gating cases (flags key
-  omits the gated category entirely).
+  omits the gated category entirely). Also: a two-team fixture with a
+  real `matchup_id` pairing for the matchup/projected-score case, an
+  odd-team-count fixture (one roster with no pairing that week) for the
+  bye-week `matchup: null` case, and an ESPN-league case confirming
+  `matchup` is `null` there too.
+- New `tests/ingest/test_sleeper_matchups.py` for
+  `current_matchup` directly: a normal even-league pairing, and the
+  odd-team-count bye case, both against a hand-built `matchups/{week}`
+  response fixture (not a live call).
 - Frontend: no JS test framework exists in this repo (confirmed — no
   `package.json`, no JS test runner). Verified live against the real
   dev server (`ffdo-api`) and real tracked leagues — the grid renders,
   cards fill in as their data arrives, a flag click lands on the right
-  tab, and a simulated per-league failure (mocked `fetch`, same
-  technique used to verify Trade Targets' click-through) shows only
-  that one card in an error state.
+  tab, a simulated per-league failure (mocked `fetch`, same technique
+  used to verify Trade Targets' click-through) shows only that one card
+  in an error state, and the matchup/score row visibly updates after
+  the 60s poll fires (checked by watching a network log across two poll
+  cycles, not by waiting for a real game to be live).
 
 ## Deferred / out of scope
 
@@ -194,3 +258,15 @@ Each flag chip is its own link, not just decoration on the card:
 - Combining all leagues' summaries into one request — explicitly
   rejected in favor of per-league parallel requests, for both load-time
   and failure-isolation reasons (see Endpoint section above).
+- Win probability on the matchup row — explicitly scoped out. Neither
+  provider exposes it via their read API (confirmed against Sleeper's
+  own docs for this pass); building it would mean a new statistical
+  model estimating score variance, which is real new work, not a data
+  pull. A candidate future follow-up, not started here.
+- Matchup/projected score for ESPN leagues — would need new research
+  into ESPN's matchup-pairing data (a different API view than the
+  `mRoster` payload this codebase currently fetches, which has no
+  matchup pairing in it). Follows this initiative's established
+  precedent (Trade Targets, Waivers) of shipping Sleeper-only and
+  degrading ESPN gracefully rather than blocking on unverified ESPN
+  research.
