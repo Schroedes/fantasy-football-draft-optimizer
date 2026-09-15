@@ -43,7 +43,11 @@ async function route() {
   const hash = location.hash || "#/";
   const leagues = await loadLeagues();
 
-  if (hash === "#/connect") { renderSwitcher(leagues, null); return renderConnect(leagues); }
+  if (hash === "#/connect") {
+    renderSwitcher(leagues, null);
+    if (_homeModule) { _homeModule.unmount(); _homeModule = null; }
+    return renderConnect(leagues);
+  }
 
   const m = hash.match(/^#\/league\/(.+)$/);
   if (m) {
