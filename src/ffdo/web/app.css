@@ -47,6 +47,7 @@ a:hover { color: var(--text); }
   font-size: 16px;
   letter-spacing: 1.5px;
 }
+#switcher-bar .brand:hover { color: var(--accent); }
 #league-switcher {
   font: 13px var(--font-sans);
   font-weight: 600;

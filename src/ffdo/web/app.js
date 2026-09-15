@@ -37,6 +37,8 @@ function renderSwitcher(leagues, activeKey) {
   switcher.onchange = () => { location.hash = `#/league/${switcher.value}`; };
 }
 
+let _homeModule = null;
+
 async function route() {
   const hash = location.hash || "#/";
   const leagues = await loadLeagues();
@@ -45,18 +47,31 @@ async function route() {
 
   const m = hash.match(/^#\/league\/(.+)$/);
   if (m) {
-    const key = decodeURIComponent(m[1]);
+    const key = decodeURIComponent(m[1]).split("?")[0];
     try { localStorage.setItem(LAST_LEAGUE_KEY, key); } catch {}
     renderSwitcher(leagues, key);
+    if (_homeModule) { _homeModule.unmount(); _homeModule = null; }
     return renderLeague(key);
   }
 
-  // "#/" — go to last-viewed or first league, else connect
+  // "#/" — the command-center home grid.
+  renderSwitcher(leagues, null);
   if (!leagues.length) { location.hash = "#/connect"; return; }
-  let last = null;
-  try { last = localStorage.getItem(LAST_LEAGUE_KEY); } catch {}
-  const target = leagues.find(l => l.league_key === last) || leagues[0];
-  location.hash = `#/league/${target.league_key}`;
+  view.innerHTML = `<div id="home-root"></div>`;
+  try {
+    _homeModule = await import("./home/home.js");
+    if (!document.querySelector('link[href$="home/home.css"]')) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = "/home/home.css";
+      document.head.appendChild(link);
+    }
+    _homeModule.mount(document.getElementById("home-root"));
+  } catch (e) {
+    document.getElementById("home-root").textContent =
+      "Couldn't load the home screen — check the console.";
+    console.error("home module failed to load", e);
+  }
 }
 
 // --- connect / discovery -------------------------------------------------

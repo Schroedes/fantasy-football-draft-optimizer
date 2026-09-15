@@ -76,7 +76,14 @@ export async function mountSeason(container, leagueKey, meta) {
   // is cached across a league switch in the shell (re-import resolves to the
   // same instance), so without this a second league would open wearing the
   // first league's tab selection (same reasoning as board.js's freshState()).
-  _panel = "lineup";
+  // A command-center flag click (home.js) navigates to
+  // "#/league/<key>?tab=<name>" -- read that suffix directly off the
+  // current hash rather than threading a parameter through app.js's
+  // renderLeague()/board.js's mount(), since both already exist and
+  // neither currently passes anything beyond the league key.
+  const tabParam = (location.hash.split("?tab=")[1] || "").split("&")[0];
+  const validTabs = ["lineup", "power", "capital", "trades", "waivers", "scorecard", "targets"];
+  _panel = validTabs.includes(tabParam) ? tabParam : "lineup";
   _pos = "OVR";
   _scope = "starters";
   _lineupData = null;

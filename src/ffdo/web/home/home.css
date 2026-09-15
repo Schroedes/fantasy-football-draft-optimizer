@@ -1,0 +1,109 @@
+/* Command-center home -- reuses app.css's existing tokens (--bg,
+   --surface, --surface-2, --border, --border-strong, --text, --muted,
+   --faint, --accent, --green, --red, --amber, --font-sans, --font-mono)
+   exclusively, matching season.css's own theme discipline. No new colors. */
+
+.home-continue {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  margin-bottom: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.home-continue a { font-weight: 600; }
+
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+  padding: 4px 20px 28px;
+}
+
+.home-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+.home-card:hover { border-color: var(--border-strong); }
+.home-card.attn { border-color: color-mix(in oklch, var(--amber) 45%, var(--border)); }
+
+.home-card-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.home-card-name { font-weight: 700; font-size: 14.5px; }
+.home-card-sub { font-size: 11px; color: var(--faint); margin-bottom: 12px; }
+
+.home-card-skeleton { color: var(--faint); font-size: 12.5px; padding: 20px 0; }
+.home-card-error { color: var(--red); font-size: 12.5px; padding: 10px 0; }
+.home-card-retry {
+  font: 600 11.5px var(--font-sans);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 5px 11px;
+  cursor: pointer;
+  margin-top: 6px;
+}
+
+/* pre-draft minimal card */
+.home-card.predraft { display: flex; flex-direction: column; justify-content: center; min-height: 120px; }
+.home-predraft-status {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 14%, transparent);
+  border-radius: 6px;
+  padding: 4px 9px;
+  margin-top: 10px;
+  align-self: flex-start;
+}
+
+.home-rank-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.home-rank-big { font-family: var(--font-mono); font-size: 19px; font-weight: 700; color: var(--accent); }
+.home-rank-label { font-size: 10.5px; color: var(--faint); }
+.home-rank-delta { font-size: 11px; color: var(--green); font-family: var(--font-mono); }
+.home-rank-delta.neg { color: var(--red); }
+
+.home-matchup { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; font-size: 12.5px; }
+.home-matchup-score { font-family: var(--font-mono); font-weight: 700; font-size: 15px; }
+.home-matchup-vs { color: var(--faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; }
+.home-matchup-opp { color: var(--muted); text-align: right; }
+
+.home-roster-list { display: flex; flex-direction: column; gap: 1px; margin-bottom: 12px; }
+.home-roster-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 11.5px; }
+.home-roster-row:last-child { border-bottom: none; }
+.home-roster-row .pos {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  width: 26px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.home-roster-row .nm { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-roster-row.swap-out { color: var(--amber); }
+.home-roster-row.swap-out .nm { text-decoration: line-through; text-decoration-color: var(--amber); opacity: 0.65; }
+.home-roster-row .val { font-family: var(--font-mono); color: var(--muted); font-size: 11px; }
+
+.home-flags { display: flex; flex-direction: column; gap: 6px; }
+.home-flag {
+  display: block;
+  font-size: 11.5px;
+  padding: 5px 9px;
+  border-radius: 6px;
+}
+.home-flag.swap { background: color-mix(in oklch, var(--amber) 12%, transparent); color: var(--amber); }
+.home-flag.waiver { background: color-mix(in oklch, var(--green) 12%, transparent); color: var(--green); }
+.home-flag.target { background: color-mix(in oklch, var(--accent) 12%, transparent); color: var(--accent); }
