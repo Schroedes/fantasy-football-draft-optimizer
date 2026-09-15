@@ -8,7 +8,7 @@ def _client(handler):
     return SleeperClient(base_delay=0, transport=httpx.MockTransport(handler))
 
 
-def test_current_week_from_display_week():
+def test_current_week_basic_fields():
     def handler(request):
         assert request.url.path == "/v1/state/nfl"
         return httpx.Response(200, json={
@@ -28,6 +28,22 @@ def test_current_week_falls_back_to_week_when_no_display_week():
         return httpx.Response(200, json={"season": "2026", "season_type": "regular", "week": 3})
 
     assert nfl_state.current_week(_client(handler)).week == 3
+
+
+def test_current_week_uses_week_not_lagging_display_week():
+    """Real /state/nfl the Tuesday after week 1 ended: `week` has already
+    ticked over to 2, but Sleeper's own `display_week` lags a day behind
+    while stat corrections finalize. `week` -- not `display_week` -- is
+    the field that flips exactly when the previous week is done, which is
+    what `_through_week` in app.py relies on to know week 1 is bankable.
+    Using `display_week` here made the whole app look frozen every Tuesday."""
+    def handler(request):
+        return httpx.Response(200, json={
+            "season": "2026", "season_type": "regular",
+            "week": 2, "display_week": 1, "leg": 2,
+        })
+
+    assert nfl_state.current_week(_client(handler)).week == 2
 
 
 def test_postseason_is_complete():

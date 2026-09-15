@@ -10,7 +10,12 @@ from ffdo.ingest.client import V1, SleeperClient
 
 def current_week(sleeper: SleeperClient) -> NflWeek:
     raw = sleeper.get_json(f"{V1}/state/nfl")
-    week = int(raw.get("display_week") or raw.get("week") or 0)
+    # `week` flips the moment the previous week's games are done (Tuesday
+    # morning). `display_week` is Sleeper's own UI hint and lags a day
+    # behind that during the Tue/Wed stat-correction window -- preferring
+    # it here made `_through_week` in app.py think the just-finished week
+    # was still in progress, banking zero points for it until Wednesday.
+    week = int(raw.get("week") or raw.get("display_week") or 0)
     season_type = raw.get("season_type") or "regular"
     return NflWeek(
         season=int(raw["season"]),
