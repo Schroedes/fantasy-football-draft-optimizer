@@ -1,15 +1,17 @@
 """ESPN current rosters + standings + week, from mTeam/mRoster/mSettings.
 ESPN player ids are crosswalked to Sleeper ids (the valuation source is
-Sleeper's player pool regardless of provider). UNVERIFIED against a live
-league -- see the spec. Every field access is defensive."""
+Sleeper's player pool regardless of provider). Verified live 2026-09-16
+against a real drafted league. Every field access is defensive."""
 
 from __future__ import annotations
 
 from ffdo.domain.models import NflWeek, RosterEntry
 from ffdo.ingest.espn.client import BASE, EspnClient
 from ffdo.ingest.espn.crosswalk import Crosswalk
+from ffdo.ingest.espn.league import ESPN_SLOT_ID_TO_POSITION
 
 _BENCH_SLOTS = {20, 21}   # BN, IR
+_IR_SLOT = 21
 
 
 def fetch(
@@ -20,7 +22,13 @@ def fetch(
         "?view=mTeam&view=mRoster&view=mSettings")
 
     settings = raw.get("settings") or {}
-    current_period = int((settings.get("status") or {}).get("currentMatchupPeriod") or 0)
+    # `status` is a sibling of `settings` at the payload's top level, not
+    # nested under it -- confirmed live 2026-09-16 (`raw["status"]`, not
+    # `raw["settings"]["status"]`). Reading it from the wrong place silently
+    # left this at 0 forever, which made every ESPN league's season-to-date
+    # actuals compute as "no weeks final yet," always, regardless of the
+    # real week.
+    current_period = int((raw.get("status") or {}).get("currentMatchupPeriod") or 0)
     period_count = int((settings.get("scheduleSettings") or {}).get("matchupPeriodCount") or 18)
     week = NflWeek(
         season=season,
@@ -35,13 +43,19 @@ def fetch(
         roster_entries = ((team.get("roster") or {}).get("entries") or [])
         player_ids: list[str] = []
         starter_ids: list[str] = []
+        reserve_ids: list[str] = []
         for re in roster_entries:
             sleeper_id = crosswalk.espn_to_sleeper.get(str(re.get("playerId")))
             if sleeper_id is None:
                 continue
             player_ids.append(sleeper_id)
-            if re.get("lineupSlotId") not in _BENCH_SLOTS:
+            slot_id = re.get("lineupSlotId")
+            if slot_id not in _BENCH_SLOTS:
                 starter_ids.append(sleeper_id)
+            elif slot_id == _IR_SLOT:
+                # ESPN has no taxi-squad concept distinct from IR, unlike
+                # Sleeper -- `taxi_ids` stays empty for every ESPN league.
+                reserve_ids.append(sleeper_id)
         name = team.get("name") or " ".join(
             p for p in (team.get("location"), team.get("nickname")) if p
         ) or f"Team {team.get('id')}"
@@ -55,6 +69,54 @@ def fetch(
             ties=int(rec.get("ties") or 0),
             points_for=float(rec.get("pointsFor") or 0.0),
             points_against=float(rec.get("pointsAgainst") or 0.0),
+            reserve_ids=tuple(reserve_ids),
         ))
     entries.sort(key=lambda e: e.roster_id)
     return entries, week, raw
+
+
+def slot_aligned_starters(
+    mroster_raw: dict, crosswalk: Crosswalk, roster_id: int,
+    starting_slots: tuple[str, ...],
+) -> tuple[str | None, ...]:
+    """One team's current starters, positionally aligned to
+    `league.starting_slots` -- mirrors Sleeper's own
+    `ingest.rosters.raw_starters` contract exactly (same return shape,
+    same "None for an empty slot" convention) so both providers feed
+    `engine.weekly_lineup.diff` identically.
+
+    Unlike Sleeper, ESPN doesn't hand back a pre-ordered starters array:
+    each roster entry carries its own `lineupSlotId`, and multiple
+    entries can share one (e.g. two RB slots). Alignment is rebuilt here
+    by walking `starting_slots` in order and consuming the next unused
+    entry whose slot maps to that label -- which specific same-labeled
+    slot a player lands in is never distinguished downstream (`diff`
+    only compares by index against `starting_slots`, and slots sharing a
+    label are interchangeable), so an arbitrary consistent order is
+    correct, not merely convenient.
+    """
+    for team in mroster_raw.get("teams") or []:
+        if team.get("id") != roster_id:
+            continue
+        pools: dict[str, list[str]] = {}
+        for entry in ((team.get("roster") or {}).get("entries") or []):
+            label = ESPN_SLOT_ID_TO_POSITION.get(entry.get("lineupSlotId"))
+            if label in (None, "BN", "IR"):
+                continue
+            sleeper_id = crosswalk.espn_to_sleeper.get(str(entry.get("playerId")))
+            if sleeper_id is None:
+                continue
+            pools.setdefault(label, []).append(sleeper_id)
+
+        cursor: dict[str, int] = dict.fromkeys(pools, 0)
+        out: list[str | None] = []
+        for label in starting_slots:
+            pool = pools.get(label, [])
+            idx = cursor.get(label, 0)
+            if idx < len(pool):
+                out.append(pool[idx])
+                cursor[label] = idx + 1
+            else:
+                out.append(None)
+        return tuple(out)
+    return tuple(None for _ in starting_slots)

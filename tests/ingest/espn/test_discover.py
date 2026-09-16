@@ -10,7 +10,7 @@ _FAN_RAW = {
             "entryId": 7, "gameId": 1, "seasonId": 2026,
             "name": "Team Schroeder",
             "groups": [{"groupId": 1882997948, "groupName": "Dynasty Warehouse",
-                        "groupSize": 12, "draftComplete": True}]}}},
+                        "groupSize": 12, "draftStatus": 2}]}}},
         {"type": {"code": "fantasy"}, "metaData": {"entry": {
             "entryId": 3, "gameId": 1, "seasonId": 2025,
             "groups": [{"groupId": 999, "groupName": "Last Year", "groupSize": 10}]}}},
@@ -85,7 +85,7 @@ def test_list_leagues_skips_a_malformed_entry_and_keeps_the_rest():
             {"type": {"code": "fantasy"}, "metaData": {"entry": {
                 "entryId": 7, "gameId": 1, "seasonId": 2026,
                 "groups": [{"groupId": 1882997948, "groupName": "Dynasty Warehouse",
-                            "groupSize": 12, "draftComplete": True}]}}},
+                            "groupSize": 12, "draftStatus": 2}]}}},
         ]
     }
 
@@ -94,3 +94,24 @@ def test_list_leagues_skips_a_malformed_entry_and_keeps_the_rest():
 
     out = discover.list_leagues("s2", "{SWID}", 2026, transport=_transport(handler))
     assert [d.provider_league_id for d in out] == ["1882997948"]
+
+
+def test_list_leagues_reads_draft_status_not_the_nonexistent_draft_complete_field():
+    """Regression: the real fan API has no `draftComplete` key at all --
+    the actual signal is `draftStatus`, an undocumented enum where 2 is
+    the only value confirmed (live) to mean complete."""
+    raw = {
+        "preferences": [
+            {"type": {"code": "fantasy"}, "metaData": {"entry": {
+                "entryId": 7, "gameId": 1, "seasonId": 2026,
+                "groups": [{"groupId": 1882997948, "groupName": "Dynasty Warehouse",
+                            "groupSize": 12, "draftComplete": True,  # a real payload never has this
+                            "draftStatus": 0}]}}},
+        ]
+    }
+
+    def handler(request):
+        return httpx.Response(200, json=raw)
+
+    out = discover.list_leagues("s2", "{SWID}", 2026, transport=_transport(handler))
+    assert out[0].draft_status == "pre_draft"
