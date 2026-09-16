@@ -6,8 +6,10 @@ from fastapi.testclient import TestClient
 from ffdo.api import app as app_mod
 from ffdo.api.app import create_app
 from ffdo.api.store import LeagueStore
+from ffdo.domain.models import ProviderCredential
 from ffdo.ingest.client import V1
 
+from tests.api.test_app import _recording_espn_client
 from tests.api.test_season_endpoint import (
     _MATCHUPS, _PLAYERS, _PROJ, _ROSTERS, _STATE, _USERS, _tracked)
 
@@ -44,11 +46,79 @@ class _FakeClient:
     def close(self): pass
 
 
-def test_home_summary_is_sleeper_only():
-    app_mod._STORE.upsert(_tracked(
-        league_key="espn:E1:2026", provider="espn", provider_league_id="E1"))
+_ESPN_LEAGUE_RAW = {
+    "status": {"currentMatchupPeriod": 3},
+    "settings": {"scheduleSettings": {"matchupPeriodCount": 14}},
+    "teams": [
+        {"id": 1, "name": "You Team",
+         "record": {"overall": {"wins": 5, "losses": 2, "ties": 0,
+                                "pointsFor": 800.0, "pointsAgainst": 700.0}},
+         "roster": {"entries": [
+             {"playerId": 9001, "lineupSlotId": 2,
+              "playerPoolEntry": {"player": {"stats": []}}},
+         ]}},
+        {"id": 2, "name": "Them Team",
+         "record": {"overall": {"wins": 2, "losses": 5, "ties": 0,
+                                "pointsFor": 500.0, "pointsAgainst": 600.0}},
+         "roster": {"entries": [
+             {"playerId": 9002, "lineupSlotId": 4,
+              "playerPoolEntry": {"player": {"stats": []}}},
+         ]}},
+    ],
+}
+_ESPN_PLAYER_POOL_RAW = [
+    {"id": 9001, "fullName": "R B", "defaultPositionId": 2, "proTeamId": 99},  # -> p_rb
+    {"id": 9002, "fullName": "W R", "defaultPositionId": 3, "proTeamId": 98},  # -> p_wr
+]
+
+
+def _espn_home_tracked(**over):
+    return _tracked(**{
+        "league_key": "espn:E1:2026", "provider": "espn", "provider_league_id": "E1",
+        "roster_id": 1, **over,
+    })
+
+
+def test_home_summary_espn_returns_record_and_power_rank_only(monkeypatch, tmp_path):
+    """ESPN has no weekly-lineup, waiver or trade-target ingest yet, so its
+    home-summary card is deliberately smaller than Sleeper's -- record and
+    power rank (reusing the same roster+valuation fetch `_season_espn`
+    uses), with matchup/starters/flags left empty rather than guessed."""
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_espn_home_tracked())
+    store.put_credential(ProviderCredential("espn", "{SWID}", "s2value", "{SWID}", "t"))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient",
+                        lambda *a, **k: _FakeClient({f"{V1}/players/nfl": _PLAYERS,
+                                                     "/projections/": _PROJ}))
+    FakeEspn, _calls = _recording_espn_client({
+        "seasons/2026/players": _ESPN_PLAYER_POOL_RAW,
+        "leagues/E1": _ESPN_LEAGUE_RAW,
+    })
+    monkeypatch.setattr("ffdo.ingest.espn.client.EspnClient", FakeEspn)
+
+    res = TestClient(create_app()).get("/api/leagues/espn:E1:2026/home-summary")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["league_key"] == "espn:E1:2026"
+    assert data["provider"] == "espn"
+    assert data["name"] == "You Team"
+    assert data["record"] == {"wins": 5, "losses": 2, "ties": 0}
+    assert data["power_rank"]["value"] in (1, 2)
+    assert data["power_rank"]["of"] == 2
+    assert data["matchup"] is None
+    assert data["starters"] == []
+    assert data["flags"] == {}
+
+
+def test_home_summary_espn_400s_without_a_stored_credential(monkeypatch, tmp_path):
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_espn_home_tracked())
+    monkeypatch.setattr(app_mod, "_STORE", store)
+
     res = TestClient(create_app()).get("/api/leagues/espn:E1:2026/home-summary")
     assert res.status_code == 400
+    assert "Connect ESPN" in res.json()["detail"]
 
 
 def test_home_summary_shape_and_empty_flags_with_minimal_shared_fixture(monkeypatch, tmp_path):

@@ -1788,6 +1788,90 @@ def create_app() -> FastAPI:
                     f"where you have surplus."),
         }
 
+    def _home_summary_espn(lg: TrackedLeague) -> dict:
+        """ESPN's command-center card. Weekly lineup, waivers and trade
+        targets have no ESPN ingest yet (separate follow-ups), so this
+        branch only fills in what's actually buildable today: record and
+        power rank, reusing the same rosters+valuation fetch `_season_espn`
+        uses. Matches `_load_trade_targets_context`'s own established
+        pattern of skipping the dynasty age-curve history fetch for this
+        kind of lightweight card -- the season screen's power rank is the
+        one place that gets the fuller history-aware valuation."""
+        cred = _require_espn_credential("the home summary")
+
+        sleeper = client_mod.SleeperClient()
+        try:
+            profiles, espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            proj_anchor = _season_proj_anchor_for(lg.season).get(
+                lambda: _load_projection_anchor(sleeper, lg.season))
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=502, detail="Couldn't reach Sleeper, try again") from exc
+        finally:
+            sleeper.close()
+
+        espn = espn_client_mod.EspnClient(cred.espn_s2, cred.swid)
+        try:
+            player_pool_raw = _espn_player_pool_cache_for(lg.season).get(
+                lambda: espn.get_json(
+                    f"{espn_client_mod.BASE}/seasons/{lg.season}/players"
+                    "?view=kona_player_info",
+                    extra_headers=espn_client_mod.PLAYER_POOL_FILTER_HEADER))
+            cw = _espn_crosswalk_cache_for(lg.season).get(
+                lambda: espn_crosswalk_mod.build(
+                    espn_id_index, profiles,
+                    espn_crosswalk_mod.parse_player_pool(player_pool_raw)))
+            rosters, nfl, mroster_raw = espn_rosters_mod.fetch(
+                espn, lg.provider_league_id, lg.season, cw)
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=502, detail="Couldn't reach ESPN, try again") from exc
+        finally:
+            espn.close()
+
+        you = next((r for r in rosters if r.roster_id == lg.roster_id), None)
+        if you is None:
+            return {
+                "league_key": lg.league_key, "name": lg.name, "provider": lg.provider,
+                "resolved_format": lg.resolved_format, "record": None,
+                "power_rank": None, "matchup": None, "starters": [], "flags": {},
+            }
+
+        through_week = _through_week(nfl)
+        actuals = espn_actuals_mod.points_so_far(mroster_raw, cw, lg.season, through_week)
+        all_pids = {pid for r in rosters for pid in r.player_ids}
+        valued = ros_value_mod.roster_value(
+            all_pids, lg, resolved_format=lg.resolved_format, season_proj=proj_anchor,
+            profiles=profiles, actuals=actuals, weeks_played=through_week,
+            season_weeks=_season_weeks(lg.season))
+
+        standings_rank = _standings_rank(rosters)
+        power_rows = power_ranking_mod.rank(
+            rosters, valued, lg, standings_rank, lg.roster_id, position="OVR", scope="starters")
+        your_power_row = next((r for r in power_rows if r.roster_id == lg.roster_id), None)
+        power_rank = None
+        if your_power_row is not None:
+            your_standings_rank = standings_rank.get(lg.roster_id)
+            power_rank = {
+                "value": your_power_row.power_rank,
+                "of": len(rosters),
+                "delta_vs_standings": (
+                    your_standings_rank - your_power_row.power_rank
+                    if your_standings_rank is not None else None),
+            }
+
+        return {
+            "league_key": lg.league_key,
+            "name": you.team_name,
+            "provider": lg.provider,
+            "resolved_format": lg.resolved_format,
+            "record": {"wins": you.wins, "losses": you.losses, "ties": you.ties},
+            "power_rank": power_rank,
+            "matchup": None,
+            "starters": [],
+            "flags": {},
+        }
+
     @app.get("/api/leagues/{league_key}/home-summary")
     def get_home_summary(league_key: str) -> dict:
         """One league's command-center card: power rank, starting-lineup
@@ -1796,10 +1880,14 @@ def create_app() -> FastAPI:
         per-league computation this initiative already built -- no new
         scoring logic beyond Task 2's team_projected_score, which exists
         specifically because weekly_lineup's own per-player values are
-        VOR, not the raw points a "projected score" needs to show."""
+        VOR, not the raw points a "projected score" needs to show.
+
+        ESPN leagues get a smaller, honest card (record + power rank
+        only) via `_home_summary_espn` -- weekly lineup, waivers and
+        trade targets have no ESPN ingest yet."""
         lg = _load_league(league_key)
-        if lg.provider != "sleeper":
-            raise HTTPException(status_code=400, detail="Home summary is Sleeper-only for now")
+        if lg.provider == "espn":
+            return _home_summary_espn(lg)
 
         ctx = _load_trade_targets_context(lg)
         if ctx is None:
