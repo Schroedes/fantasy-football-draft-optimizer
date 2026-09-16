@@ -62,12 +62,18 @@ def recommend_adds(
     valued: Mapping[str, "ValuedPlayer"],
     profiles: Mapping[str, "PlayerProfile"],
     league,
-    faab_curve: Mapping[int, float],
-    remaining_budget: float,
+    faab_curve: Mapping[int, float] | None,
+    remaining_budget: float | None,
     *,
     top_n: int = 10,
     min_vor_gain: float = 5.0,
 ) -> list["WaiverRecommendation"]:
+    """`faab_curve`/`remaining_budget` are None for a non-FAAB
+    (waiver-priority) league -- the add/drop recommendation itself
+    (which free agent, who to drop, how much VOR it gains) doesn't
+    depend on the acquisition model at all, only the dollar bid suggestion
+    does, so every recommendation still ships with `suggested_bid=None`
+    rather than being suppressed entirely."""
     your_ids = list(your_roster_ids)
     your_by_position: dict[str, list[str]] = {}
     for pid in your_ids:
@@ -103,9 +109,11 @@ def recommend_adds(
         if vor_gain <= min_vor_gain:
             continue
 
+        bid = (suggested_bid(vor_gain, remaining_budget, faab_curve)
+              if faab_curve is not None and remaining_budget is not None else None)
         out.append(WaiverRecommendation(
             free_agent_id=fa_id, drop_player_id=drop_id, vor_gain=vor_gain,
-            suggested_bid=suggested_bid(vor_gain, remaining_budget, faab_curve)))
+            suggested_bid=bid))
 
     out.sort(key=lambda r: r.vor_gain, reverse=True)
     return out[:top_n]

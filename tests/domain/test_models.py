@@ -43,6 +43,14 @@ def test_tracked_league_slot_helpers():
     assert lg.roster_size == 5
 
 
+def test_tracked_league_starting_slots_excludes_ir_and_taxi():
+    # Regression: only "BN" was ever filtered, leaving a permanent
+    # always-empty "IR"/"TAXI" phantom row in the weekly-lineup diff and
+    # draft-time slot-filling for any league using either roster slot type.
+    lg = _tracked(roster_positions=("QB", "RB", "BN", "IR", "TAXI"))
+    assert lg.starting_slots == ("QB", "RB")
+
+
 def test_provider_credential_and_discovered_league_construct():
     cred = ProviderCredential(provider="espn", user_identifier="{SWID}",
                               espn_s2="s2", swid="{SWID}", updated_at="t")
@@ -155,6 +163,15 @@ def test_league_profile_derives_starting_slots_and_roster_size():
     )
     assert lg.starting_slots == ("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX")
     assert lg.roster_size == 13
+
+
+def test_league_profile_starting_slots_excludes_ir_and_taxi():
+    lg = LeagueProfile(
+        league_id="L1", season=2026, num_teams=10,
+        roster_positions=("QB", "RB", "BN", "IR", "TAXI"),
+        scoring_settings={}, budget=None,
+    )
+    assert lg.starting_slots == ("QB", "RB")
 
 
 def test_league_profile_name_and_status_default_to_empty_string():

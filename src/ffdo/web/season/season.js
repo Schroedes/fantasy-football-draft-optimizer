@@ -387,7 +387,12 @@ function renderWaivers() {
   if (_waiversData.error) {
     return `<div class="lineup-error">${escapeHtml(_waiversData.error)}</div>`;
   }
-  const header = `<div class="lineup-header">Remaining budget: $${_waiversData.remaining_budget}</div>`;
+  // remaining_budget/suggested_bid are null for a waiver-priority league --
+  // there's no FAAB budget to bid a fraction of, but the add/drop call
+  // itself is still real VOR-based signal.
+  const header = _waiversData.remaining_budget != null
+    ? `<div class="lineup-header">Remaining budget: $${_waiversData.remaining_budget}</div>`
+    : "";
   if (_waiversData.recommendations.length === 0) {
     return header + `<div class="lineup-empty">No recommended adds right now</div>`;
   }
@@ -396,9 +401,10 @@ function renderWaivers() {
     const drop = r.drop_player_id
       ? `drop ${escapeHtml(r.drop_player_name)} (${escapeHtml(r.drop_player_position)})`
       : "open bench slot, no drop needed";
+    const bid = r.suggested_bid != null ? `<div>Suggested bid: $${r.suggested_bid}</div>` : "";
     return `<div class="lineup-row waiver-row">
       <div>Add ${addLabel} &mdash; ${drop} &mdash; +${r.vor_gain} VOR</div>
-      <div>Suggested bid: $${r.suggested_bid}</div>
+      ${bid}
     </div>`;
   }).join("");
   return header + `<div class="lineup-list">${rows}</div>`;

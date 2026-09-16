@@ -7,6 +7,15 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+# Roster slots that never hold a player who can actually contribute points
+# to a starting lineup. IR/TAXI are reserve spots, not eligible for any real
+# position, so a label match against them (`greedy_fill_slots`,
+# `weekly_lineup.diff`, `slot_aligned_starters`) can never fill them --
+# leaving them in `starting_slots` produces a permanent, always-empty
+# phantom row rather than an outright wrong recommendation, but it's still
+# wrong to display as if it were a real slot.
+NON_STARTING_SLOTS = frozenset({"BN", "IR", "TAXI"})
+
 
 @dataclass(frozen=True, slots=True)
 class PlayerProfile:
@@ -66,7 +75,7 @@ class LeagueProfile:
 
     @property
     def starting_slots(self) -> tuple[str, ...]:
-        return tuple(p for p in self.roster_positions if p != "BN")
+        return tuple(p for p in self.roster_positions if p not in NON_STARTING_SLOTS)
 
     @property
     def roster_size(self) -> int:
@@ -107,7 +116,7 @@ class TrackedLeague:
 
     @property
     def starting_slots(self) -> tuple[str, ...]:
-        return tuple(p for p in self.roster_positions if p != "BN")
+        return tuple(p for p in self.roster_positions if p not in NON_STARTING_SLOTS)
 
     @property
     def roster_size(self) -> int:
@@ -312,4 +321,7 @@ class WaiverRecommendation:
     free_agent_id: str
     drop_player_id: str | None
     vor_gain: float
-    suggested_bid: float
+    # None for a non-FAAB (waiver-priority) league -- there's no budget to
+    # bid a fraction of, but the add/drop recommendation itself is still
+    # real VOR-based signal independent of the acquisition model.
+    suggested_bid: float | None
