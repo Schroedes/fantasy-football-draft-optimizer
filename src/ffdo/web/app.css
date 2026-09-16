@@ -35,7 +35,8 @@ a:hover { color: var(--text); }
 #switcher-bar {
   display: flex;
   align-items: center;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 10px 16px;
   padding: 14px 28px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
@@ -46,6 +47,7 @@ a:hover { color: var(--text); }
   font-weight: 600;
   font-size: 16px;
   letter-spacing: 1.5px;
+  flex-shrink: 0;
 }
 #switcher-bar .brand:hover { color: var(--accent); }
 #league-switcher {
@@ -56,6 +58,9 @@ a:hover { color: var(--text); }
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   padding: 8px 12px;
+  min-width: 0;
+  flex: 1 1 160px;
+  max-width: 320px;
 }
 #league-switcher:focus { outline: none; border-color: var(--accent); }
 .add-leagues {
@@ -63,6 +68,12 @@ a:hover { color: var(--text); }
   font-size: 13px;
   font-weight: 600;
   color: var(--accent);
+  flex-shrink: 0;
+}
+
+@media (max-width: 480px) {
+  #switcher-bar { padding: 12px 16px; }
+  #league-switcher { max-width: none; flex-basis: 100%; order: 3; }
 }
 
 /* ---- view / cards ---- */
@@ -72,6 +83,18 @@ a:hover { color: var(--text); }
   width: 100%;
   margin: 0 auto;
   padding: 28px;
+}
+
+/* The season/board screens (two-panel layout, wide tables) are the most
+   data-dense in the app -- home.css's own .view-wide (max-width: none) fits
+   its card grid, but a hard cap of "none" would let a single table stretch
+   absurdly on an ultrawide monitor, so this route gets a wider cap instead
+   of no cap at all. Set on #view by app.js's route() for "#/league/...". */
+#view.view-lg { max-width: 1600px; }
+
+@media (max-width: 480px) {
+  #view { padding: 14px; }
+  .card { padding: 18px 16px; }
 }
 
 .card {

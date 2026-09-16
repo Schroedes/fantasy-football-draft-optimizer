@@ -12,6 +12,14 @@ function escapeHtml(s) {
   }[c]));
 }
 
+// Display-only shorthand for the two multi-position slots -- FLEX/SUPER_FLEX
+// run past the fixed-width .slot-chip, so abbreviate the way Sleeper's own
+// UI does (WRT / WRTQ) rather than widening the chip for two labels. Never
+// touches the underlying slot value used for logic elsewhere (e.g. the
+// p.slot === "BN" check below).
+const SLOT_DISPLAY = { FLEX: "WRT", SUPER_FLEX: "WRTQ" };
+function slotDisplay(slot) { return SLOT_DISPLAY[slot] || slot; }
+
 let _c, _key, _meta, _data;
 let _panel = "lineup", _pos = "OVR", _scope = "starters";
 let _lineupData = null;   // null until the Lineup tab has been opened at least once
@@ -263,7 +271,7 @@ function renderLineup() {
     : `Week ${d.nfl_week.week} lineup — ${d.swaps_suggested} swap${d.swaps_suggested === 1 ? "" : "s"} suggested`;
 
   const rows = d.diff.map(row => {
-    const slot = `<span class="slot-chip">${escapeHtml(row.slot_label)}</span>`;
+    const slot = `<span class="slot-chip">${escapeHtml(slotDisplay(row.slot_label))}</span>`;
     if (row.status === "match") {
       const cur = row.current
         ? `${escapeHtml(row.current.name)} <span class="lineup-team">${escapeHtml(row.current.team || "")}</span> &middot; ${row.current.value}`
@@ -692,7 +700,7 @@ function renderYourTeam(you, week) {
     const byeText = p.bye_week != null ? `bye ${p.bye_week}` : "";
     const meta = [p.team ? escapeHtml(p.team) : "FA", byeText].filter(Boolean).join(" · ");
     return `<div class="roster-row${p.starter ? "" : " bench"}">
-      <span class="slot-chip${p.slot === "BN" ? " bn" : ""}">${escapeHtml(p.slot)}</span>
+      <span class="slot-chip${p.slot === "BN" ? " bn" : ""}">${escapeHtml(slotDisplay(p.slot))}</span>
       <div class="roster-row-main">
         <span class="roster-row-name">${escapeHtml(p.name)}</span>
         <span class="roster-row-meta">${meta}</span>

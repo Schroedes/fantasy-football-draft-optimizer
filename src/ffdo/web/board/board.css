@@ -350,8 +350,11 @@ body.board-mode {
   display: flex; flex-direction: column;
   background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px 4px;
 }
-#board-scroll { flex: 1; min-height: 0; overflow-y: auto; }
-table { border-collapse: collapse; width: 100%; }
+/* overflow-x: auto so a narrow viewport scrolls the table horizontally
+   instead of every column's text getting crushed illegibly -- same
+   reasoning as .pr-table's overflow-x in season.css. */
+#board-scroll { flex: 1; min-height: 0; overflow: auto; }
+table { border-collapse: collapse; width: 100%; min-width: 620px; }
 th, td { padding: .5rem .6rem; text-align: right; border-bottom: 1px solid var(--border); }
 th:first-child, td:first-child { text-align: left; width: 28px; padding-right: 0; }
 th:nth-child(2), td:nth-child(2) { text-align: left; }
@@ -389,8 +392,22 @@ tr.tier-break td { border-top: 2px solid var(--border-strong); }
 @media (max-width: 900px) {
   /* Stacked layout can't fit table + sidebar in one screen -- let the
      whole layout column scroll here instead of the desktop no-scroll
-     constraint, which would otherwise clip content below the fold. */
+     constraint, which would otherwise clip content below the fold.
+     #layout's align-items: flex-start is correct for the desktop row
+     layout (lets the sidebar and table panel differ in height), but that
+     same property governs the CROSS axis once this flips to a column --
+     the width axis. Without stretch, #board-panel would size to its own
+     fit-content width instead of the container's, undoing #board-scroll's
+     overflow-x containment below. */
   body.board-mode { overflow: visible; height: auto; }
-  #layout { flex-direction: column; overflow: visible; }
+  #layout { flex-direction: column; align-items: stretch; overflow: visible; }
   #sidebar { width: 100%; overflow: visible; }
+  #board-panel { width: 100%; }
+}
+
+@media (max-width: 480px) {
+  body { padding: 12px 14px 16px; }
+  #cow-rows { grid-template-columns: 1fr; }
+  #posbudget-rows { grid-template-columns: 1fr; }
+  .posbudget-reserve { grid-column: 1; }
 }
