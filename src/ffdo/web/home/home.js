@@ -171,7 +171,10 @@ function cardHtml(lg) {
   }
 
   return `<div class="home-card${hasFlags ? " attn" : ""}" data-home-card="${escapeHtml(lg.league_key)}">
-    <div class="home-card-head"><div class="home-card-name">${escapeHtml(d.name)}</div></div>
+    <div class="home-card-head">
+      <div class="home-card-league">${escapeHtml(lg.name)}</div>
+      <div class="home-card-name">${escapeHtml(d.name)}</div>
+    </div>
     <div class="home-card-sub">${escapeHtml(lg.provider)} &middot; ${escapeHtml(lg.resolved_format)}${record ? ` &middot; ${record}` : ""}</div>
     ${rankHtml}
     ${matchupHtml}

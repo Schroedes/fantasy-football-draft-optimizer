@@ -17,6 +17,8 @@
 }
 .home-continue a { font-weight: 600; }
 
+#view.view-wide { max-width: none; }
+
 .home-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -35,7 +37,8 @@
 .home-card:hover { border-color: var(--border-strong); }
 .home-card.attn { border-color: color-mix(in oklch, var(--amber) 45%, var(--border)); }
 
-.home-card-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.home-card-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; }
+.home-card-league { font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.4px; }
 .home-card-name { font-weight: 700; font-size: 14.5px; }
 .home-card-sub { font-size: 11px; color: var(--faint); margin-bottom: 12px; }
 

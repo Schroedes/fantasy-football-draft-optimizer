@@ -44,6 +44,7 @@ async function route() {
   const leagues = await loadLeagues();
 
   if (hash === "#/connect") {
+    view.classList.remove("view-wide");
     renderSwitcher(leagues, null);
     if (_homeModule) { _homeModule.unmount(); _homeModule = null; }
     return renderConnect(leagues);
@@ -51,6 +52,7 @@ async function route() {
 
   const m = hash.match(/^#\/league\/(.+)$/);
   if (m) {
+    view.classList.remove("view-wide");
     const key = decodeURIComponent(m[1]).split("?")[0];
     try { localStorage.setItem(LAST_LEAGUE_KEY, key); } catch {}
     renderSwitcher(leagues, key);
@@ -58,7 +60,10 @@ async function route() {
     return renderLeague(key);
   }
 
-  // "#/" — the command-center home grid.
+  // "#/" — the command-center home grid. Widened past #view's normal
+  // 960px cap (app.css) so the card grid can flex to more columns on
+  // wide monitors instead of every other route's form/table width.
+  view.classList.add("view-wide");
   renderSwitcher(leagues, null);
   if (!leagues.length) { location.hash = "#/connect"; return; }
   view.innerHTML = `<div id="home-root"></div>`;
