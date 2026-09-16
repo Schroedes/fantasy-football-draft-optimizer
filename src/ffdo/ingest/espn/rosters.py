@@ -11,6 +11,7 @@ from ffdo.ingest.espn.crosswalk import Crosswalk
 from ffdo.ingest.espn.league import ESPN_SLOT_ID_TO_POSITION
 
 _BENCH_SLOTS = {20, 21}   # BN, IR
+_IR_SLOT = 21
 
 
 def fetch(
@@ -42,13 +43,19 @@ def fetch(
         roster_entries = ((team.get("roster") or {}).get("entries") or [])
         player_ids: list[str] = []
         starter_ids: list[str] = []
+        reserve_ids: list[str] = []
         for re in roster_entries:
             sleeper_id = crosswalk.espn_to_sleeper.get(str(re.get("playerId")))
             if sleeper_id is None:
                 continue
             player_ids.append(sleeper_id)
-            if re.get("lineupSlotId") not in _BENCH_SLOTS:
+            slot_id = re.get("lineupSlotId")
+            if slot_id not in _BENCH_SLOTS:
                 starter_ids.append(sleeper_id)
+            elif slot_id == _IR_SLOT:
+                # ESPN has no taxi-squad concept distinct from IR, unlike
+                # Sleeper -- `taxi_ids` stays empty for every ESPN league.
+                reserve_ids.append(sleeper_id)
         name = team.get("name") or " ".join(
             p for p in (team.get("location"), team.get("nickname")) if p
         ) or f"Team {team.get('id')}"
@@ -62,6 +69,7 @@ def fetch(
             ties=int(rec.get("ties") or 0),
             points_for=float(rec.get("pointsFor") or 0.0),
             points_against=float(rec.get("pointsAgainst") or 0.0),
+            reserve_ids=tuple(reserve_ids),
         ))
     entries.sort(key=lambda e: e.roster_id)
     return entries, week, raw

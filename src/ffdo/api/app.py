@@ -233,6 +233,7 @@ def create_app() -> FastAPI:
     from ffdo.ingest.espn import league as espn_league_mod
     from ffdo.ingest.espn import rosters as espn_rosters_mod
     from ffdo.ingest.espn import teams as espn_teams_mod
+    from ffdo.ingest.espn import transactions as espn_transactions_mod
     from ffdo.ingest.sleeper import historical_weekly_stats as historical_weekly_stats_mod
     from ffdo.ingest.sleeper import player_history as player_history_mod
     from ffdo.ingest.sleeper import traded_picks as traded_picks_mod
@@ -2306,14 +2307,127 @@ def create_app() -> FastAPI:
             })
         return {"trades": out}
 
+    def _waivers_espn(lg: TrackedLeague) -> dict:
+        """ESPN's FAAB waiver recommendations -- same posture as Sleeper's
+        own gate (FAAB leagues only), detected via
+        raw_settings.acquisitionSettings.isUsingAcquisitionBudget rather
+        than Sleeper's waiver_type field. UNVERIFIED end-to-end: the real
+        league this project validates ESPN against uses waiver-priority,
+        not FAAB, and has no real waiver history to check a resolved
+        claim against -- see ingest.espn.transactions's own module
+        docstring for what's unverified in the underlying feed."""
+        acquisition = (lg.raw_settings or {}).get("acquisitionSettings") or {}
+        if not acquisition.get("isUsingAcquisitionBudget"):
+            raise HTTPException(
+                status_code=400, detail="Waivers is FAAB-leagues-only for now")
+        waiver_budget = float(acquisition.get("acquisitionBudget") or 0)
+        cred = _require_espn_credential("waivers")
+
+        sleeper = client_mod.SleeperClient()
+        try:
+            profiles, espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            proj_anchor = _season_proj_anchor_for(lg.season).get(
+                lambda: _load_projection_anchor(sleeper, lg.season))
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=502, detail="Couldn't reach Sleeper, try again") from exc
+        finally:
+            sleeper.close()
+
+        espn = espn_client_mod.EspnClient(cred.espn_s2, cred.swid)
+        try:
+            player_pool_raw = _espn_player_pool_cache_for(lg.season).get(
+                lambda: espn.get_json(
+                    f"{espn_client_mod.BASE}/seasons/{lg.season}/players"
+                    "?view=kona_player_info",
+                    extra_headers=espn_client_mod.PLAYER_POOL_FILTER_HEADER))
+            cw = _espn_crosswalk_cache_for(lg.season).get(
+                lambda: espn_crosswalk_mod.build(
+                    espn_id_index, profiles,
+                    espn_crosswalk_mod.parse_player_pool(player_pool_raw)))
+            rosters, nfl, mroster_raw = espn_rosters_mod.fetch(
+                espn, lg.provider_league_id, lg.season, cw)
+
+            through_week = _through_week(nfl)
+            actuals = espn_actuals_mod.points_so_far(mroster_raw, cw, lg.season, through_week)
+
+            claims = espn_transactions_mod.fetch_waivers(
+                espn, lg.provider_league_id, lg.season, cw, through_week=nfl.week)
+            budgets = waivers_mod.remaining_budget(claims, waiver_budget=waiver_budget)
+
+            your_claims = (
+                [c for c in espn_transactions_mod.fetch_all_claims(
+                    espn, lg.provider_league_id, lg.season, cw, through_week=nfl.week)
+                 if c.roster_id == lg.roster_id]
+                if lg.roster_id is not None else [])
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=502, detail="Couldn't reach ESPN, try again") from exc
+        finally:
+            espn.close()
+
+        you = next((r for r in rosters if r.roster_id == lg.roster_id), None)
+        if you is None:
+            return {"remaining_budget": waiver_budget, "recommendations": []}
+
+        # The ESPN player pool (crosswalked), not the full Sleeper
+        # universe `_load_trade_targets_context` uses for Sleeper --
+        # ESPN's own free-agent pool is scoped to whoever ESPN's league
+        # itself doesn't have owned, which the crosswalk's key set already
+        # reflects.
+        all_player_ids = set(cw.espn_to_sleeper.values())
+        free_agent_ids = waiver_value_mod.free_agents(all_player_ids, rosters)
+        your_remaining = budgets.get(lg.roster_id, waiver_budget)
+
+        valued = ros_value_mod.roster_value(
+            set(you.player_ids) | free_agent_ids, lg,
+            resolved_format=lg.resolved_format, season_proj=proj_anchor,
+            profiles=profiles, actuals=actuals, weeks_played=through_week,
+            season_weeks=_season_weeks(lg.season))
+
+        recommendations = waiver_value_mod.recommend_adds(
+            free_agent_ids, waiver_value_mod.droppable_player_ids(you), valued, profiles, lg,
+            FAAB_BID_CURVE, your_remaining)
+
+        recommended_by_player = {r.free_agent_id: r for r in recommendations}
+        for claim in your_claims:
+            rec = recommended_by_player.get(claim.player_id)
+            _WAIVER_LEDGER.record_if_absent(
+                lg.league_key, transaction_id=claim.transaction_id, season=claim.season,
+                week=claim.week, roster_id=claim.roster_id, add_player_id=claim.player_id,
+                drop_player_id=rec.drop_player_id if rec else None,
+                recommended_bid=rec.suggested_bid if rec else None,
+                actual_bid=int(claim.bid_amount),
+                predicted_vor_gain=rec.vor_gain if rec else None,
+                won=claim.won)
+
+        def _waiver_row(r) -> dict:
+            add_prof = profiles.get(r.free_agent_id)
+            drop_prof = profiles.get(r.drop_player_id) if r.drop_player_id else None
+            return {
+                "free_agent_id": r.free_agent_id,
+                "free_agent_name": add_prof.full_name if add_prof else r.free_agent_id,
+                "free_agent_position": add_prof.position if add_prof else "",
+                "drop_player_id": r.drop_player_id,
+                "drop_player_name": (
+                    drop_prof.full_name if drop_prof else r.drop_player_id),
+                "drop_player_position": drop_prof.position if drop_prof else "",
+                "vor_gain": round(r.vor_gain, 1), "suggested_bid": r.suggested_bid,
+            }
+
+        return {
+            "remaining_budget": round(your_remaining, 1),
+            "recommendations": [_waiver_row(r) for r in recommendations],
+        }
+
     @app.get("/api/leagues/{league_key}/waivers")
     def get_waivers(league_key: str) -> dict:
         """Free-agent add/drop + FAAB bid recommendations. FAAB leagues
-        only (Sleeper waiver_type == 2) -- a 400 for any other waiver type
-        or provider, matching /lineup's ESPN gate."""
+        only -- a 400 for any other waiver type, matching /lineup's ESPN
+        support posture. ESPN's FAAB detection lives in _waivers_espn."""
         lg = _load_league(league_key)
-        if lg.provider != "sleeper":
-            raise HTTPException(status_code=400, detail="Waivers is Sleeper-only for now")
+        if lg.provider == "espn":
+            return _waivers_espn(lg)
 
         sleeper = client_mod.SleeperClient()
         try:

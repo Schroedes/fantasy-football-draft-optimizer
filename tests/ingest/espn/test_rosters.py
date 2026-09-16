@@ -44,8 +44,31 @@ def test_fetch_parses_teams_starters_and_week():
     assert e.team_name == "Alpha"
     assert e.player_ids == ("s1", "s2", "s3")          # 9999 dropped (crosswalk miss)
     assert e.starter_ids == ("s1", "s2")               # slots 20/21 excluded
+    assert e.reserve_ids == ()                          # the one IR entry (9999) is a crosswalk miss
+    assert e.taxi_ids == ()                             # ESPN has no taxi-squad concept
     assert e.wins == 7 and e.points_for == 1352.8
     assert week.week == 10 and week.complete is False
+
+
+def test_fetch_tags_a_crosswalked_ir_player_as_reserve():
+    """Regression: droppable_player_ids relies on reserve_ids to exclude
+    IR players from waiver-drop candidates (the same bug #44 fixed for
+    Sleeper) -- ESPN's IR slot (21) must feed it too."""
+    raw = {**_LEAGUE_RAW, "teams": [
+        {**_LEAGUE_RAW["teams"][0], "roster": {"entries": [
+            {"playerId": 1001, "lineupSlotId": 0},
+            {"playerId": 1002, "lineupSlotId": 21},   # IR, and IS in the crosswalk
+        ]}},
+    ]}
+
+    def handler(request):
+        return httpx.Response(200, json=raw)
+
+    entries, _week, _raw = rosters.fetch(_client(handler), "L1", 2026, _CROSSWALK)
+    e = entries[0]
+    assert e.player_ids == ("s1", "s2")
+    assert e.starter_ids == ("s1",)
+    assert e.reserve_ids == ("s2",)
 
 
 def test_week_past_matchup_period_count_is_complete():
