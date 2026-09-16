@@ -1630,14 +1630,124 @@ def create_app() -> FastAPI:
             "ledger": {"recorded_at": record.recorded_at, "followed": record.followed},
         }
 
+    def _espn_roster_context(lg: TrackedLeague):
+        """Rosters + valuation for an ESPN league, crosswalked to Sleeper
+        player ids -- the same fetch `_lineup_espn`/`_waivers_espn` each
+        already repeat independently, matching this file's established
+        no-shared-fetch-across-endpoints convention. No dynasty age-curve
+        history (matches `_load_trade_targets_context`'s precedent for
+        this weight of computation)."""
+        cred = _require_espn_credential("trades")
+
+        sleeper = client_mod.SleeperClient()
+        try:
+            profiles, espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            proj_anchor = _season_proj_anchor_for(lg.season).get(
+                lambda: _load_projection_anchor(sleeper, lg.season))
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=502, detail="Couldn't reach Sleeper, try again") from exc
+        finally:
+            sleeper.close()
+
+        espn = espn_client_mod.EspnClient(cred.espn_s2, cred.swid)
+        try:
+            player_pool_raw = _espn_player_pool_cache_for(lg.season).get(
+                lambda: espn.get_json(
+                    f"{espn_client_mod.BASE}/seasons/{lg.season}/players"
+                    "?view=kona_player_info",
+                    extra_headers=espn_client_mod.PLAYER_POOL_FILTER_HEADER))
+            cw = _espn_crosswalk_cache_for(lg.season).get(
+                lambda: espn_crosswalk_mod.build(
+                    espn_id_index, profiles,
+                    espn_crosswalk_mod.parse_player_pool(player_pool_raw)))
+            rosters, nfl, mroster_raw = espn_rosters_mod.fetch(
+                espn, lg.provider_league_id, lg.season, cw)
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=502, detail="Couldn't reach ESPN, try again") from exc
+        finally:
+            espn.close()
+
+        through_week = _through_week(nfl)
+        actuals = espn_actuals_mod.points_so_far(mroster_raw, cw, lg.season, through_week)
+        all_pids = {pid for r in rosters for pid in r.player_ids}
+        valued = ros_value_mod.roster_value(
+            all_pids, lg, resolved_format=lg.resolved_format, season_proj=proj_anchor,
+            profiles=profiles, actuals=actuals, weeks_played=through_week,
+            season_weeks=_season_weeks(lg.season))
+        return rosters, valued, profiles
+
+    def _evaluate_trade_espn(lg: TrackedLeague, payload: dict) -> dict:
+        """ESPN's hypothetical trade evaluator: the comparison itself is
+        pure current-roster VOR, no trade history needed, so it doesn't
+        share the trade-ledger/trade-targets blockers (no real ESPN TRADE
+        transaction shape has been seen -- see
+        ingest.espn.transactions's module docstring). ESPN has no
+        traded-picks feed, so `side_a`/`side_b` picks are simply not
+        offered by the ESPN trade-builder UI in the first place -- a
+        payload carrying pick ids anyway would just price them at 0,
+        same as an unknown pick would for Sleeper."""
+        rosters, valued, _profiles = _espn_roster_context(lg)
+
+        side_a = payload.get("side_a") or {}
+        side_b = payload.get("side_b") or {}
+
+        def _picks_from_payload(raw_picks: list) -> list:
+            return [DraftPickAsset(
+                season=int(p["season"]), round=int(p["round"]),
+                projected_slot=p.get("projected_slot"),
+                current_owner_roster_id=int(p.get("current_owner_roster_id", 0)),
+                original_roster_id=int(p.get("original_roster_id", 0)),
+                via_team_name=None) for p in raw_picks]
+
+        result = trade_value_mod.evaluate_trade(
+            {"player_ids": side_a.get("player_ids", []),
+             "picks": _picks_from_payload(side_a.get("picks", []))},
+            {"player_ids": side_b.get("player_ids", []),
+             "picks": _picks_from_payload(side_b.get("picks", []))},
+            valued_players=valued, pick_curve=PICK_VALUE_CURVE,
+            current_season=lg.season, round_size=lg.num_teams)
+
+        response = {
+            "side_a_value": round(result.side_a_value, 1),
+            "side_b_value": round(result.side_b_value, 1),
+            "differential": round(result.differential, 1),
+            "differential_pct": (round(result.differential_pct, 3)
+                                 if result.differential_pct is not None else None),
+        }
+
+        you_roster = next((r for r in rosters if r.roster_id == lg.roster_id), None)
+        partner_roster = next(
+            (r for r in rosters if r.roster_id == payload.get("partner_roster_id")), None)
+        if you_roster is not None and partner_roster is not None:
+            side_a_ids = set(side_a.get("player_ids", []))
+            side_b_ids = set(side_b.get("player_ids", []))
+            you_after = replace(you_roster, player_ids=tuple(
+                (set(you_roster.player_ids) - side_a_ids) | side_b_ids))
+            partner_after = replace(partner_roster, player_ids=tuple(
+                (set(partner_roster.player_ids) - side_b_ids) | side_a_ids))
+
+            def _needs_json(entry) -> dict:
+                return {pos: {"rank": n.rank, "severity": n.severity}
+                       for pos, n in roster_needs_mod.position_needs(
+                           entry, rosters, valued, lg).items()}
+
+            response["needs_before"] = {
+                "you": _needs_json(you_roster), "partner": _needs_json(partner_roster)}
+            response["needs_after"] = {
+                "you": _needs_json(you_after), "partner": _needs_json(partner_after)}
+
+        return response
+
     @app.post("/api/leagues/{league_key}/trade/evaluate")
     def evaluate_trade_endpoint(league_key: str, payload: dict) -> dict:
         """Hypothetical trade evaluator. side_a is always the tracked
         user's own roster (spec §7) -- partner_roster_id names the other
         team side_b's players/picks are assumed to belong to."""
         lg = _load_league(league_key)
-        if lg.provider != "sleeper":
-            raise HTTPException(status_code=400, detail="Trade evaluator is Sleeper-only for now")
+        if lg.provider == "espn":
+            return _evaluate_trade_espn(lg, payload)
 
         sleeper = client_mod.SleeperClient()
         try:
@@ -1714,6 +1824,41 @@ def create_app() -> FastAPI:
 
         return response
 
+    def _trade_builder_espn(lg: TrackedLeague) -> dict:
+        """ESPN's trade-builder team list: players only, every team's
+        `picks` is always empty -- ESPN has no traded-pick feed this
+        project reads (same honest gap the season view's draft-capital
+        panel already discloses), so a dynasty/keeper ESPN league simply
+        can't trade future picks through this UI yet, rather than
+        showing picks that might be silently wrong the moment anyone
+        traded one."""
+        rosters, valued, profiles = _espn_roster_context(lg)
+
+        def _player_row(pid: str) -> dict | None:
+            prof = profiles.get(pid)
+            if prof is None:
+                return None
+            vp = valued.get(pid)
+            return {"player_id": pid, "name": prof.full_name, "position": prof.position,
+                    "value": round(vp.vor, 1) if vp is not None else 0.0}
+
+        teams = []
+        for r in rosters:
+            players = []
+            for pid in r.player_ids:
+                row = _player_row(pid)
+                if row is not None:
+                    players.append(row)
+            players.sort(key=lambda p: -p["value"])
+            teams.append({
+                "roster_id": r.roster_id, "team_name": r.team_name,
+                "is_you": r.roster_id == lg.roster_id,
+                "players": players, "picks": [],
+            })
+        teams.sort(key=lambda t: (not t["is_you"], t["team_name"]))
+
+        return {"teams": teams}
+
     @app.get("/api/leagues/{league_key}/trade-builder")
     def get_trade_builder(league_key: str) -> dict:
         """Every team's roster (players + future picks, for the
@@ -1722,10 +1867,12 @@ def create_app() -> FastAPI:
         capital panel already uses (every roster implicitly owns its own
         pick in every round/year unless traded_picks says otherwise);
         redraft leagues get an empty `picks` list per team, since there's
-        nothing future to trade away."""
+        nothing future to trade away. ESPN leagues of every format get an
+        empty `picks` list too, via `_trade_builder_espn` -- no ESPN
+        traded-picks feed exists."""
         lg = _load_league(league_key)
-        if lg.provider != "sleeper":
-            raise HTTPException(status_code=400, detail="Trade builder is Sleeper-only for now")
+        if lg.provider == "espn":
+            return _trade_builder_espn(lg)
 
         capital = None
         sleeper = client_mod.SleeperClient()
