@@ -330,12 +330,26 @@ def test_below_replacement_bench_player_never_shows_negative_value(monkeypatch, 
 
     by_id = {p["player_id"]: p for p in body["your_roster"]["players"]}
     # Dummy "D" (200 rush yards -> 20 pts) is below this league's real RB
-    # replacement level (30 pts, set by dummy "C") -- raw VOR is -10.
+    # replacement level (30 pts, set by dummy "C") in raw points. The real
+    # valuation pipeline (scarcity multiplier + banked-points adjustment)
+    # turns that into a genuinely negative VOR before this fix clips it to
+    # 0.0; the exact pre-fix magnitude isn't asserted here since it depends
+    # on more than the raw points shown above.
     assert by_id["p_rb_D"]["value"] == 0.0
     assert all(p["value"] >= 0 for p in body["your_roster"]["players"])
     assert body["your_roster"]["bench_value"] >= 0
 
     rb_full = next(r for r in body["power_ranking"]["by_position"]["RB"]["full"]
                    if r["roster_id"] == 1)
-    assert rb_full["value"] >= 0
+    rb_starters = next(r for r in body["power_ranking"]["by_position"]["RB"]["starters"]
+                       if r["roster_id"] == 1)
     assert rb_full["bench_value"] >= 0
+    # The headline invariant this branch exists to guarantee: switching to
+    # "Full roster" (looking at more players) never shows a lower total.
+    assert rb_full["value"] >= rb_starters["value"]
+
+    overall_full = next(r for r in body["power_ranking"]["overall"]["full"]
+                        if r["roster_id"] == 1)
+    overall_starters = next(r for r in body["power_ranking"]["overall"]["starters"]
+                            if r["roster_id"] == 1)
+    assert overall_full["value"] >= overall_starters["value"]

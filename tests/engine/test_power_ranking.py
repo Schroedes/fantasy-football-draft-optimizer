@@ -120,3 +120,27 @@ def test_clip_negative_defaults_to_off():
     a = power_ranking.team_value(entry, VALUED, _league(), position="OVR", scope="full")
     b = power_ranking.team_value(entry, VALUED, _league(), position="OVR", scope="full", clip_negative=False)
     assert a == b
+
+
+def test_rank_clip_negative_can_reorder_teams():
+    # Team 4 = team 1's starters (q1/r1/w1/f1, real OVR-full total 125) plus
+    # a deeply negative bench player. Team 5 = team 3's starters (q3/r3/w3/f3,
+    # total 38), no bench. Unclipped, team 4's -100 bench player drags its
+    # total (25) below team 5's (38). Clipped, team 4's bench contributes 0
+    # instead of -100, so its total (125) beats team 5's (38) -- the printed
+    # rank must follow whichever total was actually used to sort, which is
+    # exactly what broke when ranking and display used two different calls.
+    valued = dict(VALUED)
+    valued["bx"] = _vp("bx", "RB", -100)
+    team4 = _entry(4, ["q1", "r1", "w1", "f1", "bx"])
+    team5 = _entry(5, ["q3", "r3", "w3", "f3"])
+
+    unclipped = power_ranking.rank([team4, team5], valued, _league(), {}, None,
+                                   position="OVR", scope="full")
+    assert [r.roster_id for r in unclipped] == [5, 4]
+
+    clipped = power_ranking.rank([team4, team5], valued, _league(), {}, None,
+                                 position="OVR", scope="full", clip_negative=True)
+    assert [r.roster_id for r in clipped] == [4, 5]
+    assert clipped[0].bench_value == 0.0   # the -100 bench player floored, not dropped
+    assert clipped[0].value == 125.0

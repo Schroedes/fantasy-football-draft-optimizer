@@ -47,6 +47,8 @@ def team_value(
         starting = sum(contrib(vp) for pid, vp in team_valued.items() if pid in lineup.starters)
         if scope == "full":
             bench = sum(contrib(vp) for pid, vp in team_valued.items() if pid not in lineup.starters)
+            if clip_negative:
+                bench = max(bench, 0.0)
             return starting + bench, bench
         return starting, 0.0
 
@@ -55,7 +57,11 @@ def team_value(
     if scope == "starters":
         return started, 0.0
     total = sum(contrib(vp) for vp in at_pos.values())
-    return total, total - started
+    bench = total - started
+    if clip_negative:
+        bench = max(bench, 0.0)
+        total = started + bench
+    return total, bench
 
 
 def rank(
@@ -67,10 +73,12 @@ def rank(
     *,
     position: str,
     scope: str,
+    clip_negative: bool = False,
 ) -> list[PowerRow]:
     scored = []
     for entry in rosters:
-        value, bench = team_value(entry, valued, league, position=position, scope=scope)
+        value, bench = team_value(entry, valued, league, position=position, scope=scope,
+                                  clip_negative=clip_negative)
         scored.append((entry, value, bench))
 
     scored.sort(key=lambda t: (-t[1], t[0].roster_id))   # value desc, roster_id for determinism

@@ -1235,28 +1235,23 @@ def create_app() -> FastAPI:
             short = len(you_entry.player_ids) < lg.roster_size
             _roster_count_cache_for(lg.league_key).get(lambda: {"attn": bool(unfilled or short)})
 
-        rosters_by_id = {r.roster_id: r for r in rosters}
-
         def _rank(position: str, scope: str) -> list[dict]:
+            # clip_negative=True here (Season screen only -- every other
+            # caller of power_ranking.rank()/team_value() still gets real,
+            # unclipped VOR) so the printed value/bench_value and the rank
+            # they're sorted by always agree; splitting them (an earlier
+            # version of this code ranked on the real total but printed a
+            # separately-clipped one) let the printed "Value" column read
+            # out of order against its own rank column.
             rows = power_ranking_mod.rank(
                 rosters, valued, lg, standings_rank, lg.roster_id,
-                position=position, scope=scope)
-            out = []
-            for row in rows:
-                # power_rank/delta above come from the real (unclipped) VOR --
-                # only the printed value/bench_value are display-clipped, so a
-                # bad bench player can't drag a team's printed total negative
-                # (see power_ranking.team_value's clip_negative docstring).
-                display_value, display_bench = power_ranking_mod.team_value(
-                    rosters_by_id[row.roster_id], valued, lg,
-                    position=position, scope=scope, clip_negative=True)
-                out.append({
-                    "roster_id": row.roster_id, "team_name": row.team_name,
-                    "is_you": row.is_you, "value": round(display_value, 1),
-                    "bench_value": round(display_bench, 1), "power_rank": row.power_rank,
-                    "standings_rank": row.standings_rank, "delta": row.delta,
-                })
-            return out
+                position=position, scope=scope, clip_negative=True)
+            return [{
+                "roster_id": row.roster_id, "team_name": row.team_name,
+                "is_you": row.is_you, "value": row.value,
+                "bench_value": row.bench_value, "power_rank": row.power_rank,
+                "standings_rank": row.standings_rank, "delta": row.delta,
+            } for row in rows]
 
         power_ranking_payload = {
             "overall": {"starters": _rank("OVR", "starters"),
