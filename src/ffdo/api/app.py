@@ -298,6 +298,8 @@ def create_app() -> FastAPI:
     # to get right.
     schedule_caches: dict[tuple[int, int], _TTLCache] = {}
     player_history_caches: dict[int, _TTLCache] = {}
+    actuals_caches: dict[tuple[str, int], _TTLCache] = {}
+    waiver_claims_caches: dict[tuple[str, int], _TTLCache] = {}
 
     def _projections_cache_for(season: int) -> _TTLCache:
         return projections_caches.setdefault(season, _TTLCache(ttl_seconds=3600))
@@ -313,6 +315,12 @@ def create_app() -> FastAPI:
 
     def _schedule_cache_for(season: int, week: int) -> _TTLCache:
         return schedule_caches.setdefault((season, week), _TTLCache(ttl_seconds=60))
+
+    def _actuals_cache_for(league_key: str, through_week: int) -> _TTLCache:
+        return actuals_caches.setdefault((league_key, through_week), _TTLCache(ttl_seconds=3600))
+
+    def _waiver_claims_cache_for(league_key: str, week: int) -> _TTLCache:
+        return waiver_claims_caches.setdefault((league_key, week), _TTLCache(ttl_seconds=900))
 
     def _player_history_cache_for(season: int) -> _TTLCache:
         # A week, not the hour/day TTLs used elsewhere in this file --
@@ -1717,7 +1725,8 @@ def create_app() -> FastAPI:
                 lambda: _load_projection_anchor(sleeper, lg.season))
             rosters = rosters_mod.fetch(sleeper, lg.provider_league_id)
             through_week = _through_week(nfl)
-            actuals = actuals_mod.points_so_far(sleeper, lg.provider_league_id, through_week)
+            actuals = _actuals_cache_for(lg.league_key, through_week).get(
+                lambda: actuals_mod.points_so_far(sleeper, lg.provider_league_id, through_week))
 
             your_picks: list = []
             if lg.resolved_format in ("dynasty", "keeper"):
@@ -1835,8 +1844,9 @@ def create_app() -> FastAPI:
                 try:
                     league_raw = sleeper.get_json(f"{client_mod.V1}/league/{lg.provider_league_id}")
                     waiver_budget = float((league_raw.get("settings") or {}).get("waiver_budget") or 0)
-                    claims = waivers_mod.fetch_waivers(
-                        sleeper, lg.provider_league_id, season=lg.season, through_week=nfl.week)
+                    claims = _waiver_claims_cache_for(lg.league_key, nfl.week).get(
+                        lambda: waivers_mod.fetch_waivers(
+                            sleeper, lg.provider_league_id, season=lg.season, through_week=nfl.week))
                     budgets = waivers_mod.remaining_budget(claims, waiver_budget=waiver_budget)
                     your_remaining = budgets.get(lg.roster_id, waiver_budget)
                     waiver_recs = waiver_value_mod.recommend_adds(

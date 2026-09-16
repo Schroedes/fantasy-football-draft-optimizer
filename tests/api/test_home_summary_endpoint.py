@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
 from ffdo.api import app as app_mod
@@ -134,3 +135,120 @@ def test_home_summary_matchup_is_none_on_a_bye_week(monkeypatch, tmp_path):
     res = client.get("/api/leagues/sleeper:L1:2026/home-summary")
     assert res.status_code == 200
     assert res.json()["matchup"] is None
+
+
+# A local, hand-built fixture (not the shared minimal _PLAYERS/_ROSTERS pair,
+# which rosters every player in _PLAYERS and so has zero free agents) with a
+# genuine, unrostered free-agent WR carrying a strong projection -- enough
+# real surplus for waiver_value.recommend_adds to actually fire, so these
+# two tests exercise the FAAB branch instead of vacuously skipping it.
+_FAAB_PLAYERS = {
+    **_PLAYERS,
+    "p_fa_wr": {"first_name": "Free", "last_name": "Agent", "position": "WR",
+                "team": "EEE", "age": 24, "years_exp": 2, "active": True},
+}
+_FAAB_PROJ = _PROJ + [
+    {"player_id": "p_fa_wr",
+     "last_modified": int(datetime(2026, 8, 1, tzinfo=timezone.utc).timestamp() * 1000),
+     "stats": {"rec": 150.0, "rec_yd": 2000.0, "rec_td": 20.0}},
+]
+
+
+def _faab_tracked(**over):
+    return _tracked(fmt="redraft", raw_settings={
+        "waiver_type": 2, "waiver_budget": 100, "draft_rounds": 4}, **over)
+
+
+def _faab_resp():
+    resp = _base_resp()
+    resp[f"{V1}/players/nfl"] = _FAAB_PLAYERS
+    resp["/projections/"] = _FAAB_PROJ
+    for week in range(1, 11):  # _STATE's week is 10 -- weeks 1 through 10
+        resp[f"{V1}/league/L1/transactions/{week}"] = []
+    return resp
+
+
+class _FaabClient(_FakeClient):
+    """Layers the bare `/league/L1` live-settings re-fetch (used only by
+    home-summary's FAAB branch) on top of `_FakeClient`'s longest-match
+    lookup. That base lookup can't hold this key itself: a bare
+    ".../league/L1" is a substring of ".../league/L1/matchups/9" too, and
+    at 38 chars it's "longer" than the 10-char generic "/matchups/" key
+    that request is meant to hit -- so registering it in the shared `resp`
+    dict would hijack the matchups (and rosters) lookups for every week.
+    Checking for the bare suffix explicitly, before delegating, avoids
+    that collision without changing the shared fixture's matching rule.
+    """
+    def get_json(self, url, *a, **k):
+        if url.rstrip("/").endswith("/league/L1") and "/league/L1/" not in url:
+            return {"settings": {"waiver_type": 2, "waiver_budget": 100}}
+        return super().get_json(url, *a, **k)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Pre-existing bug, discovered while writing this test (not part of "
+        "this task's caching fix): _load_trade_targets_context computes "
+        "`valued` from all_pids = {pid for r in rosters for pid in "
+        "r.player_ids} -- ONLY rostered players, never free agents. "
+        "get_home_summary's FAAB branch then calls "
+        "waiver_value_mod.recommend_adds(free_agent_ids, ..., valued, ...), "
+        "which looks up `valued.get(fa_id)` for each free agent and skips "
+        "any id not present -- so it always skips every one of them. "
+        "Verified empirically: with a genuine free-agent surplus fixture "
+        "(a strongly-projected unrostered WR), `p_fa_wr in valued` is False "
+        "and `flags` comes back {} every time. This is a real, "
+        "already-in-production bug (the home-summary waiver flag can never "
+        "fire), and it also defeats trade_targets.suggest_for_team's "
+        "free-agent 'sweetener' logic (its `pid in valued` check at "
+        "trade_targets.py's `valued_fas = [pid for pid in free_agent_ids if "
+        "pid in valued]`) for the same reason -- so this is a shared-helper "
+        "bug, not something local to home-summary. Fixing it safely is "
+        "nontrivial: naively unioning free agents into "
+        "_load_trade_targets_context's all_pids would change the "
+        "replacement-level computation ros_value.roster_value derives from "
+        "that same player_ids set, shifting VOR for every rostered player "
+        "too and risking every numeric assertion in the trade-targets test "
+        "suite -- out of scope for this task. Left as xfail(strict=True) so "
+        "a real fix flips this test to an unexpected pass, forcing it to "
+        "be un-xfailed rather than silently staying stale."
+    ),
+)
+def test_home_summary_reports_a_real_waiver_add_flag_for_a_faab_league(monkeypatch, tmp_path):
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_faab_tracked())
+    monkeypatch.setattr(app_mod, "_STORE", store)
+    resp = _faab_resp()
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", lambda *a, **k: _FaabClient(resp))
+
+    client = TestClient(create_app())
+    res = client.get("/api/leagues/sleeper:L1:2026/home-summary")
+    assert res.status_code == 200
+    data = res.json()
+    # Loose, structurally-meaningful assertion -- verified empirically
+    # against this fixture's real recommend_adds output rather than
+    # hand-derived, since hand-deriving VOR/bid numbers through this
+    # codebase's real valuation pipeline has burned this repo before.
+    assert data["flags"]["waiver_adds"] >= 1
+
+
+def test_home_summary_omits_waiver_flag_when_the_claims_fetch_fails(monkeypatch, tmp_path):
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_faab_tracked())
+    monkeypatch.setattr(app_mod, "_STORE", store)
+    resp = _faab_resp()
+
+    class _FailingWaiversClient(_FaabClient):
+        def get_json(self, url, *a, **k):
+            if "/transactions/" in url:
+                raise RuntimeError("Sleeper transactions fetch failed")
+            return super().get_json(url, *a, **k)
+
+    monkeypatch.setattr(
+        "ffdo.ingest.client.SleeperClient", lambda *a, **k: _FailingWaiversClient(resp))
+
+    client = TestClient(create_app())
+    res = client.get("/api/leagues/sleeper:L1:2026/home-summary")
+    assert res.status_code == 200
+    assert "waiver_adds" not in res.json()["flags"]
