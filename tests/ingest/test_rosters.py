@@ -6,6 +6,7 @@ from ffdo.ingest.client import SleeperClient
 _ROSTERS_RAW = [
     {"roster_id": 1, "owner_id": "u1",
      "players": ["100", "200", "300"], "starters": ["100", "200", "0"],
+     "reserve": ["300"], "taxi": [],
      "settings": {"wins": 6, "losses": 3, "ties": 0,
                   "fpts": 1284, "fpts_decimal": 60,
                   "fpts_against": 1244, "fpts_against_decimal": 0}},
@@ -44,6 +45,13 @@ def test_fetch_maps_players_starters_and_record():
     assert r1.points_against == 1244.0
 
 
+def test_fetch_maps_reserve_and_taxi_slots():
+    out = rosters.fetch(_client(_handler), "L1")
+    r1 = out[0]
+    assert r1.reserve_ids == ("300",)
+    assert r1.taxi_ids == ()
+
+
 def test_fetch_handles_null_players_and_missing_decimals():
     out = rosters.fetch(_client(_handler), "L1")
     r2 = out[1]
@@ -51,6 +59,13 @@ def test_fetch_handles_null_players_and_missing_decimals():
     assert r2.starter_ids == ()
     assert r2.team_name == "CoolTeam"                 # falls back to display_name
     assert r2.points_for == 1100.0
+
+
+def test_fetch_defaults_reserve_and_taxi_to_empty_when_keys_are_absent():
+    out = rosters.fetch(_client(_handler), "L1")
+    r2 = out[1]                                        # raw fixture has no reserve/taxi keys
+    assert r2.reserve_ids == ()
+    assert r2.taxi_ids == ()
 
 
 def test_raw_starters_preserves_positional_alignment_including_empty_slots():

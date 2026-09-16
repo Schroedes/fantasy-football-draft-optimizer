@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Final
 
 from ffdo.domain.constants import INJURY_OUT_STATUSES
-from ffdo.domain.models import PlayerProfile, ValuedPlayer, WaiverRecommendation
+from ffdo.domain.models import PlayerProfile, RosterEntry, ValuedPlayer, WaiverRecommendation
 from ffdo.engine.replacement import FLEX_ELIGIBILITY
 
 POSITION_CAP_EXTRA: Final[dict[str, int]] = {"QB": 1, "TE": 1, "DEF": 0, "K": 0}
@@ -36,6 +36,14 @@ def suggested_bid(
 def free_agents(all_player_ids: Iterable[str], rosters: Sequence) -> set[str]:
     rostered = {pid for r in rosters for pid in r.player_ids}
     return set(all_player_ids) - rostered
+
+
+def droppable_player_ids(roster: "RosterEntry") -> tuple[str, ...]:
+    """`roster.player_ids` minus IR ('reserve') and Taxi Squad slots -- both
+    are restricted roster spots and must never be offered as a waiver drop
+    candidate."""
+    restricted = set(roster.reserve_ids) | set(roster.taxi_ids)
+    return tuple(pid for pid in roster.player_ids if pid not in restricted)
 
 
 def position_cap(position: str, league) -> int | None:

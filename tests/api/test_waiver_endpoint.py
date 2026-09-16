@@ -10,6 +10,7 @@ from ffdo.api import app as app_mod
 from ffdo.api.app import create_app
 from ffdo.api.store import LeagueStore
 from ffdo.api.waiver_ledger import WaiverLedger
+from ffdo.engine import waiver_value
 from ffdo.ingest.client import V1
 
 from tests.api.test_season_endpoint import (
@@ -129,6 +130,58 @@ def test_waivers_endpoint_counts_a_claim_in_the_current_in_progress_week(monkeyp
     # instead of nfl.week, /transactions/10 would never be requested and
     # remaining_budget would incorrectly still show the full 100.
     assert res.json()["remaining_budget"] == pytest.approx(85.0)
+
+
+def test_get_waivers_excludes_reserve_and_taxi_players_from_drop_candidates(
+        monkeypatch, tmp_path):
+    """IR ('reserve') and Taxi Squad slots are restricted -- get_waivers must
+    never offer a player parked in either slot as a drop candidate, even
+    though Sleeper's own `players` array (RosterEntry.player_ids) still
+    includes them."""
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_tracked(fmt="redraft"))  # roster_id=1 by default
+    monkeypatch.setattr(app_mod, "_STORE", store)
+
+    rosters_with_reserve_and_taxi = [
+        {**_ROSTERS[0], "reserve": ["p_rb"], "taxi": ["p_wr"]},
+        _ROSTERS[1],
+    ]
+    resp = {
+        f"{V1}/state/nfl": _STATE, f"{V1}/league/L1/rosters": rosters_with_reserve_and_taxi,
+        f"{V1}/league/L1/users": _USERS, f"{V1}/league/L1/traded_picks": [],
+        f"{V1}/players/nfl": _PLAYERS, "/projections/": _PROJ, "/matchups/": _MATCHUPS,
+        f"{V1}/league/L1": {"settings": {"waiver_type": 2, "waiver_budget": 100}},
+    }
+
+    class _FakeClient:
+        def __init__(self, *a, **k): pass
+        def get_json(self, url, *a, **k):
+            if "/transactions/" in url:
+                return []
+            for key, val in resp.items():
+                if key in url:
+                    return val
+            return [] if "/matchups/" in url or "/projections/" in url else {}
+        def close(self): pass
+
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeClient)
+
+    captured = {}
+    real_recommend_adds = waiver_value.recommend_adds
+
+    def _spy(free_agent_ids, your_roster_ids, *args, **kwargs):
+        captured["your_roster_ids"] = list(your_roster_ids)
+        return real_recommend_adds(free_agent_ids, your_roster_ids, *args, **kwargs)
+
+    monkeypatch.setattr(waiver_value, "recommend_adds", _spy)
+
+    client = TestClient(create_app())
+    res = client.get("/api/leagues/sleeper:L1:2026/waivers")
+    assert res.status_code == 200
+    assert "your_roster_ids" in captured
+    assert "p_rb" not in captured["your_roster_ids"]   # in "reserve" (IR)
+    assert "p_wr" not in captured["your_roster_ids"]   # in "taxi"
+    assert "p_qb" in captured["your_roster_ids"]        # untouched, still droppable
 
 
 def test_get_waivers_records_your_own_claims_into_the_ledger(monkeypatch, tmp_path):

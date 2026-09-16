@@ -2175,7 +2175,7 @@ def create_app() -> FastAPI:
             season_weeks=_season_weeks(lg.season))
 
         recommendations = waiver_value_mod.recommend_adds(
-            free_agent_ids, you.player_ids, valued, profiles, lg,
+            free_agent_ids, waiver_value_mod.droppable_player_ids(you), valued, profiles, lg,
             FAAB_BID_CURVE, your_remaining)
 
         # A claim only matches a recommendation if it happened THIS week
