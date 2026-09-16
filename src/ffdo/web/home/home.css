@@ -26,6 +26,14 @@
   padding: 4px 20px 28px;
 }
 
+@media (max-width: 480px) {
+  /* minmax(300px, ...)'s floor is wider than a phone viewport once #view's
+     own padding is subtracted -- single column avoids clipping card
+     content off the right edge. */
+  .home-grid { grid-template-columns: 1fr; padding: 4px 12px 20px; gap: 12px; }
+  .home-continue { margin-left: 12px; margin-right: 12px; padding: 12px 14px; }
+}
+
 .home-card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -91,7 +99,7 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1px 5px;
-  width: 26px;
+  min-width: 26px;
   text-align: center;
   flex-shrink: 0;
 }

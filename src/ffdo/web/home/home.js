@@ -13,6 +13,13 @@ function escapeHtml(s) {
   }[c]));
 }
 
+// Display-only shorthand for the two multi-position slots -- FLEX/SUPER_FLEX
+// run past the fixed-width .pos badge, so abbreviate the way Sleeper's own
+// UI does (WRT / WRTQ) rather than widening the badge for two labels. Never
+// touches the underlying slot value used for logic elsewhere.
+const SLOT_DISPLAY = { FLEX: "WRT", SUPER_FLEX: "WRTQ" };
+function slotDisplay(slot) { return SLOT_DISPLAY[slot] || slot; }
+
 export async function mount(container) {
   _c = container;
   _summaries = new Map();  // league_key -> {status: "loading"|"ok"|"error", data|error}
@@ -153,7 +160,7 @@ function cardHtml(lg) {
       ? `${escapeHtml(s.name || "empty")} &rarr; ${escapeHtml(s.swap_to || "")}`
       : escapeHtml(s.name || "empty");
     return `<div class="home-roster-row${isSwap ? " swap-out" : ""}">
-      <span class="pos">${escapeHtml(s.slot_label)}</span>
+      <span class="pos">${escapeHtml(slotDisplay(s.slot_label))}</span>
       <span class="nm">${nameHtml}</span>
       <span class="val">${s.status === "match" || isSwap ? s.value.toFixed(1) : ""}</span>
     </div>`;

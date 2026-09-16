@@ -45,6 +45,7 @@ async function route() {
 
   if (hash === "#/connect") {
     view.classList.remove("view-wide");
+    view.classList.remove("view-lg");
     renderSwitcher(leagues, null);
     if (_homeModule) { _homeModule.unmount(); _homeModule = null; }
     return renderConnect(leagues);
@@ -53,6 +54,10 @@ async function route() {
   const m = hash.match(/^#\/league\/(.+)$/);
   if (m) {
     view.classList.remove("view-wide");
+    // The season/board screens are the most data-dense in the app (two-panel
+    // layouts, wide tables) -- unlike the connect/discovery forms, they
+    // benefit from more than #view's normal 960px cap on a wide monitor.
+    view.classList.add("view-lg");
     const key = decodeURIComponent(m[1]).split("?")[0];
     try { localStorage.setItem(LAST_LEAGUE_KEY, key); } catch {}
     renderSwitcher(leagues, key);
@@ -64,6 +69,7 @@ async function route() {
   // 960px cap (app.css) so the card grid can flex to more columns on
   // wide monitors instead of every other route's form/table width.
   view.classList.add("view-wide");
+  view.classList.remove("view-lg");
   renderSwitcher(leagues, null);
   if (!leagues.length) { location.hash = "#/connect"; return; }
   view.innerHTML = `<div id="home-root"></div>`;
