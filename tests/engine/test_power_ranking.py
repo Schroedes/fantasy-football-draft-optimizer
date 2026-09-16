@@ -92,3 +92,31 @@ def test_delta_sign_positive_when_roster_beats_record():
     you = next(r for r in rows if r.roster_id == 1)
     assert you.power_rank == 1 and you.standings_rank == 3
     assert you.delta == 2             # ranks 2 spots better than the standings
+
+
+def test_clip_negative_floors_each_players_contribution_at_zero():
+    # Team 4: reuses q2/w2/f2/r2 from the module fixture (QB 25, WR 20, WR 18,
+    # RB 22) plus one new deeply-negative bench RB. With slots QB/RB/WR/FLEX,
+    # this team's own lineup fill seats q2, r2, w2 in their dedicated slots
+    # and f2 (18) in FLEX over r4c (-15) -- r4c is left on the bench, exactly
+    # the "one bad bench player" case the clip is meant to fix.
+    valued = dict(VALUED)
+    valued["r4c"] = _vp("r4c", "RB", -15)
+    entry = _entry(4, ["q2", "r2", "w2", "f2", "r4c"])
+
+    raw_value, raw_bench = power_ranking.team_value(
+        entry, valued, _league(), position="RB", scope="full")
+    assert raw_bench < 0          # sanity check: this fixture really does produce a negative sum today
+
+    clipped_value, clipped_bench = power_ranking.team_value(
+        entry, valued, _league(), position="RB", scope="full", clip_negative=True)
+    assert clipped_bench == 0.0   # r4c's -15 contributes 0, not -15
+    assert clipped_value == 22.0  # r2 (22) + r4c (clipped to 0)
+
+
+def test_clip_negative_defaults_to_off():
+    # No kwarg passed -- must match pre-existing behavior exactly.
+    entry = _entry(2, ["q2", "r2", "w2", "f2", "b2a", "b2b"])
+    a = power_ranking.team_value(entry, VALUED, _league(), position="OVR", scope="full")
+    b = power_ranking.team_value(entry, VALUED, _league(), position="OVR", scope="full", clip_negative=False)
+    assert a == b

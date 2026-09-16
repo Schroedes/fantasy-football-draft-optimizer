@@ -23,22 +23,38 @@ def team_value(
     *,
     position: str,
     scope: str,
+    clip_negative: bool = False,
 ) -> tuple[float, float]:
-    """Returns (value, bench_value) for one team at one (position, scope)."""
+    """Returns (value, bench_value) for one team at one (position, scope).
+
+    `clip_negative` floors each player's own VOR at 0.0 before summing --
+    display-only, for screens where a below-replacement bench player
+    dragging the team *total* negative reads as broken rather than as the
+    (correct) fact that he's worth less than a free-agent pickup. Who
+    starts (`lineup.starters`, from `team_lineup`) is still decided by the
+    real, unclipped VOR -- only the printed sum changes. Defaults to False
+    so every existing caller (`rank()`, and through it `roster_needs.py`
+    and `trade_targets.py`, whose before/after trade deltas need the real
+    zero-anchored numbers to stay additive) is unaffected.
+    """
     team_valued = {pid: valued[pid] for pid in entry.player_ids if pid in valued}
     lineup = team_lineup(team_valued, league)
 
-    if position == "OVR":
-        if scope == "full":
-            return lineup.starting_vor + lineup.bench_vor, lineup.bench_vor
-        return lineup.starting_vor, 0.0
+    def contrib(vp: ValuedPlayer) -> float:
+        return max(vp.vor, 0.0) if clip_negative else vp.vor
 
-    at_pos = {pid: vp for pid, vp in team_valued.items()
-              if vp.profile.position == position}
-    started = sum(vp.vor for pid, vp in at_pos.items() if pid in lineup.starters)
+    if position == "OVR":
+        starting = sum(contrib(vp) for pid, vp in team_valued.items() if pid in lineup.starters)
+        if scope == "full":
+            bench = sum(contrib(vp) for pid, vp in team_valued.items() if pid not in lineup.starters)
+            return starting + bench, bench
+        return starting, 0.0
+
+    at_pos = {pid: vp for pid, vp in team_valued.items() if vp.profile.position == position}
+    started = sum(contrib(vp) for pid, vp in at_pos.items() if pid in lineup.starters)
     if scope == "starters":
         return started, 0.0
-    total = sum(vp.vor for vp in at_pos.values())
+    total = sum(contrib(vp) for vp in at_pos.values())
     return total, total - started
 
 
