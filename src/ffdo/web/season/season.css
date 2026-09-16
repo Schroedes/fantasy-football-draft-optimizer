@@ -125,7 +125,6 @@
 .roster-row-meta { font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); }
 .roster-row-value { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--text); flex-shrink: 0; }
 .roster-row.bench .roster-row-value { color: var(--faint); }
-.roster-row-value.neg { color: var(--red); }
 .bench-value { font-size: 11.5px; color: var(--faint); padding-top: 8px; }
 
 .slot-chip {

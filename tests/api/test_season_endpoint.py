@@ -299,3 +299,43 @@ def test_redraft_league_never_calls_the_stats_endpoint(monkeypatch, tmp_path):
     assert res.status_code == 200
     assert not any("/stats/nfl/regular/" in c for c in calls), (
         f"redraft league must never fetch player history: {calls}")
+
+
+def test_below_replacement_bench_player_never_shows_negative_value(monkeypatch, tmp_path):
+    players = dict(_PLAYERS)
+    proj = list(_PROJ)
+    for name, rush_yd in (("A", 500), ("B", 400), ("C", 300), ("D", 200)):
+        pid = f"p_rb_{name}"
+        players[pid] = {"first_name": "Dummy", "last_name": name, "position": "RB",
+                         "team": "ZZZ", "age": 25, "years_exp": 2, "active": True}
+        proj.append({"player_id": pid,
+                     "last_modified": int(datetime(2026, 8, 1, tzinfo=timezone.utc).timestamp() * 1000),
+                     "stats": {"rush_yd": rush_yd}})
+    rosters = [
+        {**_ROSTERS[0], "players": _ROSTERS[0]["players"] + [f"p_rb_{n}" for n in "ABCD"]},
+        _ROSTERS[1],
+    ]
+    _seed(monkeypatch, tmp_path, _tracked())
+    # Override the client _seed just installed with one serving the extended
+    # roster/player/projection fixtures built above.
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _recording_client({
+        f"{V1}/league/L1/rosters": rosters,
+        f"{V1}/players/nfl": players,
+        "/projections/": proj,
+    }))
+
+    res = TestClient(create_app()).get("/api/leagues/sleeper:L1:2026/season")
+    assert res.status_code == 200
+    body = res.json()
+
+    by_id = {p["player_id"]: p for p in body["your_roster"]["players"]}
+    # Dummy "D" (200 rush yards -> 20 pts) is below this league's real RB
+    # replacement level (30 pts, set by dummy "C") -- raw VOR is -10.
+    assert by_id["p_rb_D"]["value"] == 0.0
+    assert all(p["value"] >= 0 for p in body["your_roster"]["players"])
+    assert body["your_roster"]["bench_value"] >= 0
+
+    rb_full = next(r for r in body["power_ranking"]["by_position"]["RB"]["full"]
+                   if r["roster_id"] == 1)
+    assert rb_full["value"] >= 0
+    assert rb_full["bench_value"] >= 0
