@@ -223,6 +223,7 @@ def create_app() -> FastAPI:
     from ffdo.ingest.espn import crosswalk as espn_crosswalk_mod
     from ffdo.ingest.espn import draft as espn_draft_mod
     from ffdo.ingest.espn import league as espn_league_mod
+    from ffdo.ingest.espn import matchup as espn_matchup_mod
     from ffdo.ingest.espn import rosters as espn_rosters_mod
     from ffdo.ingest.espn import teams as espn_teams_mod
     from ffdo.ingest.espn import transactions as espn_transactions_mod
@@ -2037,16 +2038,16 @@ def create_app() -> FastAPI:
         }
 
     def _home_summary_espn(lg: TrackedLeague) -> dict:
-        """ESPN's command-center card: record, power rank, and now the
-        starting-lineup diff + swap-count flag, reusing `_lineup_espn`'s
-        own crosswalk/slot-alignment approach. Waivers and trade targets
-        still have no ESPN ingest for a league-wide "how many
+        """ESPN's command-center card: record, power rank, the
+        starting-lineup diff + swap-count flag, and now the current-week
+        matchup (opponent + both sides' live-or-projected score), via
+        `ingest.espn.matchup` -- see that module's own docstring for the
+        positional-zip inference this relies on. Waivers and trade
+        targets still have no ESPN ingest for a league-wide "how many
         recommendations" flag count the way Sleeper's branch gets one
         cheaply from data it already fetched -- those flags stay absent
         rather than paying for a second full waiver/trade-targets
-        computation just to produce a count. Matchup stays None (ESPN's
-        matchup-pairing API is unresearched, same posture as #2's home
-        summary from the start)."""
+        computation just to produce a count."""
         cred = _require_espn_credential("the home summary")
 
         sleeper = client_mod.SleeperClient()
@@ -2084,6 +2085,9 @@ def create_app() -> FastAPI:
                     espn_crosswalk_mod.parse_player_pool(player_pool_raw)))
             rosters, nfl, mroster_raw = espn_rosters_mod.fetch(
                 espn, lg.provider_league_id, lg.season, cw)
+            current_matchup = (
+                espn_matchup_mod.fetch(espn, lg.provider_league_id, lg.season, cw, lg.roster_id)
+                if lg.roster_id is not None else None)
         except (httpx.HTTPError, RuntimeError) as exc:
             raise HTTPException(
                 status_code=502, detail="Couldn't reach ESPN, try again") from exc
@@ -2097,6 +2101,18 @@ def create_app() -> FastAPI:
                 "resolved_format": lg.resolved_format, "record": None,
                 "power_rank": None, "matchup": None, "starters": [], "flags": {},
             }
+
+        matchup = None
+        if current_matchup is not None:
+            opponent = next(
+                (r for r in rosters if r.roster_id == current_matchup.opponent_roster_id), None)
+            if opponent is not None:
+                matchup = {
+                    "opponent_name": opponent.team_name,
+                    "your_projected": round(sum(current_matchup.your_starter_points.values()), 1),
+                    "opponent_projected": round(
+                        sum(current_matchup.opponent_starter_points.values()), 1),
+                }
 
         through_week = _through_week(nfl)
         actuals = espn_actuals_mod.points_so_far(mroster_raw, cw, lg.season, through_week)
@@ -2161,7 +2177,7 @@ def create_app() -> FastAPI:
             "resolved_format": lg.resolved_format,
             "record": {"wins": you.wins, "losses": you.losses, "ties": you.ties},
             "power_rank": power_rank,
-            "matchup": None,
+            "matchup": matchup,
             "starters": [_starter_row(d) for d in diff_rows],
             "flags": flags,
         }

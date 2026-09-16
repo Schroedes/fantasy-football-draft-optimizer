@@ -81,9 +81,11 @@ def _espn_home_tracked(**over):
 
 def test_home_summary_espn_returns_record_power_rank_and_lineup(monkeypatch, tmp_path):
     """ESPN's home-summary card includes record, power rank, and (now that
-    ESPN weekly-lineup support exists) a real starting-lineup diff --
-    matchup and the waiver/trade-target flags still have no ESPN ingest
-    for a cheap league-wide count, so those stay absent/None."""
+    ESPN weekly-lineup support exists) a real starting-lineup diff. This
+    fixture has no `schedule` data, so matchup degrades to None (see the
+    dedicated matchup test below for the populated case) -- the
+    waiver/trade-target flags still have no ESPN ingest for a cheap
+    league-wide count, so those stay absent regardless."""
     store = LeagueStore(tmp_path / "ffdo.db")
     store.upsert(_espn_home_tracked())
     store.put_credential(ProviderCredential("espn", "{SWID}", "s2value", "{SWID}", "t"))
@@ -113,6 +115,51 @@ def test_home_summary_espn_returns_record_power_rank_and_lineup(monkeypatch, tmp
     assert len(data["starters"]) == 4
     rb_row = next(s for s in data["starters"] if s["name"] == "R B")
     assert rb_row["status"] == "match"
+
+
+def test_home_summary_espn_includes_a_real_matchup_when_schedule_data_exists(monkeypatch, tmp_path):
+    """When the combined mRoster+mMatchupScore response does carry
+    `schedule` data for the current period, the home-summary card
+    surfaces a real opponent + live-or-projected score for both sides --
+    see ingest.espn.matchup's own docstring for the positional-zip this
+    relies on."""
+    league_raw_with_matchup = {
+        **_ESPN_LEAGUE_RAW,
+        "schedule": [
+            {"matchupPeriodId": 3,
+             "home": {"teamId": 1, "rosterForCurrentScoringPeriod": {"entries": [
+                 {"lineupSlotId": 2, "playerPoolEntry": {"player": {"stats": [
+                     {"statSourceId": 1, "appliedTotal": 18.4}]}}},
+             ]}},
+             "away": {"teamId": 2, "rosterForCurrentScoringPeriod": {"entries": [
+                 {"lineupSlotId": 4, "playerPoolEntry": {"player": {"stats": [
+                     {"statSourceId": 1, "appliedTotal": 30.0},
+                     {"statSourceId": 0, "appliedTotal": 12.7}]}}},
+             ]}}},
+        ],
+    }
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_espn_home_tracked())
+    store.put_credential(ProviderCredential("espn", "{SWID}", "s2value", "{SWID}", "t"))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient",
+                        lambda *a, **k: _FakeClient({f"{V1}/state/nfl": _STATE,
+                                                     f"{V1}/players/nfl": _PLAYERS,
+                                                     "/projections/": _PROJ}))
+    FakeEspn, _calls = _recording_espn_client({
+        "seasons/2026/players": _ESPN_PLAYER_POOL_RAW,
+        "leagues/E1": league_raw_with_matchup,
+    })
+    monkeypatch.setattr("ffdo.ingest.espn.client.EspnClient", FakeEspn)
+
+    res = TestClient(create_app()).get("/api/leagues/espn:E1:2026/home-summary")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["matchup"] == {
+        "opponent_name": "Them Team",
+        "your_projected": 18.4,
+        "opponent_projected": 12.7,   # actual (statSourceId 0) preferred over projection
+    }
 
 
 def test_home_summary_espn_400s_without_a_stored_credential(monkeypatch, tmp_path):
