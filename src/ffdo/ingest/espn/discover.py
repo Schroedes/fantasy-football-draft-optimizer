@@ -80,7 +80,15 @@ def list_leagues(
             if league_id is None:
                 continue
             league_id = str(league_id)
-            draft_complete = bool(group.get("draftComplete"))
+            # `draftComplete` never existed in the real payload (confirmed
+            # live 2026-09-16 -- `bool(None)` always read False, so every
+            # league showed as pre-draft on this list regardless of its
+            # real status). The actual field is `draftStatus`, an
+            # undocumented enum; the only value verified against a real,
+            # already-drafted league is 2. This only feeds this discovery
+            # list's badge -- a tracked league's real status is always
+            # re-resolved from mDraftDetail at track time regardless.
+            draft_complete = int(group.get("draftStatus") or 0) == 2
             num_teams = int(group.get("groupSize") or 0)
         except (AttributeError, TypeError, ValueError, KeyError):
             log.warning("ESPN fan API entry could not be parsed; skipping it")

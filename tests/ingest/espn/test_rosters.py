@@ -12,9 +12,9 @@ class _CW:
 
 _LEAGUE_RAW = {
     "settings": {
-        "status": {"currentMatchupPeriod": 10},
         "scheduleSettings": {"matchupPeriodCount": 14},
     },
+    "status": {"currentMatchupPeriod": 10},
     "teams": [
         {"id": 1, "name": "Alpha",
          "record": {"overall": {"wins": 7, "losses": 2, "ties": 0,
@@ -49,11 +49,26 @@ def test_fetch_parses_teams_starters_and_week():
 
 
 def test_week_past_matchup_period_count_is_complete():
-    raw = {**_LEAGUE_RAW}
-    raw["settings"] = {**raw["settings"], "status": {"currentMatchupPeriod": 15}}
+    raw = {**_LEAGUE_RAW, "status": {"currentMatchupPeriod": 15}}
 
     def handler(request):
         return httpx.Response(200, json=raw)
 
     _e, week, _r = rosters.fetch(_client(handler), "L1", 2026, _CROSSWALK)
     assert week.complete is True
+
+
+def test_status_is_read_from_the_payload_top_level_not_under_settings():
+    """Regression: `status` is a sibling of `settings`, not nested under
+    it. A payload that (wrongly) only carries a nested copy must not be
+    mistaken for the real thing -- it should read as week 0, same as a
+    payload with no status at all."""
+    raw = {**_LEAGUE_RAW, "status": {},
+           "settings": {**_LEAGUE_RAW["settings"],
+                        "status": {"currentMatchupPeriod": 10}}}
+
+    def handler(request):
+        return httpx.Response(200, json=raw)
+
+    _e, week, _r = rosters.fetch(_client(handler), "L1", 2026, _CROSSWALK)
+    assert week.week == 0

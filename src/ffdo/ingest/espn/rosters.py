@@ -1,7 +1,7 @@
 """ESPN current rosters + standings + week, from mTeam/mRoster/mSettings.
 ESPN player ids are crosswalked to Sleeper ids (the valuation source is
-Sleeper's player pool regardless of provider). UNVERIFIED against a live
-league -- see the spec. Every field access is defensive."""
+Sleeper's player pool regardless of provider). Verified live 2026-09-16
+against a real drafted league. Every field access is defensive."""
 
 from __future__ import annotations
 
@@ -20,7 +20,13 @@ def fetch(
         "?view=mTeam&view=mRoster&view=mSettings")
 
     settings = raw.get("settings") or {}
-    current_period = int((settings.get("status") or {}).get("currentMatchupPeriod") or 0)
+    # `status` is a sibling of `settings` at the payload's top level, not
+    # nested under it -- confirmed live 2026-09-16 (`raw["status"]`, not
+    # `raw["settings"]["status"]`). Reading it from the wrong place silently
+    # left this at 0 forever, which made every ESPN league's season-to-date
+    # actuals compute as "no weeks final yet," always, regardless of the
+    # real week.
+    current_period = int((raw.get("status") or {}).get("currentMatchupPeriod") or 0)
     period_count = int((settings.get("scheduleSettings") or {}).get("matchupPeriodCount") or 18)
     week = NflWeek(
         season=season,

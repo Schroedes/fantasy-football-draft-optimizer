@@ -1334,7 +1334,7 @@ def create_app() -> FastAPI:
         through_week = _through_week(nfl)
         # Pure parse of the mRoster payload already in hand -- no second
         # round trip, unlike Sleeper's week-by-week matchups walk.
-        actuals = espn_actuals_mod.points_so_far(mroster_raw, cw, through_week)
+        actuals = espn_actuals_mod.points_so_far(mroster_raw, cw, lg.season, through_week)
         # ESPN exposes no traded-pick feed this project reads, so the draft
         # capital panel is absent for ESPN leagues of every format -- an
         # honest gap rather than an implicit-ownership table that would be
