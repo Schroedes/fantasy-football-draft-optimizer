@@ -2069,14 +2069,20 @@ def create_app() -> FastAPI:
             current_week = matchups_mod.fetch(sleeper, lg.provider_league_id, nfl.week)
 
             waiver_recs_count = 0
-            # `raw_settings` (captured at track/refresh time, already used
-            # this same way for draft_rounds elsewhere in this file)
-            # avoids a live settings re-fetch just to decide whether this
-            # league is FAAB -- acceptable staleness for a flag COUNT,
-            # unlike /waivers' own live re-fetch which needs an exact
-            # current budget.
-            if (lg.raw_settings or {}).get("waiver_type") == 2:
-                try:
+            # The add/drop recommendation itself doesn't need FAAB -- only
+            # the bid-amount suggestion does (see recommend_adds) -- so
+            # this flag is computed for every waiver type now, with the
+            # FAAB budget lookup skipped for a priority league. `raw_settings`
+            # (captured at track/refresh time, already used this same way
+            # for draft_rounds elsewhere in this file) avoids a live
+            # settings re-fetch just to decide whether this league is
+            # FAAB -- acceptable staleness for a flag COUNT, unlike
+            # /waivers' own live re-fetch which needs an exact current
+            # budget.
+            try:
+                is_faab = (lg.raw_settings or {}).get("waiver_type") == 2
+                your_remaining = None
+                if is_faab:
                     league_raw = sleeper.get_json(f"{client_mod.V1}/league/{lg.provider_league_id}")
                     waiver_budget = float((league_raw.get("settings") or {}).get("waiver_budget") or 0)
                     claims = _waiver_claims_cache_for(lg.league_key, nfl.week).get(
@@ -2084,14 +2090,14 @@ def create_app() -> FastAPI:
                             sleeper, lg.provider_league_id, season=lg.season, through_week=nfl.week))
                     budgets = waivers_mod.remaining_budget(claims, waiver_budget=waiver_budget)
                     your_remaining = budgets.get(lg.roster_id, waiver_budget)
-                    waiver_recs = waiver_value_mod.recommend_adds(
-                        free_agent_ids, you.player_ids, valued, profiles, lg,
-                        FAAB_BID_CURVE, your_remaining)
-                    waiver_recs_count = len(waiver_recs)
-                except (httpx.HTTPError, RuntimeError):
-                    logging.getLogger("ffdo.api").warning(
-                        "home-summary: waiver fetch failed for %s, waiver flag omitted",
-                        lg.league_key)
+                waiver_recs = waiver_value_mod.recommend_adds(
+                    free_agent_ids, you.player_ids, valued, profiles, lg,
+                    FAAB_BID_CURVE if is_faab else None, your_remaining)
+                waiver_recs_count = len(waiver_recs)
+            except (httpx.HTTPError, RuntimeError):
+                logging.getLogger("ffdo.api").warning(
+                    "home-summary: waiver fetch failed for %s, waiver flag omitted",
+                    lg.league_key)
         except (httpx.HTTPError, RuntimeError) as exc:
             raise HTTPException(status_code=502, detail="Couldn't reach Sleeper, try again") from exc
         finally:
@@ -2346,19 +2352,21 @@ def create_app() -> FastAPI:
         return {"trades": out}
 
     def _waivers_espn(lg: TrackedLeague) -> dict:
-        """ESPN's FAAB waiver recommendations -- same posture as Sleeper's
-        own gate (FAAB leagues only), detected via
-        raw_settings.acquisitionSettings.isUsingAcquisitionBudget rather
-        than Sleeper's waiver_type field. UNVERIFIED end-to-end: the real
-        league this project validates ESPN against uses waiver-priority,
-        not FAAB, and has no real waiver history to check a resolved
-        claim against -- see ingest.espn.transactions's own module
-        docstring for what's unverified in the underlying feed."""
+        """ESPN's waiver recommendations, add/drop always, a FAAB bid
+        suggestion added on top only when
+        raw_settings.acquisitionSettings.isUsingAcquisitionBudget is true
+        (ESPN's equivalent of Sleeper's waiver_type == 2) -- same posture
+        as get_waivers' own FAAB/priority split. UNVERIFIED end-to-end for
+        the FAAB case: the real league this project validates ESPN
+        against uses waiver-priority, not FAAB, and has no real waiver
+        history to check a resolved claim against -- see
+        ingest.espn.transactions's own module docstring for what's
+        unverified in the underlying feed. The add/drop-only,
+        no-bid-suggestion path (what that real league actually gets) IS
+        live-verified."""
         acquisition = (lg.raw_settings or {}).get("acquisitionSettings") or {}
-        if not acquisition.get("isUsingAcquisitionBudget"):
-            raise HTTPException(
-                status_code=400, detail="Waivers is FAAB-leagues-only for now")
-        waiver_budget = float(acquisition.get("acquisitionBudget") or 0)
+        is_faab = bool(acquisition.get("isUsingAcquisitionBudget"))
+        waiver_budget = float(acquisition.get("acquisitionBudget") or 0) if is_faab else None
         cred = _require_espn_credential("waivers")
 
         sleeper = client_mod.SleeperClient()
@@ -2391,7 +2399,8 @@ def create_app() -> FastAPI:
 
             claims = espn_transactions_mod.fetch_waivers(
                 espn, lg.provider_league_id, lg.season, cw, through_week=nfl.week)
-            budgets = waivers_mod.remaining_budget(claims, waiver_budget=waiver_budget)
+            budgets = (waivers_mod.remaining_budget(claims, waiver_budget=waiver_budget)
+                      if is_faab else {})
 
             your_claims = (
                 [c for c in espn_transactions_mod.fetch_all_claims(
@@ -2415,7 +2424,7 @@ def create_app() -> FastAPI:
         # reflects.
         all_player_ids = set(cw.espn_to_sleeper.values())
         free_agent_ids = waiver_value_mod.free_agents(all_player_ids, rosters)
-        your_remaining = budgets.get(lg.roster_id, waiver_budget)
+        your_remaining = budgets.get(lg.roster_id, waiver_budget) if is_faab else None
 
         valued = ros_value_mod.roster_value(
             set(you.player_ids) | free_agent_ids, lg,
@@ -2425,7 +2434,7 @@ def create_app() -> FastAPI:
 
         recommendations = waiver_value_mod.recommend_adds(
             free_agent_ids, waiver_value_mod.droppable_player_ids(you), valued, profiles, lg,
-            FAAB_BID_CURVE, your_remaining)
+            FAAB_BID_CURVE if is_faab else None, your_remaining)
 
         recommended_by_player = {r.free_agent_id: r for r in recommendations}
         for claim in your_claims:
@@ -2454,15 +2463,18 @@ def create_app() -> FastAPI:
             }
 
         return {
-            "remaining_budget": round(your_remaining, 1),
+            "remaining_budget": round(your_remaining, 1) if your_remaining is not None else None,
             "recommendations": [_waiver_row(r) for r in recommendations],
         }
 
     @app.get("/api/leagues/{league_key}/waivers")
     def get_waivers(league_key: str) -> dict:
-        """Free-agent add/drop + FAAB bid recommendations. FAAB leagues
-        only -- a 400 for any other waiver type, matching /lineup's ESPN
-        support posture. ESPN's FAAB detection lives in _waivers_espn."""
+        """Free-agent add/drop recommendations, with a FAAB bid suggestion
+        added on top for FAAB leagues (`waiver_type == 2`) -- a
+        waiver-priority league still gets the same VOR-based add/drop
+        call, just with `suggested_bid: null` and `remaining_budget: null`,
+        since there's no budget concept to suggest a bid against.
+        ESPN's FAAB detection lives in _waivers_espn."""
         lg = _load_league(league_key)
         if lg.provider == "espn":
             return _waivers_espn(lg)
@@ -2471,10 +2483,8 @@ def create_app() -> FastAPI:
         try:
             league_raw = sleeper.get_json(f"{client_mod.V1}/league/{lg.provider_league_id}")
             settings = league_raw.get("settings") or {}
-            if settings.get("waiver_type") != 2:
-                raise HTTPException(
-                    status_code=400, detail="Waivers is FAAB-leagues-only for now")
-            waiver_budget = float(settings.get("waiver_budget") or 0)
+            is_faab = settings.get("waiver_type") == 2
+            waiver_budget = float(settings.get("waiver_budget") or 0) if is_faab else None
 
             nfl = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
             profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
@@ -2490,7 +2500,8 @@ def create_app() -> FastAPI:
             # GET /trades bug).
             claims = waivers_mod.fetch_waivers(
                 sleeper, lg.provider_league_id, season=lg.season, through_week=nfl.week)
-            budgets = waivers_mod.remaining_budget(claims, waiver_budget=waiver_budget)
+            budgets = (waivers_mod.remaining_budget(claims, waiver_budget=waiver_budget)
+                      if is_faab else {})
 
             # For the ledger (outcome scorecard) -- every claim for the
             # tracked roster, win or loss, not just the winning ones
@@ -2514,7 +2525,7 @@ def create_app() -> FastAPI:
             return {"remaining_budget": waiver_budget, "recommendations": []}
 
         free_agent_ids = waiver_value_mod.free_agents(all_player_ids, rosters)
-        your_remaining = budgets.get(lg.roster_id, waiver_budget)
+        your_remaining = budgets.get(lg.roster_id, waiver_budget) if is_faab else None
 
         valued = ros_value_mod.roster_value(
             set(you.player_ids) | free_agent_ids, lg,
@@ -2524,7 +2535,7 @@ def create_app() -> FastAPI:
 
         recommendations = waiver_value_mod.recommend_adds(
             free_agent_ids, waiver_value_mod.droppable_player_ids(you), valued, profiles, lg,
-            FAAB_BID_CURVE, your_remaining)
+            FAAB_BID_CURVE if is_faab else None, your_remaining)
 
         # A claim only matches a recommendation if it happened THIS week
         # (recommend_adds only ever returns the current week's top-N) --
@@ -2559,7 +2570,7 @@ def create_app() -> FastAPI:
             }
 
         return {
-            "remaining_budget": round(your_remaining, 1),
+            "remaining_budget": round(your_remaining, 1) if your_remaining is not None else None,
             "recommendations": [_waiver_row(r) for r in recommendations],
         }
 

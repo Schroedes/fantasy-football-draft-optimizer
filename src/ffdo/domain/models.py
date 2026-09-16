@@ -321,4 +321,7 @@ class WaiverRecommendation:
     free_agent_id: str
     drop_player_id: str | None
     vor_gain: float
-    suggested_bid: float
+    # None for a non-FAAB (waiver-priority) league -- there's no budget to
+    # bid a fraction of, but the add/drop recommendation itself is still
+    # real VOR-based signal independent of the acquisition model.
+    suggested_bid: float | None
