@@ -220,6 +220,8 @@ class RosterEntry:
     ties: int
     points_for: float
     points_against: float
+    reserve_ids: tuple[str, ...] = ()   # IR slot -- restricted, not waiver-droppable
+    taxi_ids: tuple[str, ...] = ()      # Taxi Squad slot -- restricted, not waiver-droppable
 
 
 @dataclass(frozen=True, slots=True)

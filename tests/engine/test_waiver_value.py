@@ -70,10 +70,11 @@ def test_real_curve_higher_vor_gain_bucket_never_suggests_less_than_the_lowest_b
     assert high_bid >= low_bid
 
 
-def _roster(roster_id, player_ids):
+def _roster(roster_id, player_ids, reserve_ids=(), taxi_ids=()):
     return RosterEntry(roster_id=roster_id, team_name=f"Team {roster_id}",
                        player_ids=tuple(player_ids), starter_ids=(),
-                       wins=0, losses=0, ties=0, points_for=0.0, points_against=0.0)
+                       wins=0, losses=0, ties=0, points_for=0.0, points_against=0.0,
+                       reserve_ids=tuple(reserve_ids), taxi_ids=tuple(taxi_ids))
 
 
 def _league(roster_positions):
@@ -93,6 +94,24 @@ def test_free_agents_excludes_every_rostered_player():
 def test_free_agents_with_no_rosters_returns_everyone():
     result = waiver_value.free_agents(["p1", "p2"], [])
     assert result == {"p1", "p2"}
+
+
+def test_droppable_player_ids_excludes_reserve_and_taxi_slots():
+    """IR ('reserve') and Taxi Squad slots are restricted -- a player
+    parked there must never be offered up as a waiver drop candidate."""
+    roster = _roster(1, ["p1", "p2", "p3", "p4"], reserve_ids=["p2"], taxi_ids=["p3"])
+    result = waiver_value.droppable_player_ids(roster)
+    assert result == ("p1", "p4")
+
+
+def test_droppable_player_ids_with_no_reserve_or_taxi_returns_everyone():
+    roster = _roster(1, ["p1", "p2"])
+    assert waiver_value.droppable_player_ids(roster) == ("p1", "p2")
+
+
+def test_droppable_player_ids_all_players_restricted_returns_empty():
+    roster = _roster(1, ["p1", "p2"], reserve_ids=["p1"], taxi_ids=["p2"])
+    assert waiver_value.droppable_player_ids(roster) == ()
 
 
 def test_position_cap_uncapped_position_returns_none():

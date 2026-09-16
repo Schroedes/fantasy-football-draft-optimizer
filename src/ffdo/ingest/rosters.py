@@ -31,6 +31,8 @@ def fetch(sleeper: SleeperClient, league_id: str) -> list[RosterEntry]:
         players = tuple(str(p) for p in (r.get("players") or []))
         starters = tuple(str(p) for p in (r.get("starters") or [])
                          if p not in ("0", 0, None))
+        reserve = tuple(str(p) for p in (r.get("reserve") or []))
+        taxi = tuple(str(p) for p in (r.get("taxi") or []))
         out.append(RosterEntry(
             roster_id=roster_id,
             team_name=(names.get(str(owner_id)) if owner_id is not None else None)
@@ -42,6 +44,8 @@ def fetch(sleeper: SleeperClient, league_id: str) -> list[RosterEntry]:
             ties=int(settings.get("ties") or 0),
             points_for=_points(settings, "fpts", "fpts_decimal"),
             points_against=_points(settings, "fpts_against", "fpts_against_decimal"),
+            reserve_ids=reserve,
+            taxi_ids=taxi,
         ))
     out.sort(key=lambda e: e.roster_id)
     return out

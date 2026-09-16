@@ -222,6 +222,23 @@ def test_roster_entry_holds_tuples():
     assert r.player_ids == ("a", "b") and r.starter_ids == ("a",)
 
 
+def test_roster_entry_reserve_and_taxi_ids_default_to_empty():
+    from ffdo.domain.models import RosterEntry
+    r = RosterEntry(roster_id=1, team_name="X", player_ids=("a", "b"),
+                    starter_ids=("a",), wins=6, losses=3, ties=0,
+                    points_for=1284.6, points_against=1244.0)
+    assert r.reserve_ids == () and r.taxi_ids == ()
+
+
+def test_roster_entry_holds_reserve_and_taxi_ids():
+    from ffdo.domain.models import RosterEntry
+    r = RosterEntry(roster_id=1, team_name="X", player_ids=("a", "b", "c"),
+                    starter_ids=(), wins=0, losses=0, ties=0,
+                    points_for=0.0, points_against=0.0,
+                    reserve_ids=("b",), taxi_ids=("c",))
+    assert r.reserve_ids == ("b",) and r.taxi_ids == ("c",)
+
+
 def test_power_row_delta_is_standings_minus_power():
     from ffdo.domain.models import PowerRow
     row = PowerRow(roster_id=1, team_name="X", is_you=True, value=340.0,
