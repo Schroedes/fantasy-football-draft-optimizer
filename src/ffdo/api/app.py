@@ -1115,26 +1115,30 @@ def create_app() -> FastAPI:
         # shows what the user actually has set, not what they should have
         # set. (The "should" view is sub-project #3's weekly lineup screen.)
         starters = set(you.starter_ids)
+
+        def _raw_vor(pid: str) -> float:
+            vp = valued.get(pid)
+            return vp.vor if vp is not None else 0.0
+
+        # Same silent omission `ros_value.roster_value` already applies: a
+        # rostered id with no Sleeper profile (a stale crosswalk miss, an
+        # offseason-only id) has no name, position or value to show, and
+        # inventing zeros for it would put a phantom row on the user's roster.
+        ordered_ids = sorted(
+            (pid for pid in you.player_ids if profiles.get(pid) is not None),
+            key=lambda pid: (pid not in starters, -_raw_vor(pid)))
         players = []
-        for pid in you.player_ids:
-            prof = profiles.get(pid)
-            if prof is None:
-                # Same silent omission `ros_value.roster_value` already
-                # applies: a rostered id with no Sleeper profile (a stale
-                # crosswalk miss, an offseason-only id) has no name,
-                # position or value to show, and inventing zeros for it
-                # would put a phantom row on the user's roster.
-                continue
+        for pid in ordered_ids:
+            prof = profiles[pid]
             vp = valued.get(pid)
             players.append({
                 "player_id": pid, "name": prof.full_name, "position": prof.position,
                 "team": prof.team, "slot": prof.position if pid in starters else "BN",
                 "starter": pid in starters,
-                "value": round(vp.vor, 1) if vp else 0.0,
+                "value": round(max(vp.vor, 0.0), 1) if vp else 0.0,
                 "age": prof.age, "bye_week": byes.get(prof.team or ""),
                 "injury_status": prof.injury_status,
             })
-        players.sort(key=lambda p: (not p["starter"], -p["value"]))
 
         def _you_in(rows):
             return next((r for r in rows if r["roster_id"] == lg.roster_id), None)
@@ -1232,9 +1236,16 @@ def create_app() -> FastAPI:
             _roster_count_cache_for(lg.league_key).get(lambda: {"attn": bool(unfilled or short)})
 
         def _rank(position: str, scope: str) -> list[dict]:
+            # clip_negative=True here (Season screen only -- every other
+            # caller of power_ranking.rank()/team_value() still gets real,
+            # unclipped VOR) so the printed value/bench_value and the rank
+            # they're sorted by always agree; splitting them (an earlier
+            # version of this code ranked on the real total but printed a
+            # separately-clipped one) let the printed "Value" column read
+            # out of order against its own rank column.
             rows = power_ranking_mod.rank(
                 rosters, valued, lg, standings_rank, lg.roster_id,
-                position=position, scope=scope)
+                position=position, scope=scope, clip_negative=True)
             return [{
                 "roster_id": row.roster_id, "team_name": row.team_name,
                 "is_you": row.is_you, "value": row.value,

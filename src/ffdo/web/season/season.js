@@ -688,7 +688,6 @@ function renderYourTeam(you, week) {
 
   const rosterHtml = (you.players || []).map(p => {
     const value = typeof p.value === "number" ? p.value.toFixed(1) : "—";
-    const negative = typeof p.value === "number" && p.value < 0;
     const byeText = p.bye_week != null ? `bye ${p.bye_week}` : "";
     const meta = [p.team ? escapeHtml(p.team) : "FA", byeText].filter(Boolean).join(" · ");
     return `<div class="roster-row${p.starter ? "" : " bench"}">
@@ -697,7 +696,7 @@ function renderYourTeam(you, week) {
         <span class="roster-row-name">${escapeHtml(p.name)}</span>
         <span class="roster-row-meta">${meta}</span>
       </div>
-      <span class="roster-row-value${negative ? " neg" : ""}">${value}</span>
+      <span class="roster-row-value">${value}</span>
     </div>`;
   }).join("");
 
