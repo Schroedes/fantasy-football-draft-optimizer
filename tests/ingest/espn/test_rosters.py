@@ -72,3 +72,46 @@ def test_status_is_read_from_the_payload_top_level_not_under_settings():
 
     _e, week, _r = rosters.fetch(_client(handler), "L1", 2026, _CROSSWALK)
     assert week.week == 0
+
+
+# -- slot_aligned_starters ---------------------------------------------------
+
+_MROSTER_TWO_RB = {
+    "teams": [
+        {"id": 1, "roster": {"entries": [
+            {"playerId": 1, "lineupSlotId": 0},    # QB
+            {"playerId": 2, "lineupSlotId": 2},    # RB
+            {"playerId": 3, "lineupSlotId": 2},    # RB
+            {"playerId": 4, "lineupSlotId": 23},   # FLEX
+            {"playerId": 5, "lineupSlotId": 20},   # BN -- must not fill a starting slot
+            {"playerId": 6, "lineupSlotId": 21},   # IR -- must not fill a starting slot
+            {"playerId": 99, "lineupSlotId": 4},   # WR, but not in the crosswalk
+        ]}},
+    ],
+}
+_CW_TWO_RB = _CW({"1": "sQB", "2": "sRB1", "3": "sRB2", "4": "sFLEX",
+                  "5": "sBN", "6": "sIR"})
+
+
+def test_slot_aligned_starters_matches_positions_in_order():
+    out = rosters.slot_aligned_starters(
+        _MROSTER_TWO_RB, _CW_TWO_RB, roster_id=1,
+        starting_slots=("QB", "RB", "RB", "WR", "FLEX"))
+    assert out[0] == "sQB"
+    assert set(out[1:3]) == {"sRB1", "sRB2"}           # order between them is arbitrary
+    assert out[3] is None                              # WR slot: crosswalk miss -> empty
+    assert out[4] == "sFLEX"
+
+
+def test_slot_aligned_starters_bench_and_ir_never_fill_a_starting_slot():
+    out = rosters.slot_aligned_starters(
+        _MROSTER_TWO_RB, _CW_TWO_RB, roster_id=1,
+        starting_slots=("QB",))
+    assert out == ("sQB",)   # sBN/sIR never surface even if a slot needed filling
+
+
+def test_slot_aligned_starters_unknown_roster_id_returns_all_empty():
+    out = rosters.slot_aligned_starters(
+        _MROSTER_TWO_RB, _CW_TWO_RB, roster_id=999,
+        starting_slots=("QB", "RB"))
+    assert out == (None, None)

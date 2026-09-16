@@ -1424,19 +1424,127 @@ def create_app() -> FastAPI:
                                 proj_anchor, actuals, _standings_rank(rosters),
                                 capital, history)
 
+    def _lineup_espn(lg: TrackedLeague) -> dict:
+        """ESPN's weekly-lineup view. Roster identity (who's on the team,
+        who's currently starting) comes from ESPN's own feed, crosswalked
+        to Sleeper ids -- but weekly projections and the schedule/lock
+        feed are Sleeper-sourced regardless of provider, same posture as
+        #2's valuation inputs (no ESPN equivalent exists). ESPN doesn't
+        hand back a pre-ordered starters array the way Sleeper does, so
+        `espn_rosters_mod.slot_aligned_starters` rebuilds that alignment
+        from each roster entry's own `lineupSlotId`."""
+        cred = _require_espn_credential("the weekly lineup")
+
+        sleeper = client_mod.SleeperClient()
+        try:
+            nfl = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
+            profiles, espn_id_index = players_cache.get(lambda: _load_players(sleeper))
+            weekly_proj = _weekly_proj_cache_for(nfl.season, nfl.week).get(
+                lambda: weekly_projections_mod.fetch(sleeper, nfl.season, nfl.week))
+            try:
+                games = _schedule_cache_for(nfl.season, nfl.week).get(
+                    lambda: schedule_mod.week_games(sleeper, nfl.season, nfl.week))
+            except (httpx.HTTPError, RuntimeError) as exc:
+                logging.getLogger("ffdo.api").warning(
+                    "lineup: schedule fetch failed for %s week %s (%s) -- "
+                    "treating nothing as locked", lg.league_key, nfl.week, exc)
+                games = []
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=502, detail="Couldn't reach Sleeper, try again") from exc
+        finally:
+            sleeper.close()
+
+        if lg.roster_id is None:
+            return {
+                "nfl_week": {"season": nfl.season, "week": nfl.week},
+                "week_locked": False, "swaps_suggested": 0, "diff": [],
+                "ledger": None,
+            }
+
+        espn = espn_client_mod.EspnClient(cred.espn_s2, cred.swid)
+        try:
+            player_pool_raw = _espn_player_pool_cache_for(lg.season).get(
+                lambda: espn.get_json(
+                    f"{espn_client_mod.BASE}/seasons/{lg.season}/players"
+                    "?view=kona_player_info",
+                    extra_headers=espn_client_mod.PLAYER_POOL_FILTER_HEADER))
+            cw = _espn_crosswalk_cache_for(lg.season).get(
+                lambda: espn_crosswalk_mod.build(
+                    espn_id_index, profiles,
+                    espn_crosswalk_mod.parse_player_pool(player_pool_raw)))
+            rosters, _espn_week, mroster_raw = espn_rosters_mod.fetch(
+                espn, lg.provider_league_id, lg.season, cw)
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=502, detail="Couldn't reach ESPN, try again") from exc
+        finally:
+            espn.close()
+
+        current_starters = espn_rosters_mod.slot_aligned_starters(
+            mroster_raw, cw, lg.roster_id, lg.starting_slots)
+
+        all_teams = frozenset(p.team for p in profiles.values() if p.team)
+        bye_teams = schedule_mod.bye_teams(games, all_teams) if games else frozenset()
+        locked_teams = schedule_mod.locked_teams(games)
+        locked_now = schedule_mod.week_locked(games)
+
+        all_pids = {pid for r in rosters for pid in r.player_ids}
+        valued = weekly_lineup_mod.weekly_value(
+            all_pids, lg, weekly_points=weekly_proj, profiles=profiles,
+            bye_teams=bye_teams)
+        you_roster = next((r for r in rosters if r.roster_id == lg.roster_id), None)
+        your_valued = ({pid: valued[pid] for pid in you_roster.player_ids if pid in valued}
+                      if you_roster is not None else {})
+        optimal = weekly_lineup_mod.optimal_slots(your_valued, lg)
+        diff_rows = weekly_lineup_mod.diff(
+            current_starters, optimal, locked_teams, valued, profiles, lg)
+
+        record = _LINEUP_LEDGER.record_if_absent(
+            lg.league_key, nfl.season, nfl.week, optimal, current_starters)
+        if record.followed is None and locked_now:
+            _LINEUP_LEDGER.resolve(lg.league_key, nfl.season, nfl.week, current_starters)
+            record = _LINEUP_LEDGER.get(lg.league_key, nfl.season, nfl.week)
+
+        def _player_json(pid: str | None) -> dict | None:
+            if pid is None:
+                return None
+            prof = profiles.get(pid)
+            vp = valued.get(pid)
+            return {
+                "player_id": pid,
+                "name": prof.full_name if prof else pid,
+                "team": prof.team if prof else None,
+                "value": round(vp.vor, 1) if vp is not None else 0.0,
+            }
+
+        return {
+            "nfl_week": {"season": nfl.season, "week": nfl.week},
+            "week_locked": locked_now,
+            "swaps_suggested": sum(1 for d in diff_rows if d.status == "suggested_swap"),
+            "diff": [
+                {"slot_index": d.slot_index, "slot_label": d.slot_label,
+                 "status": d.status,
+                 "current": _player_json(d.current_player_id),
+                 "optimal": _player_json(d.optimal_player_id),
+                 "delta": d.delta}
+                for d in diff_rows
+            ],
+            "ledger": {"recorded_at": record.recorded_at, "followed": record.followed},
+        }
+
     @app.get("/api/leagues/{league_key}/lineup")
     def get_lineup(league_key: str) -> dict:
         """This week's optimal-lineup recommendation vs. your actual
-        current starters, lock-aware. Sleeper-only: the weekly-projections
-        and schedule/lock feeds this endpoint depends on have no ESPN
-        equivalent in this codebase (see the plan's Global Constraints) --
-        an ESPN league gets an honest 400 rather than a recommendation
-        silently built on data that was never fetched for it.
+        current starters, lock-aware. Weekly projections and the
+        schedule/lock feed are Sleeper-sourced regardless of provider (no
+        ESPN equivalent exists) -- `_lineup_espn` still builds a real
+        recommendation for ESPN leagues by crosswalking ESPN's own
+        roster/starters onto those Sleeper-sourced values.
         """
         lg = _load_league(league_key)
-        if lg.provider != "sleeper":
-            raise HTTPException(
-                status_code=400, detail="Weekly lineup is Sleeper-only for now")
+        if lg.provider == "espn":
+            return _lineup_espn(lg)
 
         sleeper = client_mod.SleeperClient()
         try:

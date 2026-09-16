@@ -8,6 +8,7 @@ from __future__ import annotations
 from ffdo.domain.models import NflWeek, RosterEntry
 from ffdo.ingest.espn.client import BASE, EspnClient
 from ffdo.ingest.espn.crosswalk import Crosswalk
+from ffdo.ingest.espn.league import ESPN_SLOT_ID_TO_POSITION
 
 _BENCH_SLOTS = {20, 21}   # BN, IR
 
@@ -64,3 +65,50 @@ def fetch(
         ))
     entries.sort(key=lambda e: e.roster_id)
     return entries, week, raw
+
+
+def slot_aligned_starters(
+    mroster_raw: dict, crosswalk: Crosswalk, roster_id: int,
+    starting_slots: tuple[str, ...],
+) -> tuple[str | None, ...]:
+    """One team's current starters, positionally aligned to
+    `league.starting_slots` -- mirrors Sleeper's own
+    `ingest.rosters.raw_starters` contract exactly (same return shape,
+    same "None for an empty slot" convention) so both providers feed
+    `engine.weekly_lineup.diff` identically.
+
+    Unlike Sleeper, ESPN doesn't hand back a pre-ordered starters array:
+    each roster entry carries its own `lineupSlotId`, and multiple
+    entries can share one (e.g. two RB slots). Alignment is rebuilt here
+    by walking `starting_slots` in order and consuming the next unused
+    entry whose slot maps to that label -- which specific same-labeled
+    slot a player lands in is never distinguished downstream (`diff`
+    only compares by index against `starting_slots`, and slots sharing a
+    label are interchangeable), so an arbitrary consistent order is
+    correct, not merely convenient.
+    """
+    for team in mroster_raw.get("teams") or []:
+        if team.get("id") != roster_id:
+            continue
+        pools: dict[str, list[str]] = {}
+        for entry in ((team.get("roster") or {}).get("entries") or []):
+            label = ESPN_SLOT_ID_TO_POSITION.get(entry.get("lineupSlotId"))
+            if label in (None, "BN", "IR"):
+                continue
+            sleeper_id = crosswalk.espn_to_sleeper.get(str(entry.get("playerId")))
+            if sleeper_id is None:
+                continue
+            pools.setdefault(label, []).append(sleeper_id)
+
+        cursor: dict[str, int] = dict.fromkeys(pools, 0)
+        out: list[str | None] = []
+        for label in starting_slots:
+            pool = pools.get(label, [])
+            idx = cursor.get(label, 0)
+            if idx < len(pool):
+                out.append(pool[idx])
+                cursor[label] = idx + 1
+            else:
+                out.append(None)
+        return tuple(out)
+    return tuple(None for _ in starting_slots)

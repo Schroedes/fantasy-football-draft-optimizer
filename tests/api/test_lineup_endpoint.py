@@ -6,7 +6,9 @@ from ffdo.api import app as app_mod
 from ffdo.api.app import create_app
 from ffdo.api.lineup_ledger import LineupLedger
 from ffdo.api.store import LeagueStore
+from ffdo.domain.models import ProviderCredential
 from ffdo.ingest.client import PROJECTIONS, V1
+from tests.api.test_app import _recording_espn_client
 from tests.api.test_season_endpoint import _PLAYERS, _ROSTERS, _STATE, _USERS, _tracked
 
 SCHEDULE = "https://api.sleeper.app/schedule/nfl/regular"
@@ -55,6 +57,81 @@ def _seed(monkeypatch, tmp_path, tracked, extra=None):
     monkeypatch.setattr(app_mod, "_STORE", store)
     monkeypatch.setattr(app_mod, "_LINEUP_LEDGER", LineupLedger(tmp_path / "ffdo.db"))
     monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _recording_client(extra))
+
+
+_ESPN_LINEUP_LEAGUE_RAW = {
+    "status": {"currentMatchupPeriod": 10},
+    "settings": {"scheduleSettings": {"matchupPeriodCount": 14}},
+    "teams": [
+        {"id": 1, "name": "You Team",
+         "record": {"overall": {"wins": 5, "losses": 2, "ties": 0,
+                                "pointsFor": 800.0, "pointsAgainst": 700.0}},
+         "roster": {"entries": [
+             {"playerId": 9001, "lineupSlotId": 0,
+              "playerPoolEntry": {"player": {"stats": []}}},   # QB
+             {"playerId": 9002, "lineupSlotId": 2,
+              "playerPoolEntry": {"player": {"stats": []}}},   # RB
+             {"playerId": 9003, "lineupSlotId": 4,
+              "playerPoolEntry": {"player": {"stats": []}}},   # WR
+         ]}},
+        {"id": 2, "name": "Them Team",
+         "record": {"overall": {"wins": 2, "losses": 5, "ties": 0,
+                                "pointsFor": 500.0, "pointsAgainst": 600.0}},
+         "roster": {"entries": [
+             {"playerId": 9004, "lineupSlotId": 2,
+              "playerPoolEntry": {"player": {"stats": []}}},   # RB
+         ]}},
+    ],
+}
+_ESPN_LINEUP_PLAYER_POOL_RAW = [
+    {"id": 9001, "fullName": "Q B", "defaultPositionId": 1, "proTeamId": 1},
+    {"id": 9002, "fullName": "R B", "defaultPositionId": 2, "proTeamId": 2},
+    {"id": 9003, "fullName": "W R", "defaultPositionId": 3, "proTeamId": 3},
+    {"id": 9004, "fullName": "R B2", "defaultPositionId": 2, "proTeamId": 4},
+]
+
+
+def test_lineup_espn_builds_a_real_recommendation_from_crosswalked_rosters(monkeypatch, tmp_path):
+    """ESPN has no weekly-projections/schedule feed of its own, but the
+    lineup endpoint still produces a real recommendation for an ESPN
+    league by crosswalking its roster onto Sleeper's provider-agnostic
+    weekly-projections and schedule feeds -- confirms the full ESPN wiring
+    end to end, not just that it no longer 400s."""
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_tracked(
+        league_key="espn:E1:2026", provider="espn", provider_league_id="E1", roster_id=1))
+    store.put_credential(ProviderCredential("espn", "{SWID}", "s2value", "{SWID}", "t"))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+    monkeypatch.setattr(app_mod, "_LINEUP_LEDGER", LineupLedger(tmp_path / "ffdo.db"))
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _recording_client())
+    FakeEspn, _calls = _recording_espn_client({
+        "seasons/2026/players": _ESPN_LINEUP_PLAYER_POOL_RAW,
+        "leagues/E1": _ESPN_LINEUP_LEAGUE_RAW,
+    })
+    monkeypatch.setattr("ffdo.ingest.espn.client.EspnClient", FakeEspn)
+
+    res = TestClient(create_app()).get("/api/leagues/espn:E1:2026/lineup")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["nfl_week"] == {"season": 2026, "week": 10}
+    # starting_slots for _tracked()'s default roster_positions is
+    # ("QB", "RB", "WR", "FLEX") -- 4 rows, same as the Sleeper shape test.
+    assert len(body["diff"]) == 4
+    qb_row = next(d for d in body["diff"] if d["slot_label"] == "QB")
+    assert qb_row["current"]["name"] == "Q B"
+    assert body["ledger"] is not None
+
+
+def test_lineup_espn_400s_without_a_stored_credential(monkeypatch, tmp_path):
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_tracked(
+        league_key="espn:E1:2026", provider="espn", provider_league_id="E1", roster_id=1))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+    monkeypatch.setattr(app_mod, "_LINEUP_LEDGER", LineupLedger(tmp_path / "ffdo.db"))
+
+    res = TestClient(create_app()).get("/api/leagues/espn:E1:2026/lineup")
+    assert res.status_code == 400
+    assert "Connect ESPN" in res.json()["detail"]
 
 
 def test_lineup_payload_is_well_formed(monkeypatch, tmp_path):
