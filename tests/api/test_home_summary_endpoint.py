@@ -79,17 +79,18 @@ def _espn_home_tracked(**over):
     })
 
 
-def test_home_summary_espn_returns_record_and_power_rank_only(monkeypatch, tmp_path):
-    """ESPN has no weekly-lineup, waiver or trade-target ingest yet, so its
-    home-summary card is deliberately smaller than Sleeper's -- record and
-    power rank (reusing the same roster+valuation fetch `_season_espn`
-    uses), with matchup/starters/flags left empty rather than guessed."""
+def test_home_summary_espn_returns_record_power_rank_and_lineup(monkeypatch, tmp_path):
+    """ESPN's home-summary card includes record, power rank, and (now that
+    ESPN weekly-lineup support exists) a real starting-lineup diff --
+    matchup and the waiver/trade-target flags still have no ESPN ingest
+    for a cheap league-wide count, so those stay absent/None."""
     store = LeagueStore(tmp_path / "ffdo.db")
     store.upsert(_espn_home_tracked())
     store.put_credential(ProviderCredential("espn", "{SWID}", "s2value", "{SWID}", "t"))
     monkeypatch.setattr(app_mod, "_STORE", store)
     monkeypatch.setattr("ffdo.ingest.client.SleeperClient",
-                        lambda *a, **k: _FakeClient({f"{V1}/players/nfl": _PLAYERS,
+                        lambda *a, **k: _FakeClient({f"{V1}/state/nfl": _STATE,
+                                                     f"{V1}/players/nfl": _PLAYERS,
                                                      "/projections/": _PROJ}))
     FakeEspn, _calls = _recording_espn_client({
         "seasons/2026/players": _ESPN_PLAYER_POOL_RAW,
@@ -107,8 +108,11 @@ def test_home_summary_espn_returns_record_and_power_rank_only(monkeypatch, tmp_p
     assert data["power_rank"]["value"] in (1, 2)
     assert data["power_rank"]["of"] == 2
     assert data["matchup"] is None
-    assert data["starters"] == []
-    assert data["flags"] == {}
+    # starting_slots for _tracked()'s default roster_positions is
+    # ("QB", "RB", "WR", "FLEX") -- 4 rows, same shape as /lineup's own test.
+    assert len(data["starters"]) == 4
+    rb_row = next(s for s in data["starters"] if s["name"] == "R B")
+    assert rb_row["status"] == "match"
 
 
 def test_home_summary_espn_400s_without_a_stored_credential(monkeypatch, tmp_path):

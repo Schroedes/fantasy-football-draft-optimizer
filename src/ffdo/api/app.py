@@ -20,7 +20,7 @@ from ffdo.api.lineup_ledger import LineupLedger
 from ffdo.api.store import LeagueStore
 from ffdo.api.trade_ledger import TradeLedger
 from ffdo.api.waiver_ledger import WaiverLedger
-from ffdo.domain.models import DiscoveredLeague, TrackedLeague
+from ffdo.domain.models import NON_STARTING_SLOTS, DiscoveredLeague, TrackedLeague
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -53,14 +53,6 @@ _DRAFT_PICK_LEDGER = DraftPickLedger(Path("data") / "ffdo.db")
 _DRAFT_SURVIVAL_CACHE: dict[str, dict[str, float]] = {}
 
 _FORMATS = ("redraft", "keeper", "dynasty")
-
-# Slots in `league.roster_positions` that never appear in Sleeper's
-# `starters` array. "BN" is the obvious one; "IR" and "TAXI" are the other
-# two Sleeper roster-slot types, and this codebase doesn't ingest their
-# separate reserve/taxi arrays into `starter_ids` -- so a league using
-# either slot type must not count them as startable when comparing against
-# `starter_ids`, or "unfilled" is a permanent false positive.
-_NON_STARTING_SLOTS = frozenset({"BN", "IR", "TAXI"})
 
 
 def _now_iso() -> str:
@@ -1231,7 +1223,7 @@ def create_app() -> FastAPI:
         # league the user merely observes), matching `your_roster` below.
         you_entry = next((r for r in rosters if r.roster_id == lg.roster_id), None)
         if you_entry is not None:
-            unfilled = (sum(1 for s in lg.roster_positions if s not in _NON_STARTING_SLOTS)
+            unfilled = (sum(1 for s in lg.roster_positions if s not in NON_STARTING_SLOTS)
                        > len(you_entry.starter_ids))
             short = len(you_entry.player_ids) < lg.roster_size
             _roster_count_cache_for(lg.league_key).get(lambda: {"attn": bool(unfilled or short)})
@@ -1909,21 +1901,34 @@ def create_app() -> FastAPI:
         }
 
     def _home_summary_espn(lg: TrackedLeague) -> dict:
-        """ESPN's command-center card. Weekly lineup, waivers and trade
-        targets have no ESPN ingest yet (separate follow-ups), so this
-        branch only fills in what's actually buildable today: record and
-        power rank, reusing the same rosters+valuation fetch `_season_espn`
-        uses. Matches `_load_trade_targets_context`'s own established
-        pattern of skipping the dynasty age-curve history fetch for this
-        kind of lightweight card -- the season screen's power rank is the
-        one place that gets the fuller history-aware valuation."""
+        """ESPN's command-center card: record, power rank, and now the
+        starting-lineup diff + swap-count flag, reusing `_lineup_espn`'s
+        own crosswalk/slot-alignment approach. Waivers and trade targets
+        still have no ESPN ingest for a league-wide "how many
+        recommendations" flag count the way Sleeper's branch gets one
+        cheaply from data it already fetched -- those flags stay absent
+        rather than paying for a second full waiver/trade-targets
+        computation just to produce a count. Matchup stays None (ESPN's
+        matchup-pairing API is unresearched, same posture as #2's home
+        summary from the start)."""
         cred = _require_espn_credential("the home summary")
 
         sleeper = client_mod.SleeperClient()
         try:
+            nfl_now = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
             profiles, espn_id_index = players_cache.get(lambda: _load_players(sleeper))
             proj_anchor = _season_proj_anchor_for(lg.season).get(
                 lambda: _load_projection_anchor(sleeper, lg.season))
+            weekly_proj = _weekly_proj_cache_for(nfl_now.season, nfl_now.week).get(
+                lambda: weekly_projections_mod.fetch(sleeper, nfl_now.season, nfl_now.week))
+            try:
+                games = _schedule_cache_for(nfl_now.season, nfl_now.week).get(
+                    lambda: schedule_mod.week_games(sleeper, nfl_now.season, nfl_now.week))
+            except (httpx.HTTPError, RuntimeError) as exc:
+                logging.getLogger("ffdo.api").warning(
+                    "home-summary: schedule fetch failed for %s week %s (%s) -- "
+                    "treating nothing as locked", lg.league_key, nfl_now.week, exc)
+                games = []
         except (httpx.HTTPError, RuntimeError) as exc:
             raise HTTPException(
                 status_code=502, detail="Couldn't reach Sleeper, try again") from exc
@@ -1980,6 +1985,39 @@ def create_app() -> FastAPI:
                     if your_standings_rank is not None else None),
             }
 
+        all_teams = frozenset(p.team for p in profiles.values() if p.team)
+        bye_teams = schedule_mod.bye_teams(games, all_teams) if games else frozenset()
+        locked_teams = schedule_mod.locked_teams(games)
+
+        current_starters = espn_rosters_mod.slot_aligned_starters(
+            mroster_raw, cw, lg.roster_id, lg.starting_slots)
+        weekly_valued = weekly_lineup_mod.weekly_value(
+            all_pids, lg, weekly_points=weekly_proj, profiles=profiles, bye_teams=bye_teams)
+        your_weekly_valued = {pid: weekly_valued[pid] for pid in you.player_ids if pid in weekly_valued}
+        optimal = weekly_lineup_mod.optimal_slots(your_weekly_valued, lg)
+        diff_rows = weekly_lineup_mod.diff(
+            current_starters, optimal, locked_teams, weekly_valued, profiles, lg)
+
+        def _starter_row(d) -> dict:
+            prof = profiles.get(d.current_player_id) if d.current_player_id else None
+            vp = weekly_valued.get(d.current_player_id) if d.current_player_id else None
+            swap_to = None
+            if d.status == "suggested_swap" and d.optimal_player_id:
+                swap_prof = profiles.get(d.optimal_player_id)
+                swap_to = swap_prof.full_name if swap_prof else d.optimal_player_id
+            return {
+                "slot_label": d.slot_label,
+                "name": prof.full_name if prof else None,
+                "value": round(vp.vor, 1) if vp else 0.0,
+                "status": d.status,
+                "swap_to": swap_to,
+            }
+
+        flags = {}
+        swaps = sum(1 for d in diff_rows if d.status == "suggested_swap")
+        if swaps:
+            flags["lineup_swaps"] = swaps
+
         return {
             "league_key": lg.league_key,
             "name": you.team_name,
@@ -1988,8 +2026,8 @@ def create_app() -> FastAPI:
             "record": {"wins": you.wins, "losses": you.losses, "ties": you.ties},
             "power_rank": power_rank,
             "matchup": None,
-            "starters": [],
-            "flags": {},
+            "starters": [_starter_row(d) for d in diff_rows],
+            "flags": flags,
         }
 
     @app.get("/api/leagues/{league_key}/home-summary")
@@ -2042,14 +2080,20 @@ def create_app() -> FastAPI:
             current_week = matchups_mod.fetch(sleeper, lg.provider_league_id, nfl.week)
 
             waiver_recs_count = 0
-            # `raw_settings` (captured at track/refresh time, already used
-            # this same way for draft_rounds elsewhere in this file)
-            # avoids a live settings re-fetch just to decide whether this
-            # league is FAAB -- acceptable staleness for a flag COUNT,
-            # unlike /waivers' own live re-fetch which needs an exact
-            # current budget.
-            if (lg.raw_settings or {}).get("waiver_type") == 2:
-                try:
+            # The add/drop recommendation itself doesn't need FAAB -- only
+            # the bid-amount suggestion does (see recommend_adds) -- so
+            # this flag is computed for every waiver type now, with the
+            # FAAB budget lookup skipped for a priority league. `raw_settings`
+            # (captured at track/refresh time, already used this same way
+            # for draft_rounds elsewhere in this file) avoids a live
+            # settings re-fetch just to decide whether this league is
+            # FAAB -- acceptable staleness for a flag COUNT, unlike
+            # /waivers' own live re-fetch which needs an exact current
+            # budget.
+            try:
+                is_faab = (lg.raw_settings or {}).get("waiver_type") == 2
+                your_remaining = None
+                if is_faab:
                     league_raw = sleeper.get_json(f"{client_mod.V1}/league/{lg.provider_league_id}")
                     waiver_budget = float((league_raw.get("settings") or {}).get("waiver_budget") or 0)
                     claims = _waiver_claims_cache_for(lg.league_key, nfl.week).get(
@@ -2057,14 +2101,14 @@ def create_app() -> FastAPI:
                             sleeper, lg.provider_league_id, season=lg.season, through_week=nfl.week))
                     budgets = waivers_mod.remaining_budget(claims, waiver_budget=waiver_budget)
                     your_remaining = budgets.get(lg.roster_id, waiver_budget)
-                    waiver_recs = waiver_value_mod.recommend_adds(
-                        free_agent_ids, you.player_ids, valued, profiles, lg,
-                        FAAB_BID_CURVE, your_remaining)
-                    waiver_recs_count = len(waiver_recs)
-                except (httpx.HTTPError, RuntimeError):
-                    logging.getLogger("ffdo.api").warning(
-                        "home-summary: waiver fetch failed for %s, waiver flag omitted",
-                        lg.league_key)
+                waiver_recs = waiver_value_mod.recommend_adds(
+                    free_agent_ids, you.player_ids, valued, profiles, lg,
+                    FAAB_BID_CURVE if is_faab else None, your_remaining)
+                waiver_recs_count = len(waiver_recs)
+            except (httpx.HTTPError, RuntimeError):
+                logging.getLogger("ffdo.api").warning(
+                    "home-summary: waiver fetch failed for %s, waiver flag omitted",
+                    lg.league_key)
         except (httpx.HTTPError, RuntimeError) as exc:
             raise HTTPException(status_code=502, detail="Couldn't reach Sleeper, try again") from exc
         finally:
@@ -2319,19 +2363,21 @@ def create_app() -> FastAPI:
         return {"trades": out}
 
     def _waivers_espn(lg: TrackedLeague) -> dict:
-        """ESPN's FAAB waiver recommendations -- same posture as Sleeper's
-        own gate (FAAB leagues only), detected via
-        raw_settings.acquisitionSettings.isUsingAcquisitionBudget rather
-        than Sleeper's waiver_type field. UNVERIFIED end-to-end: the real
-        league this project validates ESPN against uses waiver-priority,
-        not FAAB, and has no real waiver history to check a resolved
-        claim against -- see ingest.espn.transactions's own module
-        docstring for what's unverified in the underlying feed."""
+        """ESPN's waiver recommendations, add/drop always, a FAAB bid
+        suggestion added on top only when
+        raw_settings.acquisitionSettings.isUsingAcquisitionBudget is true
+        (ESPN's equivalent of Sleeper's waiver_type == 2) -- same posture
+        as get_waivers' own FAAB/priority split. UNVERIFIED end-to-end for
+        the FAAB case: the real league this project validates ESPN
+        against uses waiver-priority, not FAAB, and has no real waiver
+        history to check a resolved claim against -- see
+        ingest.espn.transactions's own module docstring for what's
+        unverified in the underlying feed. The add/drop-only,
+        no-bid-suggestion path (what that real league actually gets) IS
+        live-verified."""
         acquisition = (lg.raw_settings or {}).get("acquisitionSettings") or {}
-        if not acquisition.get("isUsingAcquisitionBudget"):
-            raise HTTPException(
-                status_code=400, detail="Waivers is FAAB-leagues-only for now")
-        waiver_budget = float(acquisition.get("acquisitionBudget") or 0)
+        is_faab = bool(acquisition.get("isUsingAcquisitionBudget"))
+        waiver_budget = float(acquisition.get("acquisitionBudget") or 0) if is_faab else None
         cred = _require_espn_credential("waivers")
 
         sleeper = client_mod.SleeperClient()
@@ -2364,7 +2410,8 @@ def create_app() -> FastAPI:
 
             claims = espn_transactions_mod.fetch_waivers(
                 espn, lg.provider_league_id, lg.season, cw, through_week=nfl.week)
-            budgets = waivers_mod.remaining_budget(claims, waiver_budget=waiver_budget)
+            budgets = (waivers_mod.remaining_budget(claims, waiver_budget=waiver_budget)
+                      if is_faab else {})
 
             your_claims = (
                 [c for c in espn_transactions_mod.fetch_all_claims(
@@ -2388,7 +2435,7 @@ def create_app() -> FastAPI:
         # reflects.
         all_player_ids = set(cw.espn_to_sleeper.values())
         free_agent_ids = waiver_value_mod.free_agents(all_player_ids, rosters)
-        your_remaining = budgets.get(lg.roster_id, waiver_budget)
+        your_remaining = budgets.get(lg.roster_id, waiver_budget) if is_faab else None
 
         valued = ros_value_mod.roster_value(
             set(you.player_ids) | free_agent_ids, lg,
@@ -2398,7 +2445,7 @@ def create_app() -> FastAPI:
 
         recommendations = waiver_value_mod.recommend_adds(
             free_agent_ids, waiver_value_mod.droppable_player_ids(you), valued, profiles, lg,
-            FAAB_BID_CURVE, your_remaining)
+            FAAB_BID_CURVE if is_faab else None, your_remaining)
 
         recommended_by_player = {r.free_agent_id: r for r in recommendations}
         for claim in your_claims:
@@ -2427,15 +2474,18 @@ def create_app() -> FastAPI:
             }
 
         return {
-            "remaining_budget": round(your_remaining, 1),
+            "remaining_budget": round(your_remaining, 1) if your_remaining is not None else None,
             "recommendations": [_waiver_row(r) for r in recommendations],
         }
 
     @app.get("/api/leagues/{league_key}/waivers")
     def get_waivers(league_key: str) -> dict:
-        """Free-agent add/drop + FAAB bid recommendations. FAAB leagues
-        only -- a 400 for any other waiver type, matching /lineup's ESPN
-        support posture. ESPN's FAAB detection lives in _waivers_espn."""
+        """Free-agent add/drop recommendations, with a FAAB bid suggestion
+        added on top for FAAB leagues (`waiver_type == 2`) -- a
+        waiver-priority league still gets the same VOR-based add/drop
+        call, just with `suggested_bid: null` and `remaining_budget: null`,
+        since there's no budget concept to suggest a bid against.
+        ESPN's FAAB detection lives in _waivers_espn."""
         lg = _load_league(league_key)
         if lg.provider == "espn":
             return _waivers_espn(lg)
@@ -2444,10 +2494,8 @@ def create_app() -> FastAPI:
         try:
             league_raw = sleeper.get_json(f"{client_mod.V1}/league/{lg.provider_league_id}")
             settings = league_raw.get("settings") or {}
-            if settings.get("waiver_type") != 2:
-                raise HTTPException(
-                    status_code=400, detail="Waivers is FAAB-leagues-only for now")
-            waiver_budget = float(settings.get("waiver_budget") or 0)
+            is_faab = settings.get("waiver_type") == 2
+            waiver_budget = float(settings.get("waiver_budget") or 0) if is_faab else None
 
             nfl = nfl_state_cache.get(lambda: nfl_state_mod.current_week(sleeper))
             profiles, _espn_id_index = players_cache.get(lambda: _load_players(sleeper))
@@ -2463,7 +2511,8 @@ def create_app() -> FastAPI:
             # GET /trades bug).
             claims = waivers_mod.fetch_waivers(
                 sleeper, lg.provider_league_id, season=lg.season, through_week=nfl.week)
-            budgets = waivers_mod.remaining_budget(claims, waiver_budget=waiver_budget)
+            budgets = (waivers_mod.remaining_budget(claims, waiver_budget=waiver_budget)
+                      if is_faab else {})
 
             # For the ledger (outcome scorecard) -- every claim for the
             # tracked roster, win or loss, not just the winning ones
@@ -2487,7 +2536,7 @@ def create_app() -> FastAPI:
             return {"remaining_budget": waiver_budget, "recommendations": []}
 
         free_agent_ids = waiver_value_mod.free_agents(all_player_ids, rosters)
-        your_remaining = budgets.get(lg.roster_id, waiver_budget)
+        your_remaining = budgets.get(lg.roster_id, waiver_budget) if is_faab else None
 
         valued = ros_value_mod.roster_value(
             set(you.player_ids) | free_agent_ids, lg,
@@ -2497,7 +2546,7 @@ def create_app() -> FastAPI:
 
         recommendations = waiver_value_mod.recommend_adds(
             free_agent_ids, waiver_value_mod.droppable_player_ids(you), valued, profiles, lg,
-            FAAB_BID_CURVE, your_remaining)
+            FAAB_BID_CURVE if is_faab else None, your_remaining)
 
         # A claim only matches a recommendation if it happened THIS week
         # (recommend_adds only ever returns the current week's top-N) --
@@ -2532,7 +2581,7 @@ def create_app() -> FastAPI:
             }
 
         return {
-            "remaining_budget": round(your_remaining, 1),
+            "remaining_budget": round(your_remaining, 1) if your_remaining is not None else None,
             "recommendations": [_waiver_row(r) for r in recommendations],
         }
 

@@ -59,7 +59,10 @@ def test_waivers_endpoint_returns_recommendations_for_a_faab_league(monkeypatch,
         assert rec["free_agent_name"] != rec["free_agent_id"]
 
 
-def test_waivers_endpoint_400s_for_a_non_faab_league(monkeypatch, tmp_path):
+def test_waivers_endpoint_still_recommends_adds_for_a_non_faab_league(monkeypatch, tmp_path):
+    """A waiver-priority league (waiver_type != 2) gets the same real
+    VOR-based add/drop call as a FAAB league -- only the dollar bid
+    suggestion is FAAB-specific, so it's the only thing that goes null."""
     store = LeagueStore(tmp_path / "ffdo.db")
     store.upsert(_tracked(fmt="redraft"))
     monkeypatch.setattr(app_mod, "_STORE", store)
@@ -74,6 +77,8 @@ def test_waivers_endpoint_400s_for_a_non_faab_league(monkeypatch, tmp_path):
     class _FakeClient:
         def __init__(self, *a, **k): pass
         def get_json(self, url, *a, **k):
+            if "/transactions/" in url:
+                return []
             for key, val in resp.items():
                 if key in url:
                     return val
@@ -83,7 +88,11 @@ def test_waivers_endpoint_400s_for_a_non_faab_league(monkeypatch, tmp_path):
     monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeClient)
     client = TestClient(create_app())
     res = client.get("/api/leagues/sleeper:L1:2026/waivers")
-    assert res.status_code == 400
+    assert res.status_code == 200
+    data = res.json()
+    assert data["remaining_budget"] is None
+    for rec in data["recommendations"]:
+        assert rec["suggested_bid"] is None
 
 
 _ESPN_WAIVER_LEAGUE_RAW = {
@@ -182,15 +191,49 @@ def test_waivers_endpoint_espn_returns_recommendations_and_real_remaining_budget
     assert any(r["free_agent_name"] == "R B2" for r in data["recommendations"])
 
 
-def test_waivers_endpoint_espn_400s_for_a_non_faab_league(monkeypatch, tmp_path):
+def test_waivers_endpoint_espn_still_recommends_adds_for_a_priority_league(
+        monkeypatch, tmp_path):
+    """The real ESPN test league this project validates against uses
+    waiver-priority, not FAAB (isUsingAcquisitionBudget is false there) --
+    this is the live-verified path, unlike the FAAB test above."""
     store = LeagueStore(tmp_path / "ffdo.db")
     store.upsert(_espn_waiver_tracked(raw_settings={
         "acquisitionSettings": {"isUsingAcquisitionBudget": False}}))
+    store.put_credential(ProviderCredential("espn", "{SWID}", "s2value", "{SWID}", "t"))
     monkeypatch.setattr(app_mod, "_STORE", store)
 
+    extended_players = {**_PLAYERS, "p_filler": {
+        "first_name": "R", "last_name": "Filler", "position": "RB", "team": "EEE",
+        "age": 30, "years_exp": 9, "active": True,
+    }}
+    extended_proj = _PROJ + [
+        {"player_id": "p_filler", "last_modified": _PROJ[0]["last_modified"],
+         "stats": {"rush_yd": 50.0, "rush_td": 0.0, "rec": 5.0, "rec_yd": 20.0}},
+    ]
+
+    class _FakeSleeper:
+        def __init__(self, *a, **k): pass
+        def get_json(self, url, *a, **k):
+            if f"{V1}/players/nfl" in url:
+                return extended_players
+            if "/projections/" in url:
+                return extended_proj
+            return {}
+        def close(self): pass
+
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeSleeper)
+    FakeEspn, _calls = _recording_espn_client({
+        "seasons/2026/players": _ESPN_WAIVER_PLAYER_POOL_RAW,
+        "leagues/E1": {**_ESPN_WAIVER_LEAGUE_RAW, **_ESPN_TRANSACTIONS_RAW},
+    })
+    monkeypatch.setattr("ffdo.ingest.espn.client.EspnClient", FakeEspn)
+
     res = TestClient(create_app()).get("/api/leagues/espn:E1:2026/waivers")
-    assert res.status_code == 400
-    assert "FAAB-leagues-only" in res.json()["detail"]
+    assert res.status_code == 200
+    data = res.json()
+    assert data["remaining_budget"] is None
+    rec = next(r for r in data["recommendations"] if r["free_agent_name"] == "R B2")
+    assert rec["suggested_bid"] is None
 
 
 def test_waivers_endpoint_counts_a_claim_in_the_current_in_progress_week(monkeypatch, tmp_path):
