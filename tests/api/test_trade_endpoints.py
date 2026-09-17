@@ -6,12 +6,14 @@ from ffdo.api import app as app_mod
 from ffdo.api.app import create_app
 from ffdo.api.store import LeagueStore
 from ffdo.api.trade_ledger import TradeLedger
+from ffdo.domain.models import ProviderCredential
 from ffdo.ingest.client import V1
 
 # Reuses the same _tracked/_ROSTERS/_USERS/_PLAYERS/_STATE/_PROJ/_MATCHUPS
 # fixtures already defined in tests/api/test_season_endpoint.py -- read
 # that file first to confirm they are still present under these exact
 # names before importing them here.
+from tests.api.test_app import _recording_espn_client
 from tests.api.test_season_endpoint import (
     _MATCHUPS, _PLAYERS, _PROJ, _ROSTERS, _STATE, _USERS, _tracked)
 
@@ -127,13 +129,118 @@ def test_trade_builder_includes_future_picks_for_a_dynasty_league(monkeypatch, t
         assert "original_roster_id" in pick
 
 
-def test_trade_builder_is_sleeper_only():
-    from ffdo.domain.models import TrackedLeague
+_ESPN_TRADE_LEAGUE_RAW = {
+    "status": {"currentMatchupPeriod": 3},
+    "settings": {"scheduleSettings": {"matchupPeriodCount": 14}},
+    "teams": [
+        {"id": 1, "name": "You Team",
+         "record": {"overall": {"wins": 5, "losses": 2, "ties": 0,
+                                "pointsFor": 800.0, "pointsAgainst": 700.0}},
+         "roster": {"entries": [
+             {"playerId": 9001, "lineupSlotId": 0,
+              "playerPoolEntry": {"player": {"stats": []}}},
+             {"playerId": 9002, "lineupSlotId": 2,
+              "playerPoolEntry": {"player": {"stats": []}}},
+         ]}},
+        {"id": 2, "name": "Them Team",
+         "record": {"overall": {"wins": 2, "losses": 5, "ties": 0,
+                                "pointsFor": 500.0, "pointsAgainst": 600.0}},
+         "roster": {"entries": [
+             {"playerId": 9003, "lineupSlotId": 4,
+              "playerPoolEntry": {"player": {"stats": []}}},
+         ]}},
+    ],
+}
+_ESPN_TRADE_PLAYER_POOL_RAW = [
+    {"id": 9001, "fullName": "Q B", "defaultPositionId": 1, "proTeamId": 1},
+    {"id": 9002, "fullName": "R B", "defaultPositionId": 2, "proTeamId": 2},
+    {"id": 9003, "fullName": "W R", "defaultPositionId": 3, "proTeamId": 3},
+]
 
-    app_mod._STORE.upsert(_tracked(
-        league_key="espn:E1:2026", provider="espn", provider_league_id="E1"))
-    res = TestClient(create_app()).get("/api/leagues/espn:E1:2026/trade-builder")
+
+def _espn_trade_tracked(**over):
+    return _tracked(**{
+        "league_key": "espn:E1:2026", "provider": "espn", "provider_league_id": "E1",
+        "roster_id": 1, **over,
+    })
+
+
+class _FakeSleeperForEspnTrade:
+    def __init__(self, *a, **k): pass
+    def get_json(self, url, *a, **k):
+        if f"{V1}/players/nfl" in url:
+            return _PLAYERS
+        if "/projections/" in url:
+            return _PROJ
+        return {}
+    def close(self): pass
+
+
+def _espn_trade_sleeper_and_espn(monkeypatch):
+    monkeypatch.setattr("ffdo.ingest.client.SleeperClient", _FakeSleeperForEspnTrade)
+    FakeEspn, _calls = _recording_espn_client({
+        "seasons/2026/players": _ESPN_TRADE_PLAYER_POOL_RAW,
+        "leagues/E1": _ESPN_TRADE_LEAGUE_RAW,
+    })
+    monkeypatch.setattr("ffdo.ingest.espn.client.EspnClient", FakeEspn)
+
+
+def test_trade_evaluate_espn_returns_both_sides_value(monkeypatch, tmp_path):
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_espn_trade_tracked())
+    store.put_credential(ProviderCredential("espn", "{SWID}", "s2value", "{SWID}", "t"))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+    _espn_trade_sleeper_and_espn(monkeypatch)
+
+    client = TestClient(create_app())
+    body = {"partner_roster_id": 2,
+            "side_a": {"player_ids": ["p_rb"], "picks": []},
+            "side_b": {"player_ids": [], "picks": []}}
+    res = client.post("/api/leagues/espn:E1:2026/trade/evaluate", json=body)
+    assert res.status_code == 200
+    data = res.json()
+    assert "side_a_value" in data and "side_b_value" in data and "differential" in data
+    # partner_roster_id resolves against ESPN's own rosters, so the
+    # needs-preview also computes.
+    assert "needs_before" in data and "needs_after" in data
+
+
+def test_trade_evaluate_espn_400s_without_a_stored_credential(monkeypatch, tmp_path):
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_espn_trade_tracked())
+    monkeypatch.setattr(app_mod, "_STORE", store)
+
+    body = {"partner_roster_id": 2,
+            "side_a": {"player_ids": [], "picks": []},
+            "side_b": {"player_ids": [], "picks": []}}
+    res = TestClient(create_app()).post("/api/leagues/espn:E1:2026/trade/evaluate", json=body)
     assert res.status_code == 400
+    assert "Connect ESPN" in res.json()["detail"]
+
+
+def test_trade_builder_espn_returns_every_teams_players_with_no_picks(monkeypatch, tmp_path):
+    """ESPN has no traded-picks feed, so every team's `picks` stays empty
+    regardless of format -- unlike Sleeper, which synthesizes real future
+    picks for dynasty/keeper leagues."""
+    store = LeagueStore(tmp_path / "ffdo.db")
+    store.upsert(_espn_trade_tracked(fmt="dynasty"))
+    store.put_credential(ProviderCredential("espn", "{SWID}", "s2value", "{SWID}", "t"))
+    monkeypatch.setattr(app_mod, "_STORE", store)
+    _espn_trade_sleeper_and_espn(monkeypatch)
+
+    res = TestClient(create_app()).get("/api/leagues/espn:E1:2026/trade-builder")
+    assert res.status_code == 200
+    teams = res.json()["teams"]
+    assert len(teams) == 2
+
+    you = next(t for t in teams if t["is_you"])
+    assert you["roster_id"] == 1
+    assert {p["player_id"] for p in you["players"]} == {"p_qb", "p_rb"}
+    assert you["picks"] == []
+
+    partner = next(t for t in teams if not t["is_you"])
+    assert {p["player_id"] for p in partner["players"]} == {"p_wr"}
+    assert partner["picks"] == []
 
 
 def test_trade_suggestions_is_sleeper_only():
